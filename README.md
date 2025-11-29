@@ -80,6 +80,7 @@ Server (TS/native)
     ↕ rate-limit, backpressure, handshake
 Application Layer
 
+```md
 +----------------------------+
 |        Your App           |
 +----------------------------+
@@ -97,7 +98,7 @@ Application Layer
       |
       v
      TCP
-
+```
 
 
 
