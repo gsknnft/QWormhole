@@ -66,11 +66,13 @@ This package is part of the workspace; add it to a package with:
 pnpm add @sigilnet/qwormhole
 ```
 
---- 
+
 
 ## Architecture
 
-QWormhole abstracts the transport layer, selecting native or TS based on availability and preference. The runtime layer handles orchestration, framing, and handshake semantics.
+QWormhole abstracts the transport layer, selecting native or TS based on
+availability and preference. The runtime layer handles orchestration,
+framing, rate limiting, and handshake semantics.
 
 Client (TS/native)
     ↕ length-prefixed frames
@@ -84,19 +86,20 @@ Application Layer
             |
             v
 +----------------------------+
-|    QWormhole Runtime      |  ← orchestrates client/server, handshake, rate limits
+|    QWormhole Runtime      |   ← orchestrates handshake, framing, rate limits
 +----------------------------+
       |             |
       v             v
 +-----------+   +-----------+
-|  Native   |   |    TS     |  ← auto-selected transport layer
-| (LWS)     |   | Transport |
+|  Native   |   |    TS     |   ← auto-selected transport layer
+|  (LWS)    |   | Transport |
 +-----------+   +-----------+
       |
       v
-    TCP
+     TCP
 
----
+
+
 
 ## Quick start
 
