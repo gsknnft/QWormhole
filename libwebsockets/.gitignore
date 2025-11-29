@@ -1,4 +1,5 @@
 #Ignore build files
+.rollup.cache/add
 CMakeCache.txt
 CMakeFiles
 build
@@ -24,6 +25,18 @@ win32port/libwebsocketswin32/Debug*/
 win32port/libwebsocketswin32/Release*/
 win32port/zlib/Debug*/
 win32port/zlib/Release*/
+libsocket/build/
+libwebsockets/build/
+libsocket/*.o
+libwebsockets/*.o
+libsocket/*.a
+libwebsockets/*.a
+libsocket/*.so
+libwebsockets/*.so
+libsocket/*.dll
+libwebsockets/*.dll
+libsocket/*.exe
+libwebsockets/*.exe
 *.vcxproj.user
 *.opensdf
 *.sdf
