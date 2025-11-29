@@ -1,6 +1,6 @@
-### @sigilnet/qwormhole 
+## @sigilnet/qwormhole 
 
-## TypeScript-first TCP transport with native acceleration and framing, reconnect, and codec orchestration.
+### TypeScript-first TCP transport with native acceleration and framing, reconnect, and codec orchestration.
 
 TypeScript-first TCP socket toolkit for the Sigilnet monorepo. Provides a light wrapper around Node's `net` module with sensible defaults (length-prefixed framing, reconnect backoff, and typed events) so you can embed the same client/server utilities in other packages without hand-rolling sockets each time.
 
