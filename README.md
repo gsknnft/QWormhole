@@ -74,13 +74,14 @@ QWormhole abstracts the transport layer, selecting native or TS based on
 availability and preference. The runtime layer handles orchestration,
 framing, rate limiting, and handshake semantics.
 
+```md
+
 Client (TS/native)
     ↕ length-prefixed frames
 Server (TS/native)
     ↕ rate-limit, backpressure, handshake
 Application Layer
 
-```md
 +----------------------------+
 |        Your App           |
 +----------------------------+
