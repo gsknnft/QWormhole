@@ -2,12 +2,11 @@
 
 ### TypeScript-first TCP transport with native acceleration and framing, reconnect, and codec orchestration.
 
-TypeScript-first TCP socket toolkit for the Sigilnet monorepo. Provides a light wrapper around Node's `net` module with sensible defaults (length-prefixed framing, reconnect backoff, and typed events) so you can embed the same client/server utilities in other packages without hand-rolling sockets each time.
+TypeScript-first TCP socket toolkit for the Sigilnet monorepo. Provides a light wrapper around Node's net module with sensible defaults (length-prefixed framing, reconnect backoff, and typed events) so you can embed the same client/server utilities in other packages without hand-rolling sockets each time.
 
-QWormhole turns raw sockets into a composable, typed, and orchestrated transport layer — with __zero__ boilerplate.
+QWormhole turns raw sockets into a composable, typed, and orchestrated transport layer — with zero boilerplate.
 
-- QWormhole isn’t just a socket wrapper — it’s a transport ritual.
-
+QWormhole isn’t just a socket wrapper — it’s a transport ritual.
 ---
 
 ## Features
@@ -65,7 +64,9 @@ pnpm add @sigilnet/qwormhole
 ```
 ## Architecture
 
-QWormhole abstracts the transport layer, selecting native or TS based on availability and preference. The runtime layer handles orchestration, framing, and handshake semantics.
+QWormhole abstracts the transport layer, selecting native or TS based on
+availability and preference. The runtime layer handles orchestration,
+framing, rate limiting, and handshake semantics.
 
 Client (TS/native)
     ↕ length-prefixed frames
@@ -79,7 +80,7 @@ Application Layer
             |
             v
 +----------------------------+
-|    QWormhole Runtime      |  ← orchestrates client/server, handshake, rate limits
+|    QWormhole Runtime      |  ← orchestrates handshake, framing, rate limits
 +----------------------------+
       |             |
       v             v
@@ -89,7 +90,7 @@ Application Layer
 +-----------+   +-----------+
       |
       v
-    TCP
+     TCP
 
 
 ## Quick start
@@ -229,17 +230,36 @@ QWormhole provides all of this in a small, modern, TypeScript-native API.
 
 ---
 
-## Key options
+## ⚙ Key Options
 
+✔ framing
 - `framing`: `"length-prefixed"` (default) or `"none"`.
+
+✔ serializer/deserializer
 - `serializer` / `deserializer`: JSON/text/buffer built-in; CBOR helpers; plug your own (FlatBuffers, etc.).
+
+✔ reconnect
 - `reconnect`: `{ enabled, initialDelayMs, maxDelayMs, multiplier, maxAttempts }` for clients.
+
+✔ keepAlive
 - `keepAlive`, `keepAliveDelayMs`, `idleTimeoutMs`: TCP tuning.
+
+✔ backpressure guard
 - `maxBackpressureBytes`: server-side guard (default 5 MiB) before writes will destroy a socket; emits `backpressure`/`drain` events.
+
+✔ factory mode switches
 - `preferNative`/`forceTs`: factory switches between native binding and TS transport.
+
+✔ interface binding
 - `interfaceName`/`localAddress`/`localPort`: bind client sockets to a specific interface/IP (e.g., `wg0` for WireGuard) and set a connect timeout.
+
+✔ rate limiting
 - `rateLimitBytesPerSec`/`rateLimitBurstBytes`: optional outbound rate limiting with priority queues on client and server.
+
+✔ handshake
 - `protocolVersion`/`handshakeTags`: optional handshake exchange to enforce versioning and pass tags (e.g., device/service/interface).
+
+✔ typed server connections
 - `getConnection(id)`/`getConnectionCount()` helpers for server-side orchestration.
 
 #### **Codec helpers**
@@ -270,6 +290,16 @@ Benchmarks:
   - Or run `node scripts/bench.ts` to benchmark TS, native-lws, and native-libsocket (when present).
 Tests:
 - `pnpm --filter @sigilnet/qwormhole test` (TS), `pnpm --filter @sigilnet/qwormhole test:native` (gated by native availability).
+
+---
+
+## 🧪 Tests
+
+```bash
+pnpm test
+pnpm test:native (only runs if native present)
+```
+---
 
 ## Install
 
@@ -327,14 +357,21 @@ Notes:
 ## Secure Streams (roadmap)
 - Libwebsockets Secure Streams will be exposed via a TypeScript-friendly wrapper with JSON policy loading and minimal callbacks. See `ROADMAP.md` for status.
 
-## Security Notes
+## 🔐 Security Notes
 
 QWormhole is transport-only by design.  
 It does **not** encrypt traffic (yet).  
+
 Use WireGuard, SSH tunnels, or TLS termination if required.
 
-Secure Streams (encrypted, multiplexed, policy-driven) is on the roadmap.
+Secure Streams will provide encrypted, multiplexed channels.
 
+## 🗺 Roadmap
 
-
+Secure Streams
+TLS/TCP wrappers
+Multiplexing
+WebSocket transport
+UDP transport
+Browser transport (WebRTC)
 
