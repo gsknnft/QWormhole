@@ -1,6 +1,12 @@
-# @sigilnet/qwormhole - “TypeScript-first TCP transport toolkit with optional native acceleration.”
+@sigilnet/qwormhole — TypeScript-first TCP transport with native acceleration and framing, reconnect, and codec orchestration.
 
-TypeScript-first TCP socket toolkit for the Sigilnet monorepo. Provides a light wrapper around Node's `net` module with sensible defaults (length-prefixed framing, reconnect backoff, and typed events) so you can embed the same client/server utilities in Flipper, SignalSuite, and other packages without hand-rolling sockets each time.
+TypeScript-first TCP socket toolkit for the Sigilnet monorepo. Provides a light wrapper around Node's `net` module with sensible defaults (length-prefixed framing, reconnect backoff, and typed events) so you can embed the same client/server utilities in other packages without hand-rolling sockets each time.
+
+QWormhole turns raw sockets into a composable, typed, and orchestrated transport layer — with __zero__ boilerplate.
+
+- QWormhole isn’t just a socket wrapper — it’s a transport ritual.
+
+---
 
 ## Features
 
@@ -18,6 +24,10 @@ TypeScript-first TCP socket toolkit for the Sigilnet monorepo. Provides a light 
 - 🧪 **Full test suite** (TS + native smoke tests)
 - 🛠 Works on **Windows / macOS / Linux / WSL**
 - 🛰 Ideal for **agents, daemons, device networks, mesh networks**
+    - Agents: drop telemetry or control frames over framed TCP
+    - Daemons: expose typed socket APIs with reconnect and backpressure
+    - Device networks: bind to interfaces (wg0, eth0) and tag connections
+    - Mesh networks: use handshake tags to route and identify peers
 
 
 ## Minimal Example
@@ -43,6 +53,7 @@ client.on("message", console.log);
 - [Codec extensibility](#codec-helpers)
 - [Tests](#tests)
 
+  
 ## Installation
 
 This package is part of the workspace; add it to a package with:
@@ -52,23 +63,26 @@ pnpm add @sigilnet/qwormhole
 ```
 ## Architecture
 
+QWormhole abstracts the transport layer, selecting native or TS based on availability and preference. The runtime layer handles orchestration, framing, and handshake semantics.
+
 Client (TS/native)
     ↕ length-prefixed frames
 Server (TS/native)
     ↕ rate-limit, backpressure, handshake
 Application Layer
+
 +----------------------------+
 |        Your App           |
 +----------------------------+
             |
             v
 +----------------------------+
-|    QWormhole Runtime      |
+|    QWormhole Runtime      |  ← orchestrates client/server, handshake, rate limits
 +----------------------------+
       |             |
       v             v
 +-----------+   +-----------+
-|  Native   |   |    TS     |
+|  Native   |   |    TS     |  ← auto-selected transport layer
 | (LWS)     |   | Transport |
 +-----------+   +-----------+
       |
@@ -83,13 +97,17 @@ Client with automatic reconnect and length-prefixed frames:
 ```ts
 import { QWormholeClient, textDeserializer } from '@sigilnet/qwormhole';
 
-const client = new QWormholeClient<string>({
+// Client: connects, auto-reconnects, sends framed messages
+const client = new QWormholeClient({
   host: '127.0.0.1',
   port: 9000,
   deserializer: textDeserializer, // default is Buffer
 });
 
-client.on('message', msg => console.log('server says', msg));
+await client.connect(); // establishes socket and starts framing
+client.send("hello");
+client.on("message", console.log); // receives framed messages
+
 await client.connect();
 client.send('ping');
 ```
@@ -99,6 +117,7 @@ Server that accepts connections and broadcasts messages:
 ```ts
 import { QWormholeServer, textDeserializer } from '@sigilnet/qwormhole';
 
+// Server: accepts connections, receives framed messages, echoes responses
 const server = new QWormholeServer<string>({
   host: '0.0.0.0',
   port: 9000,
@@ -118,6 +137,7 @@ Runtime helper (shared defaults, quick bootstrap):
 ```ts
 import { QWormholeRuntime } from '@sigilnet/qwormhole';
 
+// Runtime: orchestrates client/server with shared defaults and native preference
 const rt = new QWormholeRuntime({
   protocolVersion: '1.0.0',
   handshakeTags: { service: 'sigilnet', device: 'alpha' },
@@ -141,9 +161,9 @@ const { client, mode } = createQWormholeClient({
   preferNative: true,
 });
 
-console.log('using mode', mode); // "native-lws", "native-libsocket", or "ts"
+console.log('using mode', mode); // "native-lws" → "native-libsocket" → "ts"
 // load order: libwebsockets -> libsocket -> TS
-// set QWORMHOLE_DEBUG_NATIVE=1 to log which backend was selected
+// set QWORMHOLE_DEBUG_NATIVE=1 to log backend selection during runtime.
 ```
 
 Native modules are emitted to:
@@ -151,6 +171,14 @@ Native modules are emitted to:
 dist/native/
   qwormhole_lws.node
   qwormhole.node
+  
+#### **Platform behavior table**
+
+| Symbol | Meaning |
+|--------|---------|
+| ✅     | Always available |
+| ⚡     | Optional native acceleration |
+| ❌     | Not supported |
 
 ## Platform behavior
 
@@ -167,11 +195,24 @@ Transport selection order:
 2. `qwormhole.node` (libsocket)
 3. TypeScript fallback
 
-## Why QWormhole?
+- __Native acceleration when you want it. TypeScript clarity when you need it.__
+
+---
+
+## Why QWormhole? - Every connection is framed, typed, and tagged — no more raw streams.
+
+
+- Stop hand-rolling socket framing and reconnect logic
+- Use typed events and pluggable codecs out of the box
+- Drop native acceleration in when needed — no lock-in
+- Bind to interfaces, enforce protocol versions, and tag connections
+- Works everywhere: TS fallback is always available
+
+---
 
 Node's built-in `net` module is low-level and bare metal. Most real-world
 applications need:
-
+- message events are pre-deserialized — no need to parse manually.
 - message framing (length-prefixed)
 - reconnect logic
 - backpressure protection
@@ -183,6 +224,8 @@ applications need:
 - optional native performance
 
 QWormhole provides all of this in a small, modern, TypeScript-native API.
+
+---
 
 ## Key options
 
@@ -197,7 +240,7 @@ QWormhole provides all of this in a small, modern, TypeScript-native API.
 - `protocolVersion`/`handshakeTags`: optional handshake exchange to enforce versioning and pass tags (e.g., device/service/interface).
 - `getConnection(id)`/`getConnectionCount()` helpers for server-side orchestration.
 
-Codec helpers:
+#### **Codec helpers**
 - Built-in: buffer/text/json
 - Optional: CBOR via `createCborSerializer`/`createCborDeserializer`
 - FlatBuffers/Protobuf: use the serializer/deserializer hooks with your generated encode/decode, e.g.:
@@ -209,6 +252,16 @@ Codec helpers:
     deserializer: data => MyProto.decode(data),
   });
   ```
+
+| Codec       | Type     | Usage                     |
+|-------------|----------|---------------------------|
+| Buffer      | Built-in | Default                    |
+| Text        | Built-in | `textDeserializer`         |
+| JSON        | Built-in | `jsonDeserializer`         |
+| CBOR        | Optional | `createCborDeserializer()` |
+| FlatBuffers | Custom   | Use serializer hooks       |
+| Protobuf    | Custom   | Use serializer hooks       |
+
 
 Benchmarks:
 - `pnpm --filter @sigilnet/qwormhole bench` runs a simple localhost throughput test comparing TS vs native (if available).
@@ -279,3 +332,7 @@ It does **not** encrypt traffic (yet).
 Use WireGuard, SSH tunnels, or TLS termination if required.
 
 Secure Streams (encrypted, multiplexed, policy-driven) is on the roadmap.
+
+
+
+
