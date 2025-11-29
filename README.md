@@ -4,9 +4,12 @@
 
 TypeScript-first TCP socket toolkit for the Sigilnet monorepo. Provides a light wrapper around Node's net module with sensible defaults (length-prefixed framing, reconnect backoff, and typed events) so you can embed the same client/server utilities in other packages without hand-rolling sockets each time.
 
-QWormhole turns raw sockets into a composable, typed, and orchestrated transport layer — with zero boilerplate.
+---
+QWormhole turns raw sockets into a composable, typed, and orchestrated transport layer — with __zero__ boilerplate.
+
 
 QWormhole isn’t just a socket wrapper — it’s a transport ritual.
+
 ---
 
 ## Features
