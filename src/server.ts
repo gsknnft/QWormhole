@@ -5,6 +5,10 @@ import { TypedEventEmitter } from "./typedEmitter";
 import { bufferDeserializer, defaultSerializer } from "./codecs";
 import { QWormholeError } from "./errors";
 import { TokenBucket, PriorityQueue, delay } from "./qos";
+import {
+  isNegantropicHandshake,
+  verifyNegantropicHandshake,
+} from "./negantropic-handshake";
 import type {
   Payload,
   QWormholeServerConnection,
@@ -40,6 +44,7 @@ type InternalServerOptions<TMessage> = Omit<
   onAuthorizeConnection?: QWormholeServerOptions<TMessage>["onAuthorizeConnection"];
   rateLimitBytesPerSec?: number;
   rateLimitBurstBytes?: number;
+  verifyHandshake?: (payload: unknown) => boolean | Promise<boolean>;
 };
 
 export class QWormholeServer<TMessage = Buffer> extends TypedEventEmitter<
@@ -374,6 +379,7 @@ export class QWormholeServer<TMessage = Buffer> extends TypedEventEmitter<
         maxAttempts: 0,
       },
       onAuthorizeConnection: options.onAuthorizeConnection,
+      verifyHandshake: options.verifyHandshake,
     };
   }
 
@@ -392,14 +398,60 @@ export class QWormholeServer<TMessage = Buffer> extends TypedEventEmitter<
         connection.socket.destroy(new Error("Protocol version mismatch"));
         return true;
       }
-      connection.handshake = { version: parsed.version, tags: parsed.tags };
-      connection.handshakePending = false;
+      const verify = this.options.verifyHandshake;
+      if (verify) {
+        const result = verify(parsed);
+        if (result instanceof Promise) {
+          result
+            .then(ok => {
+              if (!ok) {
+                connection.socket.destroy(new Error("Handshake rejected"));
+                connection.handshakePending = false;
+                return;
+              }
+              this.attachHandshake(connection, parsed);
+            })
+            .catch(err => {
+              connection.socket.destroy(
+                err instanceof Error ? err : new Error(String(err)),
+              );
+              connection.handshakePending = false;
+            });
+          return true;
+        }
+        if (!result) {
+          connection.socket.destroy(new Error("Handshake rejected"));
+          connection.handshakePending = false;
+          return true;
+        }
+      } else if (
+        isNegantropicHandshake(parsed) &&
+        !verifyNegantropicHandshake(parsed)
+      ) {
+        connection.socket.destroy(new Error("Invalid handshake signature"));
+        connection.handshakePending = false;
+        return true;
+      }
+      this.attachHandshake(connection, parsed);
       return true;
     } catch {
       connection.socket.destroy(new Error("Invalid handshake"));
       connection.handshakePending = false;
       return true;
     }
+  }
+
+  private attachHandshake(
+    connection: ManagedConnection,
+    parsed: Record<string, any>,
+  ): void {
+    connection.handshake = {
+      version: parsed.version,
+      tags: parsed.tags,
+      nIndex: parsed.nIndex,
+      negHash: parsed.negHash,
+    };
+    connection.handshakePending = false;
   }
 
   private publishTelemetry(): void {

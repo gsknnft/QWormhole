@@ -33,6 +33,7 @@ type InternalOptions<TMessage> = Omit<
   framing: "length-prefixed" | "none";
   rateLimitBytesPerSec?: number;
   rateLimitBurstBytes?: number;
+  handshakeSigner?: () => Record<string, unknown>;
 };
 
 export class QWormholeClient<TMessage = Buffer> extends TypedEventEmitter<
@@ -238,6 +239,7 @@ export class QWormholeClient<TMessage = Buffer> extends TypedEventEmitter<
       rateLimitBytesPerSec: options.rateLimitBytesPerSec ?? undefined,
       rateLimitBurstBytes:
         options.rateLimitBurstBytes ?? options.rateLimitBytesPerSec,
+      handshakeSigner: options.handshakeSigner ?? undefined,
     };
   }
 
@@ -304,11 +306,12 @@ export class QWormholeClient<TMessage = Buffer> extends TypedEventEmitter<
   }
 
   public async enqueueHandshake(): Promise<void> {
-    const payload = {
-      type: "handshake",
-      version: this.options.protocolVersion,
-      tags: this.options.handshakeTags,
-    };
+    const payload =
+      this.options.handshakeSigner?.() ?? {
+        type: "handshake",
+        version: this.options.protocolVersion,
+        tags: this.options.handshakeTags,
+      };
     this.enqueueSend(payload, { priority: -100 });
   }
 }
