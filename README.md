@@ -70,36 +70,36 @@ pnpm add @sigilnet/qwormhole
 
 ## Architecture
 
-QWormhole abstracts the transport layer, selecting native or TS based on
-availability and preference. The runtime layer handles orchestration,
-framing, rate limiting, and handshake semantics.
 
-```md
+QWormhole abstracts the transport layer, selecting native or TS based on availability and preference. The runtime layer handles orchestration, framing, rate limiting, and handshake semantics.
 
-Client (TS/native)
+**Architecture Overview**
+
+  Client (TS/native)
     ↕ length-prefixed frames
-Server (TS/native)
+  Server (TS/native)
     ↕ rate-limit, backpressure, handshake
-Application Layer
+  Application Layer
 
-+----------------------------+
-|        Your App           |
-+----------------------------+
-            |
-            v
-+----------------------------+
-|    QWormhole Runtime      |   ← orchestrates handshake, framing, rate limits
-+----------------------------+
-      |             |
-      v             v
-+-----------+   +-----------+
-|  Native   |   |    TS     |   ← auto-selected transport layer
-|  (LWS)    |   | Transport |
-+-----------+   +-----------+
-      |
-      v
-     TCP
-```
+>     +----------------------------+
+>     |        Your App           |
+>     +----------------------------+
+>                 |
+>                 v
+>     +----------------------------+
+>     |    QWormhole Runtime      |   ← orchestrates handshake, framing, rate limits
+>     +----------------------------+
+>           |             |
+>           v             v
+>     +-----------+   +-----------+
+>     |  Native   |   |    TS     |   ← auto-selected transport layer
+>     |  (LWS)    |   | Transport |
+>     +-----------+   +-----------+
+>           |
+>           v
+>          TCP
+
+---
 
 
 
@@ -271,6 +271,7 @@ QWormhole provides all of this in a small, modern, TypeScript-native API.
 
 ✔ typed server connections
 - `getConnection(id)`/`getConnectionCount()` helpers for server-side orchestration.
+
 
 #### **Codec helpers**
 - Built-in: buffer/text/json
