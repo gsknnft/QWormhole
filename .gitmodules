@@ -1,0 +1,3 @@
+[submodule "c/qwormhole"]
+	path = c/qwormhole
+	url = https://github.com/gsknnft/qwormhole.git

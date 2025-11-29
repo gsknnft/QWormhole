@@ -1,0 +1,5 @@
+dist/
+coverage/
+scripts/
+c/wavelib/
+test/generated.test.ts

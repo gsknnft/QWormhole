@@ -1,0 +1,93 @@
+{
+  "name": "@sigilnet/qwormhole",
+  "version": "0.0.6",
+  "description": "A high-performance, extensible TypeScript socket library with native bindings for Node.js",
+  "private": true,
+  "files": [
+    "dist",
+    "binding.gyp",
+    "c"
+  ],
+  "engines": {
+    "node": ">=24.9.0",
+    "pnpm": ">=10.23.0"
+  },
+  "packageManager": "pnpm@10.23.0",
+  "repository": "https://github.com/gsknnft/sigilnet/QWormhole",
+  "author": "Brian Ward",
+  "license": "BSD-3-Clause",
+  "scripts": {
+    "build:tsup": "tsup",
+    "build:vite": "vite build",
+    "build:native": "node-gyp rebuild && node -e \"const fs=require('fs');const path=require('path');fs.mkdirSync(path.join(__dirname,'dist','native'),{recursive:true});for (const name of ['qwormhole.node','qwormhole_lws.node']){const src=path.join(__dirname,'build','Release',name);const dst=path.join(__dirname,'dist','native',name);if(fs.existsSync(src)){fs.copyFileSync(src,dst);console.log('[qwormhole] copied',src,'->',dst);}}\" && pnpm run install",
+    "build:tsc": "tsc --p tsconfig.json",
+    "build:rollup": "rollup -c rollup.config.js",
+    "build": "vite build && pnpm run build:tsc && pnpm run build:decl && pnpm run build:rollup",
+    "build:decl": "tsc --emitDeclarationOnly --declaration --outDir dist --project tsconfig.json",
+    "install": "node ./scripts/install-native.js",
+    "dev": "tsup --watch",
+    "test": "vitest run",
+    "test:native": "vitest run test/native.smoke.test.ts",
+    "bench": "node --loader ts-node/esm scripts/bench.ts",
+    "lint": "eslint . && tsc --noEmit",
+    "format": "prettier . --write"
+  },
+  "tsup": {
+    "entry": [
+      "src/index.ts"
+    ],
+    "include": [
+      "src/**/*"
+    ],
+    "loader": {
+      ".wasm": "file"
+    },
+    "format": [
+      "cjs",
+      "esm"
+    ],
+    "tsconfig": "./tsconfig.json",
+    "dts": false,
+    "splitting": false,
+    "sourcemap": true,
+    "shims": true,
+    "clean": true,
+    "target": "es2022",
+    "external": [
+      "bindings"
+    ],
+    "noExternal": []
+  },
+  "prettier": {
+    "tabWidth": 2,
+    "semi": true,
+    "arrowParens": "avoid"
+  },
+  "devDependencies": {
+    "@arethetypeswrong/cli": "^0.17.3",
+    "@types/bindings": "^1.5.5",
+    "@types/node": "^24.10.1",
+    "@vitest/coverage-v8": "^4.0.9",
+    "cbor": "^9.0.1",
+    "eslint": "^9.39.1",
+    "node-addon-api": "8.5.0",
+    "node-gyp": "^10.3.1",
+    "prettier": "^3.5.3",
+    "ts-node": "^10.9.2",
+    "tsup": "^8.5.1",
+    "typescript": "^5.9.3",
+    "typescript-eslint": "^8.46.4",
+    "vite": "7.2.4",
+    "vitest": "^4.0.9"
+  },
+  "publishConfig": {
+    "access": "restricted"
+  },
+  "optionalDependencies": {
+    "@rollup/rollup-linux-x64-gnu": "4.53.3"
+  },
+  "dependencies": {
+    "bindings": "^1.5.0",
+    "ws": "^8.18.3"
+  }
+}

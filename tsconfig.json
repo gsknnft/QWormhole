@@ -1,0 +1,29 @@
+{
+  "compilerOptions": {
+    "target": "ESNext",
+    "useDefineForClassFields": true,
+    "module": "NodeNext",
+    "moduleResolution": "nodenext",
+    "outDir": "dist",
+    "lib":  ["ESNext", "DOM", "ESNext.Sharedmemory"],
+    "rootDir": "./src",
+    "composite": true,
+    "isolatedModules": true,
+    "esModuleInterop": true,
+    "forceConsistentCasingInFileNames": true,
+    "strict": true,
+    "noUnusedLocals": true,
+    "noUnusedParameters": true,
+    "noFallthroughCasesInSwitch": true,
+    "skipLibCheck": true,
+    "types": ["node"],
+    "typeRoots": [
+      "types",
+      "../../src/types",
+      "node_modules/@types",
+      "../../node_modules/@types"
+    ]
+  },
+  "include": ["src/**/*"],
+  "exclude": ["node_modules", "dist", "**/dist", "**/test"]
+}
