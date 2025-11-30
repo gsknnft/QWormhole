@@ -20,7 +20,7 @@
     "types": ["node"],
     "paths": {
       "types": ["types/types.d.ts"],
-      "types/*": ["types/*"],
+      "types/*": ["types/*"]
     },
     "typeRoots": [
       "types",
