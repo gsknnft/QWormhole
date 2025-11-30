@@ -40,14 +40,6 @@ const externalDeps = [
   "tty",
   "cluster",
   "dgram",
-  "@sigilnet/qtensors",
-  "@sigilnet/qsignalsuite",
-  "@sigilnet/qtransform",
-  "@sigilnet/qhub",
-  "@sigilnet/mse",
-  "@sigilnet/fft-ts",
-  "wasmlets",
-  "wasmlets/bridge",
   "fs/promises",
   // keep only runtime externals here
 ];
@@ -63,7 +55,7 @@ export default defineConfig({
   build: {
     lib: {
       entry: path.resolve(process.cwd(), "src/index.ts"),
-      name: "qwormhole",
+      name: "QWormhole",
       formats: ["es", "cjs"],
       fileName: format => (format === "es" ? "index.js" : "index.cjs"),
     },

@@ -27,26 +27,26 @@ Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "qwormhole_lws", "qwormhole_
 EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
-		Debug|x64 = Debug|x64
 		Release|x64 = Release|x64
+		Debug|x64 = Debug|x64
 	EndGlobalSection
 	GlobalSection(ProjectConfigurationPlatforms) = postSolution
-		{5D43F8A7-1F64-3648-648C-F7C38BA761B3}.Debug|x64.ActiveCfg = Debug|x64
-		{5D43F8A7-1F64-3648-648C-F7C38BA761B3}.Debug|x64.Build.0 = Debug|x64
 		{5D43F8A7-1F64-3648-648C-F7C38BA761B3}.Release|x64.ActiveCfg = Release|x64
 		{5D43F8A7-1F64-3648-648C-F7C38BA761B3}.Release|x64.Build.0 = Release|x64
-		{8988AA96-4586-5E0D-7F50-D033C8A44EE2}.Debug|x64.ActiveCfg = Debug|x64
-		{8988AA96-4586-5E0D-7F50-D033C8A44EE2}.Debug|x64.Build.0 = Debug|x64
+		{5D43F8A7-1F64-3648-648C-F7C38BA761B3}.Debug|x64.ActiveCfg = Debug|x64
+		{5D43F8A7-1F64-3648-648C-F7C38BA761B3}.Debug|x64.Build.0 = Debug|x64
 		{8988AA96-4586-5E0D-7F50-D033C8A44EE2}.Release|x64.ActiveCfg = Release|x64
 		{8988AA96-4586-5E0D-7F50-D033C8A44EE2}.Release|x64.Build.0 = Release|x64
-		{9C7BB501-D514-B9A4-316C-ED8BF95BEE27}.Debug|x64.ActiveCfg = Debug|x64
-		{9C7BB501-D514-B9A4-316C-ED8BF95BEE27}.Debug|x64.Build.0 = Debug|x64
+		{8988AA96-4586-5E0D-7F50-D033C8A44EE2}.Debug|x64.ActiveCfg = Debug|x64
+		{8988AA96-4586-5E0D-7F50-D033C8A44EE2}.Debug|x64.Build.0 = Debug|x64
 		{9C7BB501-D514-B9A4-316C-ED8BF95BEE27}.Release|x64.ActiveCfg = Release|x64
 		{9C7BB501-D514-B9A4-316C-ED8BF95BEE27}.Release|x64.Build.0 = Release|x64
-		{D24E85DE-0E7C-B731-4608-D9717DEC7164}.Debug|x64.ActiveCfg = Debug|x64
-		{D24E85DE-0E7C-B731-4608-D9717DEC7164}.Debug|x64.Build.0 = Debug|x64
+		{9C7BB501-D514-B9A4-316C-ED8BF95BEE27}.Debug|x64.ActiveCfg = Debug|x64
+		{9C7BB501-D514-B9A4-316C-ED8BF95BEE27}.Debug|x64.Build.0 = Debug|x64
 		{D24E85DE-0E7C-B731-4608-D9717DEC7164}.Release|x64.ActiveCfg = Release|x64
 		{D24E85DE-0E7C-B731-4608-D9717DEC7164}.Release|x64.Build.0 = Release|x64
+		{D24E85DE-0E7C-B731-4608-D9717DEC7164}.Debug|x64.ActiveCfg = Debug|x64
+		{D24E85DE-0E7C-B731-4608-D9717DEC7164}.Debug|x64.Build.0 = Debug|x64
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE

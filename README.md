@@ -1,12 +1,63 @@
 ## @sigilnet/qwormhole 
 
+<p align="center">
+  <img src="https://raw.githubusercontent.com/gsknnft/qwormhole/main/assets/logo.svg" alt="QWormhole Logo" width="180" />
+</p>
+
 ### TypeScript-first TCP transport with native acceleration and framing, reconnect, and codec orchestration.
 
-TypeScript-first TCP socket toolkit for the Sigilnet monorepo. Provides a light wrapper around Node's net module with sensible defaults (length-prefixed framing, reconnect backoff, and typed events) so you can embed the same client/server utilities in other packages without hand-rolling sockets each time.
+
+A TypeScript-first TCP transport kernel with native acceleration, framing, reconnect, and codec orchestration.
+
+QWormhole is a modern transport layer for Node environments.
+It wraps raw TCP sockets with:
+
+✔ Length-prefixed framing
+
+✔ Auto-reconnect
+
+✔ Rate limiting
+
+✔ Backpressure safety
+
+✔ Typed events
+
+✔ Optional native acceleration
+
+✔ Interface binding (e.g. wg0)
+
+✔ Pluggable codecs
+
+The goal: no more hand-rolled socket logic.
+Just a clean, portable, typed transport.
 
 ---
+
+
+## ✨ Why QWormhole?
+
 QWormhole turns raw sockets into a composable, typed, and orchestrated transport layer — with __zero__ boilerplate.
 
+Node’s built-in net module is intentionally bare.
+Real applications need:
+
+Framing (length-prefix, safe messages)
+
+Auto-reconnect
+
+Typed, decoded message events
+
+Rate limiting
+
+Backpressure protection
+
+Versioned handshakes
+
+Interface binding
+
+Optional native performance
+
+QWormhole provides all of these in a small, modern, TS-native API with fallback behavior.
 
 QWormhole isn’t just a socket wrapper — it’s a transport ritual.
 
@@ -37,6 +88,7 @@ QWormhole isn’t just a socket wrapper — it’s a transport ritual.
 ## Minimal Example
 ```ts
 const client = new QWormholeClient({ host: "127.0.0.1", port: 9000 });
+
 await client.connect();
 client.send("hello");
 client.on("message", console.log);

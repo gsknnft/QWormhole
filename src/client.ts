@@ -40,6 +40,7 @@ export class QWormholeClient<TMessage = Buffer> extends TypedEventEmitter<
   QWormholeClientEvents<TMessage>
 > {
   public socket?: net.Socket;
+  private hadSocketError = false;
   private reconnectTimer?: NodeJS.Timeout;
   private reconnectAttempts = 0;
   private closedByUser = false;
@@ -131,12 +132,14 @@ export class QWormholeClient<TMessage = Buffer> extends TypedEventEmitter<
       });
 
       socket.on("error", err => {
+        this.hadSocketError = true;
+        this.emit("error", err);
+        this.handleClose(true); // Ensure hadError is true on error
         if (!settled) {
           settled = true;
           this.clearConnectTimer();
           reject(err);
         }
-        this.emit("error", err);
         this.scheduleReconnect();
       });
 
@@ -180,7 +183,14 @@ export class QWormholeClient<TMessage = Buffer> extends TypedEventEmitter<
   }
 
   private handleClose(hadError: boolean): void {
-    this.emit("close", { hadError });
+    // If hadError is true, ensure hadSocketError is set
+    if (hadError) this.hadSocketError = true;
+    // If handshake is pending and connection closes, treat as error
+    const handshakePending = Boolean(this.options.protocolVersion);
+    const hadErrorFinal =
+      this.hadSocketError || (handshakePending && !this.closedByUser);
+    this.emit("close", { hadError: hadErrorFinal });
+    this.hadSocketError = false;
     this.socket = undefined;
     if (!this.closedByUser) {
       this.scheduleReconnect();
@@ -307,12 +317,11 @@ export class QWormholeClient<TMessage = Buffer> extends TypedEventEmitter<
   }
 
   public async enqueueHandshake(): Promise<void> {
-    const payload =
-      this.options.handshakeSigner?.() ?? {
-        type: "handshake",
-        version: this.options.protocolVersion,
-        tags: this.options.handshakeTags,
-      };
+    const payload = this.options.handshakeSigner?.() ?? {
+      type: "handshake",
+      version: this.options.protocolVersion,
+      tags: this.options.handshakeTags,
+    };
     this.enqueueSend(payload, { priority: -100 });
   }
 }

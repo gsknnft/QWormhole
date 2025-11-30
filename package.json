@@ -13,8 +13,8 @@
     "pnpm": ">=10.23.0"
   },
   "packageManager": "pnpm@10.23.0",
-  "repository": "https://github.com/gsknnft/sigilnet/QWormhole",
-  "author": "Brian Ward",
+  "repository": "https://github.com/gsknnft/QWormhole",
+  "author": "Gordon Skinner",
   "license": "BSD-3-Clause",
   "scripts": {
     "build:tsup": "tsup",
@@ -64,8 +64,6 @@
     "arrowParens": "avoid"
   },
   "devDependencies": {
-    "@sigilnet/core": "workspace:*",
-    "@sigilnet/signal-fabric": "workspace:*",
     "@arethetypeswrong/cli": "^0.17.3",
     "@types/bindings": "^1.5.5",
     "@types/node": "^24.10.1",

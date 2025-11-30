@@ -1,4 +1,11 @@
-import { createHash, generateKeyPairSync, sign, verify } from "node:crypto";
+import {
+  createHash,
+  createPrivateKey,
+  createPublicKey,
+  generateKeyPairSync,
+  sign,
+  verify,
+} from "node:crypto";
 import { Buffer } from "node:buffer";
 
 export interface NegantropicHandshake {
@@ -108,9 +115,15 @@ export function createNegantropicHandshake(
     tags: params.tags,
   };
 
-  const signature = sign(null, Buffer.from(JSON.stringify(unsigned)), {
-    key: Buffer.from(kp.secretKey, "base64"),
-  }).toString("base64");
+  const signature = sign(
+    null,
+    Buffer.from(JSON.stringify(unsigned)),
+    createPrivateKey({
+      key: Buffer.from(kp.secretKey, "base64"),
+      format: "der",
+      type: "pkcs8",
+    }),
+  ).toString("base64");
 
   return { ...unsigned, signature };
 }
@@ -129,7 +142,11 @@ export function verifyNegantropicHandshake(hs: any): boolean {
   return verify(
     null,
     Buffer.from(JSON.stringify(unsigned)),
-    { key: Buffer.from(unsigned.publicKey, "base64") },
+    createPublicKey({
+      key: Buffer.from(unsigned.publicKey, "base64"),
+      format: "der",
+      type: "spki",
+    }),
     Buffer.from(signature, "base64"),
   );
 }
