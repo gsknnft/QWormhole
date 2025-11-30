@@ -1,7 +1,7 @@
 ## @sigilnet/qwormhole 
 
 <p align="center">
-  <img src="/main/assets/qw_logo2.png" alt="QWormhole Logo" width="180" />
+  <img src="https://raw.githubusercontent.com/gsknnft/qwormhole/main/assets/qw_logo2.png" alt="QWormhole Logo" width="180" />
 </p>
 
 
@@ -34,7 +34,9 @@ Just a clean, portable, typed transport.
 
 ---
 
-
+<p align="center">
+  <img src="/main/assets/lilq_canon.png" alt="QWormhole Logo" width="180" />
+</p>
 ## ✨ Why QWormhole?
 
 QWormhole turns raw sockets into a composable, typed, and orchestrated transport layer — with __zero__ boilerplate.
