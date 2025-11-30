@@ -4,8 +4,9 @@ coverage/
 scripts/
 *.o
 yarn.lock
-*.rollup.cache
 .vscode/
+build/
+.rollup.cache/
 
 #Ignore build files
 CMakeCache.txt

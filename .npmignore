@@ -1,0 +1,4 @@
+# Exclude build output and rollup cache from npm package
+build/
+.rollupcache/
+dist/
