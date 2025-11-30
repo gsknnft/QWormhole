@@ -21,14 +21,10 @@
     "paths": {
       "types": ["types/types.d.ts"],
       "types/*": ["types/*"],
-      "@sigilnet/signal-fabric/*": ["../../src/device-registry/src/*"],
-      "@sigilnet/core/*": ["../../src/sigilnet/src/*"]
     },
     "typeRoots": [
       "types",
-      "../../src/types",
-      "node_modules/@types",
-      "../../node_modules/@types"
+      "node_modules/@types"
     ]
   },
   "include": ["src"],
