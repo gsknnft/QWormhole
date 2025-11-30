@@ -5,6 +5,10 @@ import { TypedEventEmitter } from "./typedEmitter";
 import { bufferDeserializer, defaultSerializer } from "./codecs";
 import { QWormholeError } from "./errors";
 import { TokenBucket, PriorityQueue, delay } from "./qos";
+import {
+  isNegantropicHandshake,
+  verifyNegantropicHandshake,
+} from "./negantropic-handshake";
 import type {
   Payload,
   QWormholeServerConnection,
@@ -40,11 +44,13 @@ type InternalServerOptions<TMessage> = Omit<
   onAuthorizeConnection?: QWormholeServerOptions<TMessage>["onAuthorizeConnection"];
   rateLimitBytesPerSec?: number;
   rateLimitBurstBytes?: number;
+  verifyHandshake?: (payload: unknown) => boolean | Promise<boolean>;
 };
 
 export class QWormholeServer<TMessage = Buffer> extends TypedEventEmitter<
   QWormholeServerEvents<TMessage>
 > {
+  private failedHandshakes = new Map<string, number>();
   private readonly server: net.Server;
   private readonly clients = new Map<string, ManagedConnection>();
   private readonly options: InternalServerOptions<TMessage>;
@@ -67,6 +73,9 @@ export class QWormholeServer<TMessage = Buffer> extends TypedEventEmitter<
       },
     );
     this.server.on("error", err => this.emit("error", err));
+    this.on("error", err => {
+      console.error("[QWormholeServer] error:", err);
+    });
   }
 
   async listen(): Promise<net.AddressInfo> {
@@ -227,7 +236,10 @@ export class QWormholeServer<TMessage = Buffer> extends TypedEventEmitter<
     });
 
     socket.on("timeout", () => socket.end());
-    socket.on("error", err => this.emit("error", err));
+    socket.on("error", err => {
+      // Prevent uncaught exceptions during handshake rejection
+      this.emit("error", err);
+    });
   }
 
   private createConnection(socket: net.Socket): ManagedConnection {
@@ -237,7 +249,7 @@ export class QWormholeServer<TMessage = Buffer> extends TypedEventEmitter<
       socket,
       remoteAddress: socket.remoteAddress ?? undefined,
       remotePort: socket.remotePort ?? undefined,
-      send: (payload, options) =>
+      send: (payload: Payload, options?: SendOptions) =>
         this.write(connection, payload, options).catch(err => {
           this.emit("error", err);
           throw err;
@@ -374,6 +386,7 @@ export class QWormholeServer<TMessage = Buffer> extends TypedEventEmitter<
         maxAttempts: 0,
       },
       onAuthorizeConnection: options.onAuthorizeConnection,
+      verifyHandshake: options.verifyHandshake,
     };
   }
 
@@ -381,6 +394,7 @@ export class QWormholeServer<TMessage = Buffer> extends TypedEventEmitter<
     connection: ManagedConnection,
     data: Buffer,
   ): boolean {
+    let verified = false;
     try {
       const parsed = JSON.parse(data.toString("utf8"));
       if (!parsed || parsed.type !== "handshake") return false;
@@ -389,17 +403,112 @@ export class QWormholeServer<TMessage = Buffer> extends TypedEventEmitter<
         parsed.version &&
         parsed.version !== this.options.protocolVersion
       ) {
+        this.clients.delete(connection.id);
         connection.socket.destroy(new Error("Protocol version mismatch"));
+        this.emit("clientClosed", { client: connection, hadError: true });
+        this.telemetry.connections = this.clients.size;
+        this.publishTelemetry();
+        connection.handshakePending = false;
         return true;
       }
-      connection.handshake = { version: parsed.version, tags: parsed.tags };
-      connection.handshakePending = false;
-      return true;
+      const verify = this.options.verifyHandshake;
+      if (verify) {
+        const result = verify(parsed);
+        if (result instanceof Promise) {
+          result
+            .then(ok => {
+              if (!ok) {
+                this.clients.delete(connection.id);
+                connection.socket.destroy(new Error("Handshake rejected"));
+                this.emit("clientClosed", {
+                  client: connection,
+                  hadError: true,
+                });
+                this.telemetry.connections = this.clients.size;
+                this.publishTelemetry();
+                connection.handshakePending = false;
+                return false;
+              }
+              this.attachHandshake(connection, parsed);
+            })
+            .catch(err => {
+              this.clients.delete(connection.id);
+              connection.socket.destroy(
+                err instanceof Error ? err : new Error(String(err)),
+              );
+              this.emit("clientClosed", { client: connection, hadError: true });
+              this.telemetry.connections = this.clients.size;
+              this.publishTelemetry();
+              connection.handshakePending = false;
+              return false;
+            });
+          return false;
+        }
+        if (!result) {
+          const key = connection.remoteAddress ?? connection.id;
+          const count = this.failedHandshakes.get(key) ?? 0;
+          this.failedHandshakes.set(key, count + 1);
+          this.clients.delete(connection.id);
+          connection.socket.destroy(new Error("Handshake rejected"));
+          this.emit("clientClosed", { client: connection, hadError: true });
+          this.telemetry.connections = this.clients.size;
+          this.publishTelemetry();
+          connection.handshakePending = false;
+          return false;
+        }
+      } else if (
+        isNegantropicHandshake(parsed) &&
+        !verifyNegantropicHandshake(parsed)
+      ) {
+        this.clients.delete(connection.id);
+        this.emit(
+          "error",
+          new QWormholeError(
+            "E_INVALID_HANDSHAKE_SIGNATURE",
+            "Invalid negantropic handshake signature",
+          ),
+        );
+        connection.socket.destroy(
+          new Error("Invalid negantropic handshake signature"),
+        );
+        this.emit("clientClosed", { client: connection, hadError: true });
+        this.telemetry.connections = this.clients.size;
+        this.publishTelemetry();
+        connection.handshakePending = false;
+        return false;
+      }
+      this.attachHandshake(connection, parsed);
+      verified = true;
+      return verified;
     } catch {
-      connection.socket.destroy(new Error("Invalid handshake"));
+      this.clients.delete(connection.id);
+      this.emit(
+        "error",
+        new QWormholeError(
+          "E_INVALID_HANDSHAKE_SIGNATURE",
+          "Invalid negantropic handshake signature",
+        ),
+      );
+      connection.socket.destroy(); // Prevent uncaught exception
+      this.emit("clientClosed", { client: connection, hadError: true });
+      this.telemetry.connections = this.clients.size;
+      this.publishTelemetry();
       connection.handshakePending = false;
-      return true;
+      return false;
     }
+  }
+
+  private attachHandshake(
+    connection: ManagedConnection,
+    parsed: Record<string, any>,
+  ): void {
+    connection.handshake = {
+      version: parsed.version,
+      tags: parsed.tags,
+      nIndex: parsed.nIndex,
+      negHash: parsed.negHash,
+    };
+    connection.handshakePending = false;
   }
 
   private publishTelemetry(): void {

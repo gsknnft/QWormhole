@@ -16,6 +16,11 @@ export { QWormholeError } from "./errors";
 export type { QWormholeErrorCode } from "./errors";
 export { QWormholeRuntime } from "./runtime";
 export { QWormholeClient as TcpClient } from "./client";
+export {
+  createNegantropicHandshake,
+  verifyNegantropicHandshake,
+  type NegantropicHandshake,
+} from "./negantropic-handshake";
 export type {
   Payload,
   QWormholeClientEvents,

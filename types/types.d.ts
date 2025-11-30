@@ -76,6 +76,11 @@ export interface QWormholeCommonOptions<TMessage = unknown> {
    * Optional tags to include in handshake (e.g., deviceId, service, interface).
    */
   handshakeTags?: Record<string, string | number>;
+  /**
+   * Custom handshake signer. If provided, the client sends the returned payload
+   * instead of the default {type,version,tags} handshake.
+   */
+  handshakeSigner?: () => Record<string, unknown>;
   framing?: FramingMode;
   maxFrameLength?: number;
   /**
@@ -118,6 +123,11 @@ export interface QWormholeServerOptions<TMessage = unknown>
    * Optional hook to decide if an incoming connection is accepted.
    */
   onAuthorizeConnection?: (socket: net.Socket) => boolean | Promise<boolean>;
+  /**
+   * Optional handshake verifier. If provided, it is invoked when a handshake
+   * payload is received; returning false closes the connection.
+   */
+  verifyHandshake?: (payload: unknown) => boolean | Promise<boolean>;
 }
 
 export interface QWormholeClientEvents<TMessage = unknown> {
@@ -136,7 +146,12 @@ export interface QWormholeServerConnection {
   socket: net.Socket;
   remoteAddress?: string;
   remotePort?: number;
-  handshake?: { version?: string; tags?: Record<string, unknown> };
+  handshake?: {
+    version?: string;
+    tags?: Record<string, unknown>;
+    nIndex?: number;
+    negHash?: string;
+  };
   /**
    * Writes data to the client, respecting backpressure. Resolves once the data is accepted by the OS buffer.
    */

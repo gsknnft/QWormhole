@@ -30,6 +30,17 @@ const externalDeps = [
   "node:crypto",
   "node:child_process",
   "node:readline",
+  "worker_threads",
+  "worker",
+  "net",
+  "tls",
+  "dns",
+  "string_decoder",
+  "timers",
+  "tty",
+  "cluster",
+  "dgram",
+  "fs/promises",
   // keep only runtime externals here
 ];
 
@@ -44,7 +55,7 @@ export default defineConfig({
   build: {
     lib: {
       entry: path.resolve(process.cwd(), "src/index.ts"),
-      name: "qwormhole",
+      name: "QWormhole",
       formats: ["es", "cjs"],
       fileName: format => (format === "es" ? "index.js" : "index.cjs"),
     },

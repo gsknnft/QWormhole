@@ -5,8 +5,9 @@
     "module": "NodeNext",
     "moduleResolution": "nodenext",
     "outDir": "dist",
-    "lib":  ["ESNext", "DOM", "ESNext.Sharedmemory"],
-    "rootDir": "./src",
+    "lib":  ["ESNext", "DOM"],
+    "baseUrl": ".",
+    "rootDir": "src",
     "composite": true,
     "isolatedModules": true,
     "esModuleInterop": true,
@@ -17,13 +18,15 @@
     "noFallthroughCasesInSwitch": true,
     "skipLibCheck": true,
     "types": ["node"],
+    "paths": {
+      "types": ["types/types.d.ts"],
+      "types/*": ["types/*"],
+    },
     "typeRoots": [
       "types",
-      "../../src/types",
-      "node_modules/@types",
-      "../../node_modules/@types"
+      "node_modules/@types"
     ]
   },
-  "include": ["src/**/*"],
+  "include": ["src"],
   "exclude": ["node_modules", "dist", "**/dist", "**/test"]
 }
