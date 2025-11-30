@@ -160,6 +160,13 @@ QWormhole abstracts the transport layer, selecting native or TS based on availab
 
 ---
 
+<p align="center">
+  <video width="320" height="180" controls>
+    <source src="/main/assets/rt_diag1.mp4" type="video/mp4">
+  </video>
+  <br />
+  <em>QWormhole Architecture</em>
+</p>
 
 
 ## Quick start
