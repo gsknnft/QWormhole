@@ -35,7 +35,7 @@ Just a clean, portable, typed transport.
 ---
 
 <p align="center">
-  <img src="/main/assets/lilq_canon.png" alt="QWormhole Logo" width="180" />
+  <img src="/main/assets/lilq_canon.jpg" alt="QWormhole Logo" width="180" />
 </p>
 
 ## ✨ Why QWormhole?
