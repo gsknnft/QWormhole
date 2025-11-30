@@ -1,7 +1,7 @@
 ## @sigilnet/qwormhole 
 
 <p align="center">
-  <img src="https://raw.githubusercontent.com/gsknnft/qwormhole/main/assets/qw_logo2.png" alt="QWormhole Logo" width="180" />
+  <img src="/main/assets/qw_logo2.png" alt="QWormhole Logo" width="180" />
 </p>
 
 
