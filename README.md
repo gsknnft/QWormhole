@@ -1,4 +1,8 @@
-## @sigilnet/qwormhole 
+<p align="center">
+  <h1 style="font-size:2.5rem; font-family:Segoe UI, Arial, sans-serif; margin-bottom:0.2em;">
+    @sigilnet/qwormhole
+  </h1>
+</p>
 
 <p align="center">
   <img src="/main/assets/qw_logo2.png" alt="QWormhole Logo" width="180" />
@@ -33,10 +37,6 @@ The goal: no more hand-rolled socket logic.
 Just a clean, portable, typed transport.
 
 ---
-
-<p align="center">
-  <img src="/main/assets/lilq_canon.jpg" alt="QWormhole Logo" width="180" />
-</p>
 
 ## ✨ Why QWormhole?
 
@@ -421,6 +421,12 @@ Notes:
 - Node >= 24.9 recommended (matches workspace engines).
 - Windows build expects OpenSSL in the default OpenSSL-Win64 location; set `OPENSSL_LIB_DIR` if yours differs.
 - The package builds to CJS + ESM with bundled `.d.ts` via `tsup`; native is always optional.
+
+
+
+<p align="center">
+  <img src="/main/assets/lilq_canon.jpg" alt="QWormhole Logo" width="180" />
+</p>
 
 ## Troubleshooting (native build)
 - **OpenSSL missing on Windows**: install OpenSSL-Win64 and/or set `OPENSSL_LIB_DIR` to its `lib` folder.
