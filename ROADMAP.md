@@ -1,6 +1,6 @@
 # QWormhole Roadmap
 
-This document outlines near-term enhancements for @sigilnet/qwormhole. Items are ordered by expected impact and feasibility.
+This document outlines near-term enhancements for @gsknnft/qwormhole. Items are ordered by expected impact and feasibility.
 
 ## Native & Transport
 - **Converge on libwebsockets as the primary native backend**: keep libsocket as Linux/WSL fallback for one more cycle, then remove if parity is confirmed.

@@ -1,9 +1,9 @@
-# Publishing @sigilnet/qwormhole
+# Publishing @gsknnft/qwormhole
 
 Checklist:
-- [x] `pnpm --filter @sigilnet/qwormhole build`
-- [x] (Optional) `pnpm --filter @sigilnet/qwormhole run build:native`
-- [x] `pnpm --filter @sigilnet/qwormhole test`
+- [x] `pnpm --filter @gsknnft/qwormhole build`
+- [x] (Optional) `pnpm --filter @gsknnft/qwormhole run build:native`
+- [x] `pnpm --filter @gsknnft/qwormhole test`
 - [x] README and CHANGELOG updated
 - [x] Version bumped in `package.json`
 - [ ] (Optional) set `QWORMHOLE_NATIVE=0` if skipping native in CI

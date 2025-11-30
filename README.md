@@ -1,6 +1,6 @@
 <p align="center">
   <h1 style="font-size:2.5rem; font-family:Segoe UI, Arial, sans-serif; margin-bottom:0.2em;">
-    @sigilnet/qwormhole
+    @gsknnft/qwormhole
   </h1>
 </p>
 
@@ -122,7 +122,7 @@ client.on("message", console.log);
 This package is part of the workspace; add it to a package with:
 
 ```bash
-pnpm add @sigilnet/qwormhole
+pnpm add @gsknnft/qwormhole
 ```
 
 
@@ -172,7 +172,7 @@ QWormhole abstracts the transport layer, selecting native or TS based on availab
 Client with automatic reconnect and length-prefixed frames:
 
 ```ts
-import { QWormholeClient, textDeserializer } from '@sigilnet/qwormhole';
+import { QWormholeClient, textDeserializer } from '@gsknnft/qwormhole';
 
 // Client: connects, auto-reconnects, sends framed messages
 const client = new QWormholeClient({
@@ -192,7 +192,7 @@ client.send('ping');
 Server that accepts connections and broadcasts messages:
 
 ```ts
-import { QWormholeServer, textDeserializer } from '@sigilnet/qwormhole';
+import { QWormholeServer, textDeserializer } from '@gsknnft/qwormhole';
 
 // Server: accepts connections, receives framed messages, echoes responses
 const server = new QWormholeServer<string>({
@@ -212,7 +212,7 @@ await server.listen();
 Runtime helper (shared defaults, quick bootstrap):
 
 ```ts
-import { QWormholeRuntime } from '@sigilnet/qwormhole';
+import { QWormholeRuntime } from '@gsknnft/qwormhole';
 
 // Runtime: orchestrates client/server with shared defaults and native preference
 const rt = new QWormholeRuntime({
@@ -230,7 +230,7 @@ const client = rt.createClient({ host: '127.0.0.1', port: 9000 });
 Mode selection (TS vs native) and backend selection:
 
 ```ts
-import { createQWormholeClient } from '@sigilnet/qwormhole';
+import { createQWormholeClient } from '@gsknnft/qwormhole';
 
 const { client, mode } = createQWormholeClient({
   host: '127.0.0.1',
@@ -361,10 +361,10 @@ QWormhole provides all of this in a small, modern, TypeScript-native API.
 
 
 Benchmarks:
-- `pnpm --filter @sigilnet/qwormhole bench` runs a simple localhost throughput test comparing TS vs native (if available).
+- `pnpm --filter @gsknnft/qwormhole bench` runs a simple localhost throughput test comparing TS vs native (if available).
   - Or run `node scripts/bench.ts` to benchmark TS, native-lws, and native-libsocket (when present).
 Tests:
-- `pnpm --filter @sigilnet/qwormhole test` (TS), `pnpm --filter @sigilnet/qwormhole test:native` (gated by native availability).
+- `pnpm --filter @gsknnft/qwormhole test` (TS), `pnpm --filter @gsknnft/qwormhole test:native` (gated by native availability).
 
 ---
 
@@ -382,7 +382,7 @@ Install attempts a native build automatically; if native fails, TS remains avail
 
 - `pnpm install` (or workspace install) triggers the native build attempt via `scripts/install-native.js`.
 - If native build fails (missing toolchain/SSL), it logs a warning and falls back to TS without failing install.
-- You can rebuild explicitly anytime: `pnpm --filter @sigilnet/qwormhole run build:native`.
+- You can rebuild explicitly anytime: `pnpm --filter @gsknnft/qwormhole run build:native`.
 - Set `QWORMHOLE_NATIVE=0` to skip native (e.g., CI); set `QWORMHOLE_BUILD_LIBSOCKET=0` on POSIX to skip libsocket when you only want LWS.
 
 ## Handshake & security
@@ -410,13 +410,13 @@ Native is optional; the TS transport works everywhere. Two native addons are ava
 
 Build on Windows (libwebsockets):
 ```bash
-pnpm --filter @sigilnet/qwormhole run build:native
+pnpm --filter @gsknnft/qwormhole run build:native
 # outputs dist/native/qwormhole_lws.node
 ```
 
 Build on Linux/WSL (libwebsockets + libsocket):
 ```bash
-pnpm --filter @sigilnet/qwormhole run build:native
+pnpm --filter @gsknnft/qwormhole run build:native
 # outputs dist/native/qwormhole_lws.node and/or qwormhole.node
 ```
 
