@@ -242,7 +242,7 @@ export class QWormholeServer<TMessage = Buffer> extends TypedEventEmitter<
       socket,
       remoteAddress: socket.remoteAddress ?? undefined,
       remotePort: socket.remotePort ?? undefined,
-      send: (payload, options) =>
+      send: (payload: Payload, options?: SendOptions) =>
         this.write(connection, payload, options).catch(err => {
           this.emit("error", err);
           throw err;

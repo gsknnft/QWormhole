@@ -64,6 +64,8 @@
     "arrowParens": "avoid"
   },
   "devDependencies": {
+    "@sigilnet/core": "workspace:*",
+    "@sigilnet/signal-fabric": "workspace:*",
     "@arethetypeswrong/cli": "^0.17.3",
     "@types/bindings": "^1.5.5",
     "@types/node": "^24.10.1",

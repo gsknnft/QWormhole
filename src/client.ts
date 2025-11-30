@@ -149,6 +149,7 @@ export class QWormholeClient<TMessage = Buffer> extends TypedEventEmitter<
             new QWormholeError("E_CONNECT_TIMEOUT", "Connection timed out"),
           );
         }, this.options.connectTimeoutMs);
+        return 0;
       }
     });
   }
