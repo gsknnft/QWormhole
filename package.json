@@ -1,6 +1,6 @@
 {
   "name": "@sigilnet/qwormhole",
-  "version": "0.0.6",
+  "version": "0.1.0",
   "description": "A high-performance, extensible TypeScript socket library with native bindings for Node.js",
   "private": true,
   "files": [

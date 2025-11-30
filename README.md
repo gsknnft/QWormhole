@@ -1,8 +1,9 @@
 ## @sigilnet/qwormhole 
 
 <p align="center">
-  <img src="https://raw.githubusercontent.com/gsknnft/qwormhole/main/assets/logo.svg" alt="QWormhole Logo" width="180" />
+  <img src="https://raw.githubusercontent.com/gsknnft/qwormhole/main/assets/qw_logo2.png" alt="QWormhole Logo" width="180" />
 </p>
+
 
 ### TypeScript-first TCP transport with native acceleration and framing, reconnect, and codec orchestration.
 
@@ -100,6 +101,8 @@ client.on("message", console.log);
 - [Mode selection](#mode-selection-ts-vs-native-and-backend-selection)
 - [Key options](#key-options)
 - [Install](#install)
+- [Handshake & security](#handshake--security)
+- [Error handling & backpressure](#error-handling--backpressure)
 - [Integration notes](#integration-notes-sigilnetdevice-registrywireguard)
 - [Native backends](#native-backends-libwebsockets--libsocket)
 - [Benchmarks](#benchmarks)
@@ -108,6 +111,7 @@ client.on("message", console.log);
 - [Secure Streams (roadmap)](#secure-streams-roadmap)
 - [Codec extensibility](#codec-helpers)
 - [Tests](#tests)
+- [Known issues / roadmap](#known-issues--roadmap)
 
   
 ## Installation
@@ -373,6 +377,16 @@ Install attempts a native build automatically; if native fails, TS remains avail
 - You can rebuild explicitly anytime: `pnpm --filter @sigilnet/qwormhole run build:native`.
 - Set `QWORMHOLE_NATIVE=0` to skip native (e.g., CI); set `QWORMHOLE_BUILD_LIBSOCKET=0` on POSIX to skip libsocket when you only want LWS.
 
+## Handshake & security
+- Default handshake: `{ type: "handshake", version, tags? }` sent when `protocolVersion` is set.
+- Custom signer: provide `handshakeSigner` to send signed/negantropic handshakes (see `createNegantropicHandshake`).
+- Server verification: use `verifyHandshake` to accept/reject (version/tags/signatures/negHash). On reject the server closes the socket and emits `clientClosed` with `hadError: true`.
+
+## Error handling & backpressure
+- Backpressure protection: server drops connections when `maxBackpressureBytes` is exceeded; emits `backpressure` and `clientClosed`.
+- Rate limiting: per-connection token bucket (bytes/sec + burst) and optional client-side rate limits.
+- Errors bubble via the `error` event; telemetry snapshots are delivered via `onTelemetry` (bytesIn/out, connections, backpressure and drain counts).
+
 ## Integration notes (sigilnet/device-registry/wireguard)
 - Bind to WireGuard with `interfaceName: 'wg0'` (client); server can listen on `0.0.0.0` and rely on handshake tags to identify interface/device.
 - Use `protocolVersion`/`handshakeTags` to pass `deviceId`, `service`, `interface` to sigilnet/device-registry.
@@ -428,6 +442,10 @@ It does **not** encrypt traffic (yet).
 Use WireGuard, SSH tunnels, or TLS termination if required.
 
 Secure Streams will provide encrypted, multiplexed channels.
+
+## Known issues / roadmap
+- Server transport is TS-only; native server bindings (libwebsockets/libsocket) are planned.
+- More telemetry/export hooks and Secure Streams are planned for a later release.
 
 ## 🗺 Roadmap
 
