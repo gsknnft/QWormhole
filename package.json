@@ -2,7 +2,7 @@
   "name": "@sigilnet/qwormhole",
   "version": "0.1.0",
   "description": "A high-performance, extensible TypeScript socket library with native bindings for Node.js",
-  "private": true,
+  "private": false,
   "files": [
     "dist",
     "binding.gyp",
@@ -16,6 +16,17 @@
   "repository": "https://github.com/gsknnft/QWormhole",
   "author": "Gordon Skinner",
   "license": "BSD-3-Clause",
+  "keywords": [
+    "tcp",
+    "transport",
+    "typescript",
+    "native-addon",
+    "libwebsockets",
+    "socket",
+    "networking",
+    "framing",
+    "backpressure"
+  ],
   "scripts": {
     "build:tsup": "tsup",
     "build:vite": "vite build",
