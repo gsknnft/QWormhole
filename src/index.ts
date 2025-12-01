@@ -21,6 +21,8 @@ export {
   verifyNegantropicHandshake,
   type NegantropicHandshake,
 } from "./negantropic-handshake";
+export { createConsoleTelemetryLogger } from "./telemetry-logger";
+export { createHandshakeVerifier } from "./handshake-policy";
 export type {
   Payload,
   QWormholeClientEvents,

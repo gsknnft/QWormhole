@@ -34,6 +34,8 @@ type InternalOptions<TMessage> = Omit<
   rateLimitBytesPerSec?: number;
   rateLimitBurstBytes?: number;
   handshakeSigner?: () => Record<string, unknown>;
+  heartbeatIntervalMs?: number;
+  heartbeatPayload?: Payload;
 };
 
 export class QWormholeClient<TMessage = Buffer> extends TypedEventEmitter<
@@ -53,6 +55,7 @@ export class QWormholeClient<TMessage = Buffer> extends TypedEventEmitter<
   }>();
   private readonly limiter?: TokenBucket;
   private draining = false;
+  private heartbeatTimer?: NodeJS.Timeout;
 
   constructor(options: QWormholeClientOptions<TMessage>) {
     super();
@@ -106,14 +109,15 @@ export class QWormholeClient<TMessage = Buffer> extends TypedEventEmitter<
           settled = true;
           this.clearConnectTimer();
           this.reconnectAttempts = 0;
-          if (this.options.protocolVersion) {
-            this.enqueueHandshake();
-          }
-          this.emit("connect", undefined as never);
-          this.emit("ready", undefined as never);
-          resolve();
-        },
-      );
+      if (this.options.protocolVersion) {
+        this.enqueueHandshake();
+      }
+      this.emit("connect", undefined as never);
+      this.emit("ready", undefined as never);
+      this.startHeartbeat();
+      resolve();
+    },
+  );
 
       this.socket = socket;
 
@@ -164,6 +168,7 @@ export class QWormholeClient<TMessage = Buffer> extends TypedEventEmitter<
   public disconnect(): void {
     this.closedByUser = true;
     this.clearReconnectTimer();
+    this.stopHeartbeat();
     this.socket?.end();
     this.socket?.destroy();
     this.socket = undefined;
@@ -191,6 +196,7 @@ export class QWormholeClient<TMessage = Buffer> extends TypedEventEmitter<
       this.hadSocketError || (handshakePending && !this.closedByUser);
     this.emit("close", { hadError: hadErrorFinal });
     this.hadSocketError = false;
+    this.stopHeartbeat();
     this.socket = undefined;
     if (!this.closedByUser) {
       this.scheduleReconnect();
@@ -251,6 +257,8 @@ export class QWormholeClient<TMessage = Buffer> extends TypedEventEmitter<
       rateLimitBurstBytes:
         options.rateLimitBurstBytes ?? options.rateLimitBytesPerSec,
       handshakeSigner: options.handshakeSigner ?? undefined,
+      heartbeatIntervalMs: options.heartbeatIntervalMs ?? undefined,
+      heartbeatPayload: options.heartbeatPayload ?? undefined,
     };
   }
 
@@ -323,5 +331,23 @@ export class QWormholeClient<TMessage = Buffer> extends TypedEventEmitter<
       tags: this.options.handshakeTags,
     };
     this.enqueueSend(payload, { priority: -100 });
+  }
+
+  private startHeartbeat(): void {
+    if (!this.options.heartbeatIntervalMs) return;
+    this.stopHeartbeat();
+    this.heartbeatTimer = setInterval(() => {
+      if (!this.socket || this.socket.destroyed) return;
+      const payload =
+        this.options.heartbeatPayload ?? { type: "ping", ts: Date.now() };
+      this.enqueueSend(payload, { priority: 100 });
+    }, this.options.heartbeatIntervalMs);
+  }
+
+  private stopHeartbeat(): void {
+    if (this.heartbeatTimer) {
+      clearInterval(this.heartbeatTimer);
+      this.heartbeatTimer = undefined;
+    }
   }
 }

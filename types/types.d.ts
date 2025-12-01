@@ -81,6 +81,14 @@ export interface QWormholeCommonOptions<TMessage = unknown> {
    * instead of the default {type,version,tags} handshake.
    */
   handshakeSigner?: () => Record<string, unknown>;
+  /**
+   * Optional heartbeat interval (ms). When set, the client sends a small ping payload periodically.
+   */
+  heartbeatIntervalMs?: number;
+  /**
+   * Override heartbeat payload (default: {type:"ping", ts:Date.now()}).
+   */
+  heartbeatPayload?: Payload;
   framing?: FramingMode;
   maxFrameLength?: number;
   /**

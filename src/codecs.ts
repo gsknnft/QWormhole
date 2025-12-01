@@ -18,7 +18,12 @@ export const bigint2Str = (_key: string, value: unknown): unknown => {
 
 export const jsonDeserializer: Deserializer<unknown> = data => {
   const text = data.toString("utf8");
-  return JSON.parse(text);
+  try {
+    return JSON.parse(text);
+  } catch (err) {
+    // Optionally emit/log error here
+    return null; // or throw a custom error if needed
+  }
 };
 
 export const jsonSerializer: Serializer = payload => {

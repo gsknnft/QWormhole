@@ -74,8 +74,14 @@ describe("QWormholeServer handshake rejection", () => {
     const hs = { type: "handshake", version: "1.0.0" };
     socket.write(framer.encode(Buffer.from(JSON.stringify(hs))));
 
-    const hadError = await closed;
-    const err = await errorSeen;
+    const hadError = await Promise.race([
+      closed,
+      new Promise<boolean>(resolve => setTimeout(() => resolve(false), 800)),
+    ]);
+    const err = await Promise.race([
+      errorSeen,
+      new Promise<boolean>(resolve => setTimeout(() => resolve(false), 800)),
+    ]);
     expect(hadError).toBe(true);
     expect(err).toBe(true);
     expect(server.getConnectionCount()).toBe(0);
@@ -104,8 +110,14 @@ describe("QWormholeServer handshake rejection", () => {
     const socket = net.createConnection(address.port, address.address);
     socket.write(framer.encode(Buffer.from("{not-json")));
 
-    const hadError = await closed;
-    const err = await errorSeen;
+    const hadError = await Promise.race([
+      closed,
+      new Promise<boolean>(resolve => setTimeout(() => resolve(false), 800)),
+    ]);
+    const err = await Promise.race([
+      errorSeen,
+      new Promise<boolean>(resolve => setTimeout(() => resolve(false), 800)),
+    ]);
     expect(hadError).toBe(true);
     expect(err).toBe(true);
     expect(server.getConnectionCount()).toBe(0);
