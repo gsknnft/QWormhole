@@ -1,4 +1,4 @@
-import type { QWormholeTelemetry } from "types";
+import type { QWormholeTelemetry } from "src/types/types";
 
 /**
  * Simple console telemetry logger; pass to onTelemetry to trace backpressure and bytes.

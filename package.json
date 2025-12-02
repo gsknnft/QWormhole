@@ -99,6 +99,8 @@
     "@rollup/rollup-linux-x64-gnu": "4.53.3"
   },
   "dependencies": {
+    "tweetnacl": "^1.0.3",
+    "tweetnacl-util": "^0.15.1",
     "bindings": "^1.5.0",
     "cbor": "^9.0.1",
     "ws": "^8.18.3"

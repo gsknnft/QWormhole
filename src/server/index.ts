@@ -1,15 +1,18 @@
 import net from "node:net";
 import { randomUUID } from "node:crypto";
-import { LengthPrefixedFramer } from "./framing";
-import { TypedEventEmitter } from "./typedEmitter";
-import { bufferDeserializer, defaultSerializer } from "./codecs";
-import { QWormholeError } from "./errors";
-import { TokenBucket, PriorityQueue, delay } from "./qos";
+import { LengthPrefixedFramer } from "../framing";
+import { TypedEventEmitter } from "../typedEmitter";
+import { bufferDeserializer, defaultSerializer } from "../codecs";
+import { QWormholeError } from "../errors";
+import { TokenBucket, PriorityQueue, delay } from "../qos";
 import {
   isNegantropicHandshake,
   verifyNegantropicHandshake,
-} from "./negantropic-handshake";
-import { isHandshakePayload, type HandshakePayload } from "./handshake-policy";
+} from "../handshake/negantropic-handshake";
+import {
+  isHandshakePayload,
+  type HandshakePayload,
+} from "../handshake/handshake-policy";
 import type {
   Payload,
   QWormholeServerConnection,
@@ -19,7 +22,7 @@ import type {
   Deserializer,
   QWormholeTelemetry,
   SendOptions,
-} from "types";
+} from "src/types/types";
 
 const randomId = () =>
   typeof randomUUID === "function"

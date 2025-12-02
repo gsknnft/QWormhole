@@ -1,10 +1,10 @@
 import net from "node:net";
-import { LengthPrefixedFramer } from "./framing";
-import { defaultSerializer, bufferDeserializer } from "./codecs";
-import { TypedEventEmitter } from "./typedEmitter";
-import { resolveInterfaceAddress } from "./netUtils";
-import { QWormholeError } from "./errors";
-import { TokenBucket, PriorityQueue, delay } from "./qos";
+import { LengthPrefixedFramer } from "../framing";
+import { defaultSerializer, bufferDeserializer } from "../codecs";
+import { TypedEventEmitter } from "../typedEmitter";
+import { resolveInterfaceAddress } from "../utils/netUtils";
+import { QWormholeError } from "../errors";
+import { TokenBucket, PriorityQueue, delay } from "../qos";
 import type {
   QWormholeClientEvents,
   QWormholeClientOptions,
@@ -13,7 +13,7 @@ import type {
   Deserializer,
   Serializer,
   SendOptions,
-} from "types";
+} from "src/types/types";
 
 const DEFAULT_RECONNECT: QWormholeReconnectOptions = {
   enabled: true,
@@ -109,15 +109,15 @@ export class QWormholeClient<TMessage = Buffer> extends TypedEventEmitter<
           settled = true;
           this.clearConnectTimer();
           this.reconnectAttempts = 0;
-      if (this.options.protocolVersion) {
-        this.enqueueHandshake();
-      }
-      this.emit("connect", undefined as never);
-      this.emit("ready", undefined as never);
-      this.startHeartbeat();
-      resolve();
-    },
-  );
+          if (this.options.protocolVersion) {
+            this.enqueueHandshake();
+          }
+          this.emit("connect", undefined as never);
+          this.emit("ready", undefined as never);
+          this.startHeartbeat();
+          resolve();
+        },
+      );
 
       this.socket = socket;
 
@@ -338,8 +338,10 @@ export class QWormholeClient<TMessage = Buffer> extends TypedEventEmitter<
     this.stopHeartbeat();
     this.heartbeatTimer = setInterval(() => {
       if (!this.socket || this.socket.destroyed) return;
-      const payload =
-        this.options.heartbeatPayload ?? { type: "ping", ts: Date.now() };
+      const payload = this.options.heartbeatPayload ?? {
+        type: "ping",
+        ts: Date.now(),
+      };
       this.enqueueSend(payload, { priority: 100 });
     }, this.options.heartbeatIntervalMs);
   }

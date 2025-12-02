@@ -170,14 +170,24 @@ describe("QWormholeServer handshake rejection", () => {
 
   it("handles verifyHandshake async rejection path", async () => {
     const telemetry: any[] = [];
+    interface ServerOptions<T> {
+      host: string;
+      port: number;
+      framing: "length-prefixed";
+      protocolVersion: string;
+      deserializer: (data: Buffer) => T;
+      verifyHandshake: () => Promise<never>;
+      onTelemetry: (snapshot: Record<string, unknown>) => void;
+    }
+
     const server = new QWormholeServer<any>({
       host: "127.0.0.1",
       port: 0,
       framing: "length-prefixed",
       protocolVersion: "1.0.0",
       deserializer: jsonDeserializer,
-      verifyHandshake: () => Promise.reject(new Error("nope")),
-      onTelemetry: snapshot => telemetry.push({ ...snapshot }),
+      verifyHandshake: (): Promise<never> => Promise.reject(new Error("nope")),
+      onTelemetry: (snapshot: Record<string, unknown>) => telemetry.push({ ...snapshot }),
     });
 
     const connectionReady = new Promise<void>(resolve => {
@@ -211,10 +221,23 @@ describe("QWormholeServer handshake rejection", () => {
 
   it("publishes telemetry for backpressure and drain", async () => {
     const telemetry: any[] = [];
+    interface TelemetrySnapshot {
+      connections?: number;
+      backpressureEvents?: number;
+      drainEvents?: number;
+      [key: string]: unknown;
+    }
+
+    interface ServerOptions<T> {
+      host: string;
+      port: number;
+      onTelemetry: (snapshot: TelemetrySnapshot) => void;
+    }
+
     const server = new QWormholeServer<Buffer>({
       host: "127.0.0.1",
       port: 0,
-      onTelemetry: snapshot => telemetry.push({ ...snapshot }),
+      onTelemetry: (snapshot: TelemetrySnapshot) => telemetry.push({ ...snapshot }),
     });
     const connectionReady = new Promise<any>(resolve => {
       server.once("connection", client => resolve(client));

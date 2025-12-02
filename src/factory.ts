@@ -7,10 +7,11 @@ import type {
   QWormholeServerOptions,
   NativeBackend,
   TransportMode,
-} from "types";
+} from "src/types/types";
 
-export interface CreateClientOptions<TMessage>
-  extends QWormholeClientOptions<TMessage> {
+export interface CreateClientOptions<
+  TMessage,
+> extends QWormholeClientOptions<TMessage> {
   preferNative?: boolean;
   forceTs?: boolean;
 }

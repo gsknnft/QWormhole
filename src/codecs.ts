@@ -1,5 +1,5 @@
 import cbor from "cbor";
-import type { Deserializer, Serializer } from "types";
+import type { Deserializer, Serializer } from "src/types/types";
 
 export const defaultSerializer: Serializer = payload => {
   if (Buffer.isBuffer(payload)) return payload;

@@ -1,6 +1,6 @@
 import { describe, expect, it, vi, afterEach } from "vitest";
 import { EventEmitter } from "node:events";
-import { QWormholeClient } from "../src/client.js";
+import { QWormholeClient } from "../src/client/index.js";
 
 afterEach(() => {
   vi.useRealTimers();

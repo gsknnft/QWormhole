@@ -6,7 +6,10 @@ import {
   isNativeAvailable,
 } from "../src/index.js";
 import { jsonDeserializer, textDeserializer } from "../src/codecs.js";
-import type { QWormholeClientOptions, QWormholeServerConnection } from "../types/types.js";
+import type {
+  QWormholeClientOptions,
+  QWormholeServerConnection,
+} from "../src/types/types.js";
 import net from "node:net";
 import { CreateClientOptions } from "../src/factory.js";
 

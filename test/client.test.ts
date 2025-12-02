@@ -1,9 +1,9 @@
 //TODO: Full coverage of client tests
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
-import { QWormholeClient } from "../src/client.js";
+import { QWormholeClient } from "../src/client/index.js";
 import { jsonDeserializer, textDeserializer } from "../src/codecs.js";
 import net from "node:net";
-import { QWormholeServer } from "../src/server.js";
+import { QWormholeServer } from "../src/server/index.js";
 import { QWormholeClientOptions } from "../src/index.js";
 
 const host = "127.0.0.1";
@@ -197,11 +197,11 @@ describe("QWormholeClient", () => {
       keepAliveDelayMs: 1000,
       idleTimeoutMs: 1000,
       reconnect: {
-      enabled: false,
-      initialDelayMs: 1,
-      maxDelayMs: 1,
-      multiplier: 1,
-      maxAttempts: 1,
+        enabled: false,
+        initialDelayMs: 1,
+        maxDelayMs: 1,
+        multiplier: 1,
+        maxAttempts: 1,
       } as ReconnectOptions,
       serializer: (x: string): Buffer => Buffer.from("test"),
       deserializer: (x: Buffer): string => x.toString(),

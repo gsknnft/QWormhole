@@ -1,5 +1,5 @@
 import bindings from "bindings";
-import type { NativeBackend, NativeSocketOptions } from "types";
+import type { NativeBackend, NativeSocketOptions } from "src/types/types";
 
 const DEBUG_NATIVE = process.env.QWORMHOLE_DEBUG_NATIVE === "1";
 const logNative = (msg: string) => {

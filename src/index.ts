@@ -1,5 +1,9 @@
+export * from "./client";
+export * from "./server";
+export * from "./codecs.js";
+export * from "./types/types.js";
 export { QWormholeClient } from "./client";
-export { QWormholeServer } from "./server";
+export { QWormholeServer } from "./server/index.js";
 export { LengthPrefixedFramer } from "./framing";
 export {
   defaultSerializer,
@@ -20,9 +24,9 @@ export {
   createNegantropicHandshake,
   verifyNegantropicHandshake,
   type NegantropicHandshake,
-} from "./negantropic-handshake";
+} from "./handshake/negantropic-handshake";
 export { createConsoleTelemetryLogger } from "./telemetry-logger";
-export { createHandshakeVerifier } from "./handshake-policy";
+export { createHandshakeVerifier } from "./handshake/handshake-policy";
 export type {
   Payload,
   QWormholeClientEvents,
@@ -39,4 +43,4 @@ export type {
   NativeSocketOptions,
   QWormholeTelemetry,
   SendOptions,
-} from "types";
+} from "src/types/types";
