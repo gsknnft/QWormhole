@@ -8,6 +8,20 @@ import { QWormholeClientOptions } from "../src/index.js";
 
 const host = "127.0.0.1";
 
+const suppressClientErrors = (
+  client: QWormholeClient<unknown>,
+  codes: string[] = ["ECONNRESET", "EPIPE"],
+) => {
+  const handler = (err: NodeJS.ErrnoException) => {
+    if (err && typeof err.code === "string" && codes.includes(err.code)) {
+      return;
+    }
+    throw err;
+  };
+  client.on("error", handler);
+  return () => client.off("error", handler);
+};
+
 describe("QWormholeClient", () => {
   let server: QWormholeServer;
   let port: number;
@@ -72,10 +86,9 @@ describe("QWormholeClient", () => {
       connectTimeoutMs: 100,
       reconnect: { enabled: false },
     });
-    client.on("error", () => {
-      // Ignore expected DNS errors in this test to avoid cross-platform uncaught exceptions
-    });
+    const restore = suppressClientErrors(client);
     await expect(client.connect()).rejects.toThrow();
+    restore();
     client.disconnect();
   });
 
@@ -154,17 +167,13 @@ describe("QWormholeClient", () => {
       },
     });
     await client.connect();
-    const ignoreReset = (err: NodeJS.ErrnoException) => {
-      if (err?.code === "ECONNRESET" || err?.code === "EPIPE") return;
-      throw err;
-    };
-    client.on("error", ignoreReset);
+    const restore = suppressClientErrors(client);
     const reconnecting = new Promise(resolve =>
       client.once("reconnecting", resolve),
     );
     client.socket?.emit("close", true);
     await reconnecting;
-    client.off("error", ignoreReset);
+    restore();
     client.disconnect();
   });
 
@@ -248,7 +257,9 @@ describe("QWormholeClient", () => {
       rateLimitBurstBytes: 1,
     });
     await client.connect();
+    const restore = suppressClientErrors(client);
     await client.send("test");
+    restore();
     client.disconnect();
   });
 
