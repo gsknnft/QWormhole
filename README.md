@@ -398,11 +398,11 @@ Install attempts a native build automatically; if native fails, TS remains avail
 - Rate limiting: per-connection token bucket (bytes/sec + burst) and optional client-side rate limits.
 - Errors bubble via the `error` event; telemetry snapshots are delivered via `onTelemetry` (bytesIn/out, connections, backpressure and drain counts).
 
-## Integration notes (sigilnet/device-registry/wireguard)
-- Bind to WireGuard with `interfaceName: 'wg0'` (client); server can listen on `0.0.0.0` and rely on handshake tags to identify interface/device.
-- Use `protocolVersion`/`handshakeTags` to pass `deviceId`, `service`, `interface` to sigilnet/device-registry.
-- Prefer libwebsockets native on Windows; libsocket native is Linux/WSL. TS always works everywhere as a fallback.
-- QWormhole is transport-agnostic for your signal/FFT/wavelet stack (Qwave/wasmlets/fft-ts/qtransform). Drop serialized frames over QWormhole; choose codecs that fit your payloads (JSON/CBOR/FlatBuffers).
+## ML adapters (optional)
+- Default: lightweight `qworm_torch` adapter computes coherence/entropy/anomaly scores from numeric metrics (no external services).
+- RPC: `QWORMHOLE_ML_ADAPTER=rpc` with `QWORMHOLE_ML_RPC_URL=https://...` posts metrics to your endpoint.
+- Spawn: `QWORMHOLE_ML_ADAPTER=spawn` with `QWORMHOLE_ML_SPAWN_CMD="python -m your_module"` streams metrics to any CLI.
+- Programmatic: `setMLAdapter(createQwormTorchAdapter())` or swap in your own `MLAdapter`.
 
 ## Native backends (libwebsockets + libsocket)
 

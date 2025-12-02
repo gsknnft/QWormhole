@@ -1,5 +1,5 @@
 export * from './netUtils'
 export * from './randomId'
-export * from './queryML'
+export * from './mlAdapter'
 export * from './crypto'
 export * from './seal'

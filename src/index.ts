@@ -44,3 +44,17 @@ export type {
   QWormholeTelemetry,
   SendOptions,
 } from "src/types/types";
+export {
+  queryMLLayer,
+  setMLAdapter,
+  createQwormTorchAdapter,
+  createRpcAdapter,
+  createSpawnAdapter,
+  createNoopAdapter,
+  type MLAdapter,
+  type JsonValue,
+  type MLAdapterName,
+  type RpcAdapterOptions,
+  type SpawnAdapterOptions,
+  type QwormTorchAdapterOptions,
+} from "./utils/mlAdapter";
