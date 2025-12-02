@@ -9,12 +9,12 @@ afterEach(() => {
 describe("QWormholeClient QoS", () => {
   it("respects rate limits and backpressure when draining queue", async () => {
     vi.useFakeTimers();
+    // Use in-memory config only, no host/port
     const client = new QWormholeClient<Buffer>({
-      host: "127.0.0.1",
-      port: 0,
       framing: "none",
       rateLimitBytesPerSec: 1, // force wait
-    });
+      reconnect: { enabled: false },
+    } as any);
 
     const socket = new EventEmitter() as any;
     socket.destroyed = false;
@@ -32,5 +32,26 @@ describe("QWormholeClient QoS", () => {
 
     expect(socket.write).toHaveBeenCalled();
     expect((client as any).draining).toBe(false);
+  });
+
+  it("emits close with hadError when socket errors during reconnect", async () => {
+    // Use in-memory client config, no real host/port
+    const client = new QWormholeClient<Buffer>({
+      reconnect: { enabled: false },
+    } as any);
+    const socket = new EventEmitter() as any;
+    socket.destroyed = false;
+    socket.write = vi.fn(() => true);
+    (client as any).socket = socket;
+
+    const closed = new Promise<boolean>(resolve => {
+      client.on("close", ({ hadError }) => resolve(hadError));
+    });
+
+    // Simulate error while handshake pending to set hadSocketError
+    (client as any).hadSocketError = true;
+    (client as any).handleClose(true);
+    const hadError = await closed;
+    expect(hadError).toBe(true);
   });
 });

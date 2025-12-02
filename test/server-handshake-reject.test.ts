@@ -1,4 +1,4 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi } from "vitest";
 import net from "node:net";
 import {
   QWormholeServer,
@@ -167,4 +167,93 @@ describe("QWormholeServer handshake rejection", () => {
       await server.close();
     },
   );
+
+  it("handles verifyHandshake async rejection path", async () => {
+    const telemetry: any[] = [];
+    const server = new QWormholeServer<any>({
+      host: "127.0.0.1",
+      port: 0,
+      framing: "length-prefixed",
+      protocolVersion: "1.0.0",
+      deserializer: jsonDeserializer,
+      verifyHandshake: () => Promise.reject(new Error("nope")),
+      onTelemetry: snapshot => telemetry.push({ ...snapshot }),
+    });
+
+    const connectionReady = new Promise<void>(resolve => {
+      server.once("connection", () => resolve());
+    });
+    const closed = new Promise<boolean>(resolve => {
+      server.once("clientClosed", ({ hadError }) => resolve(hadError));
+    });
+
+    const address = await server.listen();
+    const framer = new LengthPrefixedFramer();
+    const socket = net.createConnection(address.port, address.address);
+
+    await connectionReady;
+    socket.write(
+      framer.encode(Buffer.from(JSON.stringify({ type: "handshake", version: "1.0.0" }))),
+    );
+
+    const hadError = await Promise.race([
+      closed,
+      new Promise<boolean>(resolve => setTimeout(() => resolve(false), 1000)),
+    ]);
+
+    expect(hadError).toBe(true);
+    expect(server.getConnectionCount()).toBe(0);
+    expect(telemetry.some(t => t.connections === 0)).toBe(true);
+
+    socket.destroy();
+    await server.close();
+  });
+
+  it("publishes telemetry for backpressure and drain", async () => {
+    const telemetry: any[] = [];
+    const server = new QWormholeServer<Buffer>({
+      host: "127.0.0.1",
+      port: 0,
+      onTelemetry: snapshot => telemetry.push({ ...snapshot }),
+    });
+    const connectionReady = new Promise<any>(resolve => {
+      server.once("connection", client => resolve(client));
+    });
+    const backpressured = new Promise<string>(resolve => {
+      server.once("backpressure", ({ client }) => resolve(client.id));
+    });
+    const drained = new Promise<string>(resolve => {
+      server.once("drain", ({ client }) => resolve(client.id));
+    });
+
+    const address = await server.listen();
+    const socket = net.createConnection(address.port, address.address);
+    const connection = await connectionReady;
+
+    const writeSpy = vi
+      .spyOn(connection.socket, "write")
+      .mockImplementation(() => {
+        setTimeout(() => connection.socket.emit("drain"), 5);
+        return false;
+      });
+
+    await connection.send(Buffer.from("hello"));
+    const bpId = await Promise.race([
+      backpressured,
+      new Promise<string>(resolve => setTimeout(() => resolve(""), 500)),
+    ]);
+    const drainId = await Promise.race([
+      drained,
+      new Promise<string>(resolve => setTimeout(() => resolve(""), 500)),
+    ]);
+
+    expect(bpId).toBe(connection.id);
+    expect(drainId).toBe(connection.id);
+    expect(telemetry.some(t => t.backpressureEvents > 0)).toBe(true);
+    expect(telemetry.some(t => t.drainEvents > 0)).toBe(true);
+
+    writeSpy.mockRestore();
+    socket.destroy();
+    await server.close();
+  });
 });
