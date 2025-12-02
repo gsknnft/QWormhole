@@ -154,11 +154,17 @@ describe("QWormholeClient", () => {
       },
     });
     await client.connect();
+    const ignoreReset = (err: NodeJS.ErrnoException) => {
+      if (err?.code === "ECONNRESET" || err?.code === "EPIPE") return;
+      throw err;
+    };
+    client.on("error", ignoreReset);
     const reconnecting = new Promise(resolve =>
       client.once("reconnecting", resolve),
     );
     client.socket?.emit("close", true);
     await reconnecting;
+    client.off("error", ignoreReset);
     client.disconnect();
   });
 
