@@ -9,8 +9,8 @@
     "c"
   ],
   "engines": {
-    "node": ">=20.0.0",
-    "pnpm": ">=10.0.0"
+    "node": ">=24.9.0",
+    "pnpm": ">=10.23.0"
   },
   "packageManager": "pnpm@10.23.0",
   "repository": "https://github.com/gsknnft/QWormhole",
@@ -30,7 +30,8 @@
   "scripts": {
     "build:tsup": "tsup",
     "build:vite": "vite build",
-    "rebuild": "node-gyp rebuild && node -e \"const fs=require('fs');const path=require('path');fs.mkdirSync(path.join(__dirname,'dist','native'),{recursive:true});for (const name of ['qwormhole.node','qwormhole_lws.node']){const src=path.join(__dirname,'build','Release',name);const dst=path.join(__dirname,'dist','native',name);if(fs.existsSync(src)){fs.copyFileSync(src,dst);console.log('[qwormhole] copied',src,'->',dst);}}\" && pnpm run install",
+    "build:native": "node -e \"const fs=require('fs');const path=require('path');fs.mkdirSync(path.join(__dirname,'dist','native'),{recursive:true});for (const name of ['qwormhole.node','qwormhole_lws.node']){const src=path.join(__dirname,'build','Release',name);const dst=path.join(__dirname,'dist','native',name);if(fs.existsSync(src)){fs.copyFileSync(src,dst);console.log('[qwormhole] copied',src,'->',dst);}}\"  && pnpm run install",
+    "rebuild": "node-gyp rebuild && pnpm run build:native",
     "build:tsc": "tsc --p tsconfig.json",
     "build:rollup": "rollup -c rollup.config.js",
     "build": "vite build && pnpm run build:tsc && pnpm run build:decl && pnpm run build:rollup",
