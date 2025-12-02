@@ -60,6 +60,17 @@ if (needsTmpFix) {
   console.log("[qwormhole] Using TMPDIR=/tmp to avoid cross-mount temp permission issues.");
 }
 
+const ensureLibsocketConf = () => {
+  const src = path.join(process.cwd(), "libsocket", "headers", "conf.h");
+  const dstDir = path.join(process.cwd(), "libsocket", "C", "inet");
+  const dst = path.join(dstDir, "conf.h");
+  if (!fs.existsSync(src)) return;
+  if (!fs.existsSync(dstDir)) fs.mkdirSync(dstDir, { recursive: true });
+  fs.copyFileSync(src, dst);
+};
+
+ensureLibsocketConf();
+
 const result = spawnSync(nodeGypCmd, ["rebuild"], {
   stdio: "inherit",
   env,
