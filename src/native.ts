@@ -4,7 +4,6 @@ import type { NativeBackend, NativeSocketOptions } from "types";
 const DEBUG_NATIVE = process.env.QWORMHOLE_DEBUG_NATIVE === "1";
 const logNative = (msg: string) => {
   if (DEBUG_NATIVE) {
-    // eslint-disable-next-line no-console
     console.log(`[qwormhole][native] ${msg}`);
   }
 };

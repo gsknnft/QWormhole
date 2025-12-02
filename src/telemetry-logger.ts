@@ -13,7 +13,6 @@ export const createConsoleTelemetryLogger = (prefix = "QWormhole") => {
       `bp=${metrics.backpressureEvents}`,
       `drain=${metrics.drainEvents}`,
     ].join(" ");
-    // eslint-disable-next-line no-console
     console.log(msg);
   };
 };

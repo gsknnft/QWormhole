@@ -9,6 +9,7 @@ import {
   isNegantropicHandshake,
   verifyNegantropicHandshake,
 } from "./negantropic-handshake";
+import { isHandshakePayload, type HandshakePayload } from "./handshake-policy";
 import type {
   Payload,
   QWormholeServerConnection,
@@ -396,8 +397,9 @@ export class QWormholeServer<TMessage = Buffer> extends TypedEventEmitter<
   ): boolean {
     let verified = false;
     try {
-      const parsed = JSON.parse(data.toString("utf8"));
-      if (!parsed || parsed.type !== "handshake") return false;
+      const parsedPayload = JSON.parse(data.toString("utf8"));
+      if (!isHandshakePayload(parsedPayload)) return false;
+      const parsed: HandshakePayload = parsedPayload;
       if (
         this.options.protocolVersion &&
         parsed.version &&
@@ -500,7 +502,7 @@ export class QWormholeServer<TMessage = Buffer> extends TypedEventEmitter<
 
   private attachHandshake(
     connection: ManagedConnection,
-    parsed: Record<string, any>,
+    parsed: HandshakePayload,
   ): void {
     connection.handshake = {
       version: parsed.version,

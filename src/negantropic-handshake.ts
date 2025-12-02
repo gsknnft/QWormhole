@@ -44,7 +44,9 @@ function calculateEntropy(bytes: Uint8Array): number {
 function computeNIndex(pubKeyB64: string): number {
   const bytes = toBytes(pubKeyB64);
   const entropy = Math.max(calculateEntropy(bytes), 1e-6);
-  const coherence = bytes.length ? bytes[0] / (bytes.reduce((a, b) => a + b, 0) || 1) : 0;
+  const coherence = bytes.length
+    ? bytes[0] / (bytes.reduce((a, b) => a + b, 0) || 1)
+    : 0;
   const nIndex = coherence / entropy;
   return Number.isFinite(nIndex) ? nIndex : 0;
 }
@@ -52,9 +54,7 @@ function computeNIndex(pubKeyB64: string): number {
 function deriveNegentropicHash(publicKey: string, nIndex: number): string {
   const data = toBytes(publicKey);
   const weight = Math.min(Math.max(nIndex, 0), 1);
-  const salted = Buffer.from(
-    data.map(b => b ^ Math.floor(weight * 255)),
-  );
+  const salted = Buffer.from(data.map(b => b ^ Math.floor(weight * 255)));
   return createHash("sha256")
     .update(data)
     .update(salted)
@@ -93,8 +93,12 @@ export function createNegantropicHandshake(
     (() => {
       const { publicKey, privateKey } = generateKeyPairSync("ed25519");
       return {
-        publicKey: publicKey.export({ format: "der", type: "spki" }).toString("base64"),
-        secretKey: privateKey.export({ format: "der", type: "pkcs8" }).toString("base64"),
+        publicKey: publicKey
+          .export({ format: "der", type: "spki" })
+          .toString("base64"),
+        secretKey: privateKey
+          .export({ format: "der", type: "pkcs8" })
+          .toString("base64"),
       };
     })();
 
@@ -131,11 +135,11 @@ export function createNegantropicHandshake(
 /**
  * Verify a negantropic handshake (signature and hash consistency).
  */
-export function verifyNegantropicHandshake(hs: any): boolean {
-  if (!hs || hs.type !== "handshake" || !hs.publicKey || !hs.signature) {
+export function verifyNegantropicHandshake(hs: unknown): boolean {
+  if (!isNegantropicHandshake(hs)) {
     return false;
   }
-  const { signature, ...unsigned } = hs as NegantropicHandshake;
+  const { signature, ...unsigned } = hs;
   const nIndex = computeNIndex(unsigned.publicKey);
   const expectedHash = deriveNegentropicHash(unsigned.publicKey, nIndex);
   if (unsigned.negHash !== expectedHash) return false;
@@ -151,13 +155,16 @@ export function verifyNegantropicHandshake(hs: any): boolean {
   );
 }
 
-export function isNegantropicHandshake(payload: any): payload is NegantropicHandshake {
+export function isNegantropicHandshake(
+  payload: unknown,
+): payload is NegantropicHandshake {
+  if (!payload || typeof payload !== "object") return false;
+  const candidate = payload as Partial<NegantropicHandshake>;
   return (
-    payload &&
-    payload.type === "handshake" &&
-    typeof payload.publicKey === "string" &&
-    typeof payload.negHash === "string" &&
-    typeof payload.nIndex === "number" &&
-    typeof payload.signature === "string"
+    candidate.type === "handshake" &&
+    typeof candidate.publicKey === "string" &&
+    typeof candidate.negHash === "string" &&
+    typeof candidate.nIndex === "number" &&
+    typeof candidate.signature === "string"
   );
 }
