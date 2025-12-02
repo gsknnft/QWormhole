@@ -70,8 +70,13 @@ describe("QWormholeClient", () => {
       port,
       deserializer: textDeserializer,
       connectTimeoutMs: 100,
+      reconnect: { enabled: false },
+    });
+    client.on("error", () => {
+      // Ignore expected DNS errors in this test to avoid cross-platform uncaught exceptions
     });
     await expect(client.connect()).rejects.toThrow();
+    client.disconnect();
   });
 
   it("should emit error on send when not connected", async () => {
