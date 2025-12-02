@@ -9,3 +9,4 @@
 - Protocol handshake (version + tags) with optional negentropic signer
 - Full test suite (TS + native smoke)
 - Multi-platform support (Windows/macOS/Linux/WSL)
+ch
