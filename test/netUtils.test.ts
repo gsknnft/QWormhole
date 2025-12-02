@@ -1,6 +1,6 @@
 import { describe, expect, it, vi, afterEach } from "vitest";
 import os from "node:os";
-import { resolveInterfaceAddress } from "../src/netUtils.js";
+import { resolveInterfaceAddress } from "../src/utils/netUtils.js";
 
 afterEach(() => {
   vi.restoreAllMocks();

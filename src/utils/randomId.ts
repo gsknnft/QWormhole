@@ -1,23 +1,108 @@
-import { calculateEntropy } from "@sigilnet/qsecure";
 import {
   FieldCoherentRNG,
   hashNegentropic,
   NegentropicHashInput,
 } from "../handshake/negentropic-hash";
 import { SessionKeyPair } from "../session";
-import { computeFFT } from "@sigilnet/fft-ts";
-// import { Peer } from "../types/sigilnet.types";
 
-// Example: hkdf over shared secret with protocol-tagged salt
-// const info = new TextEncoder().encode("SigilNet/v1:session");
-// const salt = new TextEncoder().encode(`${N}:${ts}`);
-// const key = hkdf(sha256, shared, salt, info, 32);
 export type Base64String = string & { __brand: "base64" };
+
+type ComplexPoint = { real: number; imag: number };
+
+type BufferLike = {
+  from(input: string, encoding: string): ArrayLike<number>;
+};
+
+function decodeBase64(value: string): Uint8Array {
+  const bufferCtor = (globalThis as { Buffer?: BufferLike }).Buffer;
+  if (bufferCtor && typeof bufferCtor.from === "function") {
+    return Uint8Array.from(bufferCtor.from(value, "base64"));
+  }
+
+  const atobFn = (globalThis as { atob?: (input: string) => string }).atob;
+  if (atobFn) {
+    const binary = atobFn(value);
+    const out = new Uint8Array(binary.length);
+    for (let i = 0; i < binary.length; i += 1) {
+      out[i] = binary.charCodeAt(i);
+    }
+    return out;
+  }
+
+  return decodeBase64Polyfill(value);
+}
+
+const BASE64_TABLE =
+  "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+
+function decodeBase64Polyfill(input: string): Uint8Array {
+  const sanitized = input.replace(/[^A-Za-z0-9+/=]/g, "");
+  const output: number[] = [];
+
+  for (let i = 0; i < sanitized.length; i += 4) {
+    const chunk = sanitized.slice(i, i + 4);
+    const indices = chunk.split("").map((char, idx) => {
+      if (char === "=") return 0;
+      const value = BASE64_TABLE.indexOf(char);
+      if (value === -1) {
+        throw new Error(`Invalid base64 character at position ${i + idx}`);
+      }
+      return value;
+    });
+
+    const bits =
+      (indices[0]! << 18) |
+      (indices[1]! << 12) |
+      (indices[2]! << 6) |
+      indices[3]!;
+
+    output.push((bits >> 16) & 0xff);
+    if (chunk[2] !== "=") output.push((bits >> 8) & 0xff);
+    if (chunk[3] !== "=") output.push(bits & 0xff);
+    if (chunk[3] === "=") break;
+  }
+
+  return Uint8Array.from(output);
+}
+
+function calculateEntropy(bytes: Uint8Array): number {
+  if (!bytes.length) return 0;
+  const counts = new Array(256).fill(0) as number[];
+  bytes.forEach(value => {
+    counts[value] += 1;
+  });
+  let entropy = 0;
+  const len = bytes.length;
+  for (const count of counts) {
+    if (!count) continue;
+    const probability = count / len;
+    entropy -= probability * Math.log2(probability);
+  }
+  return entropy;
+}
+
+function computeFFT(samples: Float64Array): ComplexPoint[] {
+  const n = samples.length;
+  if (!n) return [];
+  const output: ComplexPoint[] = new Array(n);
+  for (let k = 0; k < n; k += 1) {
+    let real = 0;
+    let imag = 0;
+    for (let t = 0; t < n; t += 1) {
+      const angle = (-2 * Math.PI * k * t) / n;
+      const value = samples[t]!;
+      real += value * Math.cos(angle);
+      imag += value * Math.sin(angle);
+    }
+    output[k] = { real, imag };
+  }
+  return output;
+}
 
 function toBytes(pub: string | Uint8Array): Uint8Array {
   if (typeof pub === "string") {
     // base64 vs hex — make the contract explicit
-    return Uint8Array.from(Buffer.from(pub, "base64"));
+    return decodeBase64(pub);
   }
   return pub;
 }
@@ -30,7 +115,7 @@ function center(samples: number[]): Float64Array {
 export function computeNegentropicIndex(samples: number[]): number {
   if (!samples.length) return 0;
   const fft = computeFFT(center(samples));
-  const magnitudes = fft.map(c => Math.hypot(c.real, c.imag));
+  const magnitudes = fft.map(({ real, imag }) => Math.hypot(real, imag));
   const sum = magnitudes.reduce((a, b) => a + (isFinite(b) ? b : 0), 0);
   const coherence = sum ? magnitudes[0] / sum : 0;
   const entropy = Math.max(calculateEntropy(Uint8Array.from(samples)), 1e-6);

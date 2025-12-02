@@ -320,6 +320,7 @@ export class QWormholeServer<TMessage = Buffer> extends TypedEventEmitter<
           connection.backpressured = false;
           this.emit("drain", { client: connection });
           this.telemetry.drainEvents += 1;
+          this.publishTelemetry();
         }
         continue;
       }
@@ -340,6 +341,7 @@ export class QWormholeServer<TMessage = Buffer> extends TypedEventEmitter<
           connection.backpressured = false;
           this.emit("drain", { client: connection });
           this.telemetry.drainEvents += 1;
+          this.publishTelemetry();
           resolve();
         };
         const onError = (err: Error) => {

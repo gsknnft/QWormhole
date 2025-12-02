@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { createHandshakeVerifier } from "../src/handshake-policy.js";
+import { createHandshakeVerifier } from "../src/handshake/handshake-policy.js";
 
 describe("handshake policy verifier", () => {
   it("rejects non-handshake payloads and bad versions", () => {

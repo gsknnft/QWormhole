@@ -39,7 +39,7 @@ describe("mlAdapter", () => {
         if (event === "close") cb();
       }),
     };
-    (spawn as unknown as vi.Mock).mockReturnValue(mockProc);
+    (spawn as ReturnType<typeof vi.fn>).mockReturnValue(mockProc);
 
     const adapter = createSpawnAdapter({ command: "echo" });
     const metrics = { hello: "world" };
