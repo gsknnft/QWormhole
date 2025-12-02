@@ -99,7 +99,6 @@
     "@rollup/rollup-linux-x64-gnu": "4.53.3"
   },
   "dependencies": {
-    "@sigilnet/shared-types": "workspace:*",
     "tweetnacl": "^1.0.3",
     "tweetnacl-util": "^0.15.1",
     "bindings": "^1.5.0",
