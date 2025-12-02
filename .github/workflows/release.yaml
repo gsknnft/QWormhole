@@ -22,6 +22,9 @@ jobs:
   release:
     name: Release
     runs-on: ubuntu-latest
+    env:
+      QWORMHOLE_NATIVE: 1
+      QWORMHOLE_BUILD_LIBSOCKET: 1
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -32,7 +35,7 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: 24
-          cache: 'pnpm'
+          cache: pnpm
           registry-url: https://registry.npmjs.org/
 
       - name: Setup pnpm
@@ -43,14 +46,27 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
+      - name: Ensure libsocket conf.h
+        shell: bash
+        run: |
+          mkdir -p packages/QWormhole/libsocket/headers
+          if [ ! -f packages/QWormhole/libsocket/headers/conf.h ]; then
+            cat > packages/QWormhole/libsocket/headers/conf.h <<'EOF'
+#define LIBSOCKET_VERSION 2.4
+#define LIBSOCKET_LINUX 1
+#define LIBSOCKET_FREEBSD 0
+#define LIBSOCKET_SUNOS 0
+EOF
+          fi
+
       - name: Build native bindings
-        run: pnpm run rebuild
+        run: pnpm --filter @gsknnft/qwormhole run rebuild
 
       - name: Build artifacts
-        run: pnpm run build
+        run: pnpm --filter @gsknnft/qwormhole run build
 
       - name: Run unit tests
-        run: pnpm test
+        run: pnpm --filter @gsknnft/qwormhole test
 
       - name: Release
         env:

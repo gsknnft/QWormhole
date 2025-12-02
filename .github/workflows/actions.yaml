@@ -16,10 +16,6 @@ jobs:
   test:
     name: Node ${{ matrix.node-version }} on ${{ matrix.os }}
     runs-on: ${{ matrix.os }}
-    env:
-      # Build native on Linux; fall back to TS transport elsewhere to keep CI green.
-      QWORMHOLE_NATIVE: ${{ contains(matrix.os, 'ubuntu') && '1' || '0' }}
-      QWORMHOLE_BUILD_LIBSOCKET: ${{ contains(matrix.os, 'ubuntu') && '1' || '0' }}
     strategy:
       fail-fast: false
       matrix:
@@ -57,32 +53,16 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: ${{ matrix.node-version }}
-          cache: pnpm
 
       - name: Install dependencies
-        run: pnpm install --frozen-lockfile
+        run: pnpm install --no-frozen-lockfile
 
-      - name: Ensure libsocket conf.h (native-only)
-        if: env.QWORMHOLE_NATIVE == '1'
-        shell: bash
-        run: |
-          mkdir -p packages/QWormhole/libsocket/headers
-          if [ ! -f packages/QWormhole/libsocket/headers/conf.h ]; then
-            cat > packages/QWormhole/libsocket/headers/conf.h <<'EOF'
-#define LIBSOCKET_VERSION 2.4
-#define LIBSOCKET_LINUX 1
-#define LIBSOCKET_FREEBSD 0
-#define LIBSOCKET_SUNOS 0
-EOF
-          fi
-
-      - name: Build native bindings (Linux only)
-        if: env.QWORMHOLE_NATIVE == '1'
-        run: pnpm --filter @gsknnft/qwormhole run rebuild
+      - name: Build native bindings
+        run: pnpm run rebuild
 
       - name: Lint
-        run: pnpm --filter @gsknnft/qwormhole run lint
+        run: pnpm run lint
 
       - name: Run unit tests
-        run: pnpm --filter @gsknnft/qwormhole test
+        run: pnpm test
 
