@@ -2,7 +2,6 @@ name: Release
 
 on:
   push:
-    - v*.*.*    # Match semantic version tags like v1.2.3
     branches:
       - main
   workflow_dispatch:
@@ -40,10 +39,7 @@ jobs:
           version: 10
 
       - name: Install dependencies
-        run: pnpm install --frozen-lockfile
-
-      - name: Build native bindings
-        run: pnpm run rebuild
+        run: pnpm ci
 
       - name: Build artifacts
         run: pnpm run build
