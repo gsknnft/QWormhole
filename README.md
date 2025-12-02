@@ -384,9 +384,10 @@ pnpm test:native (only runs if native present)
 Install attempts a native build automatically; if native fails, TS remains available.
 
 - `pnpm install` (or workspace install) triggers the native build attempt via `scripts/install-native.js`.
+- macOS runners automatically skip the libsocket backend (it relies on Linux-only APIs). Set `QWORMHOLE_NATIVE=1` if you really want to force a build attempt.
 - If native build fails (missing toolchain/SSL), it logs a warning and falls back to TS without failing install.
 - You can rebuild explicitly anytime: `pnpm --filter @gsknnft/qwormhole run build:native`.
-- Set `QWORMHOLE_NATIVE=0` to skip native (e.g., CI); set `QWORMHOLE_BUILD_LIBSOCKET=0` on POSIX to skip libsocket when you only want LWS.
+- Set `QWORMHOLE_NATIVE=0` to skip native manually (e.g., CI); set `QWORMHOLE_BUILD_LIBSOCKET=0` on POSIX to skip libsocket when you only want LWS.
 
 ## Handshake & security
 - Default handshake: `{ type: "handshake", version, tags? }` sent when `protocolVersion` is set.
@@ -409,7 +410,7 @@ Install attempts a native build automatically; if native fails, TS remains avail
 Native is optional; the TS transport works everywhere. Two native addons are available:
 
 - `qwormhole_lws.node` (libwebsockets raw socket backend, preferred, cross-platform: Windows/macOS/Linux)
-- `qwormhole.node` (libsocket backend, Linux/WSL)
+- `qwormhole.node` (libsocket backend, Linux/WSL only)
 
 Build on Windows (libwebsockets):
 ```bash
