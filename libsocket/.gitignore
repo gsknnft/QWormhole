@@ -6,4 +6,3 @@ srv
 *.swp
 *.a
 *.kdev4
-headers/conf.h
