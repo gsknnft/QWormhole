@@ -182,6 +182,8 @@ interface PeerBase {
   metadata?: Record<string, JsonValue>;
 
   seal?: PeerSeal;
+
+  metrics?: SigilMetrics;
 }
 
 /**
