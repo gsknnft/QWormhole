@@ -16,7 +16,7 @@ const logNativeServer = (msg: string) => {
   }
 };
 
-type NativeServerHandle<TMessage> = NodeJS.EventEmitter & {
+type NativeServerHandle = NodeJS.EventEmitter & {
   listen(): Promise<net.AddressInfo>;
   close(): Promise<void>;
   broadcast(payload: Payload): void;
@@ -28,7 +28,7 @@ type NativeServerHandle<TMessage> = NodeJS.EventEmitter & {
 type NativeServerModule<TMessage> = {
   QWormholeServerWrapper: new (
     options: QWormholeServerOptions<TMessage>,
-  ) => NativeServerHandle<TMessage>;
+  ) => NativeServerHandle;
 };
 
 type LoadedServerBinding<TMessage> = {
@@ -94,7 +94,7 @@ export const isNativeServerAvailable = (): boolean =>
   Boolean(nativeServerBinding);
 
 const reemitEvents = <TMessage>(
-  emitter: NativeServerHandle<TMessage>,
+  emitter: NativeServerHandle,
   target: TypedEventEmitter<QWormholeServerEvents<TMessage>>,
 ) => {
   const events: Array<keyof QWormholeServerEvents<TMessage>> = [
@@ -117,7 +117,7 @@ const reemitEvents = <TMessage>(
 export class NativeQWormholeServer<TMessage = Buffer> extends TypedEventEmitter<
   QWormholeServerEvents<TMessage>
 > {
-  private readonly impl: NativeServerHandle<TMessage>;
+  private readonly impl: NativeServerHandle;
   public readonly backend: NativeBackend;
 
   constructor(
