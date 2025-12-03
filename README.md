@@ -82,6 +82,7 @@ QWormhole isn’t just a socket wrapper — it’s a transport ritual.
 - 🌐 **Bind to interfaces** (`wg0`, `eth0`, WireGuard, VLANs, etc.)
 - 🧩 **Pluggable codecs** (JSON, text, buffer, CBOR, custom binary)
 - 🔐 **Protocol versioning + handshake tags**
+- 🛡️ **TLS wrapping + fingerprint pinning (TS + native-lws)**
 - 🎛️ **TS/native factory with intelligent fallback**
 - 🧪 **Full test suite** (TS + native smoke tests)
 - 🛠 Works on **Windows / macOS / Linux / WSL**
@@ -392,14 +393,21 @@ Install attempts a native build automatically; if native fails, TS remains avail
 - Set `QWORMHOLE_NATIVE=0` to skip native manually (e.g., CI); set `QWORMHOLE_BUILD_LIBSOCKET=0` on POSIX to skip libsocket when you only want LWS.
 
 ## Handshake & security
-- Default handshake: `{ type: "handshake", version, tags? }` sent when `protocolVersion` is set.
-- Custom signer: provide `handshakeSigner` to send signed/negantropic handshakes (see `createNegantropicHandshake`).
-- Server verification: use `verifyHandshake` to accept/reject (version/tags/signatures/negHash). On reject the server closes the socket and emits `clientClosed` with `hadError: true`.
+- **Default handshake** – `{ type: "handshake", version, tags? }` automatically queues when `protocolVersion` is set.
+- **Negantropic signer** – pass `handshakeSigner` or use `createNegantropicHandshake` to emit signed payloads with `negHash` + coherence metadata for downstream policy engines.
+- **TLS-aware metadata** – when `tls` options are provided, the client captures peer fingerprints, ALPN, and exported keying material, then merges them into `handshake.tags`. The server pins those fingerprints via `verifyTlsFingerprint`, derives a session-bound key, and attaches the TLS snapshot to `connection.handshake.tls` for your app.
+- **Policy hooks** – `verifyHandshake` and `createHandshakeVerifier` make it easy to reject unwanted versions, tags, or signatures; failures immediately drop the socket and emit `clientClosed(hadError: true)`.
 
 ## TLS (optional)
-- Set `tls.enabled=true` on client/server options to wrap sockets in Node’s `tls` module (cert/key/ca/passphrase, `alpnProtocols`, `requestCert`/`rejectUnauthorized` for mutual auth).
-- Handshake tags include TLS fingerprints when available (`tlsFingerprint256`, `tlsFingerprint`, `tlsAlpn`), and the server can pin/compare them before accepting the connection.
-- You can export TLS keying material (`tls.exportKeyingMaterial`) and combine it with negentropic handshake data; connections expose `handshake.tls.tlsSessionKey` for downstream use.
+- **TS transport** – enabling `tls.enabled=true` on the client/server wraps the socket in Node's `tls` module with cert/key/CA, ALPN, passphrase, and mutual-auth toggles. `exportKeyingMaterial` lets you mix TLS secrets into negentropic hashes for additional binding.
+- **Native transport** – the libwebsockets backend now accepts the same `tls` object (PEM strings or buffers) and configures client certs, private keys, CA bundles, passphrases, and ALPN directly inside the native context. The legacy `libsocket` backend remains plaintext-only and will throw if TLS is requested.
+- **Tight binding** – TLS fingerprints automatically land in handshake tags (`tlsFingerprint256`, `tlsFingerprint`, `tlsAlpn`). Servers can require them, enforce SNI expectations, or correlate TLS session keys with negentropic fingerprints for defense in depth.
+
+### Security story at a glance
+- **Transport confidentiality** – enable `tls` (TS or native-lws) for on-the-wire encryption, mutual auth, ALPN pinning, and exportable keying material.
+- **Identity & attestation** – use negantropic handshakes or custom `handshakeSigner` payloads so every socket announces a signed identity with coherence metadata.
+- **Policy enforcement** – `verifyHandshake`, TLS fingerprint pinning, rate limits, and backpressure guards let the server enforce both crypto posture and resource usage before promoting a socket to application traffic.
+- **Layered defense** – TLS metadata is merged into handshake tags, so downstream routers or registries can insist on matching TLS fingerprints *and* negantropic hashes; external tunnels (WireGuard, SSH) remain optional but compose cleanly via `localAddress` / `interfaceName`.
 
 ## Error handling & backpressure
 - Backpressure protection: server drops connections when `maxBackpressureBytes` is exceeded; emits `backpressure` and `clientClosed`.
@@ -446,6 +454,8 @@ Native is optional; the TS transport works everywhere. Two native addons are ava
 
 - `qwormhole_lws.node` (libwebsockets raw socket backend, preferred, cross-platform: Windows/macOS/Linux)
 - `qwormhole.node` (libsocket backend, Linux/WSL only)
+
+TLS support for native mode mirrors the TypeScript transport when the libwebsockets backend is loaded. Provide the same `tls` object and the native client will load your PEM/DER blobs, enforce ALPN, and surface the TLS metadata in handshake tags. The legacy libsocket backend is plaintext-only; requesting TLS while it is active throws so you never unknowingly downgrade security.
 
 macOS runners always bypass the libsocket target; they will build the libwebsockets backend when toolchains are present and fall back to TS otherwise. On Linux/WSL you can still disable libsocket explicitly via `QWORMHOLE_BUILD_LIBSOCKET=0` if you only need libwebsockets.
 

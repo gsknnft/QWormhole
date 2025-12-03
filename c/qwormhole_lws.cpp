@@ -28,6 +28,13 @@ class LwsClientWrapper : public Napi::ObjectWrap<LwsClientWrapper> {
     std::string host;
     uint16_t port = 0;
     bool use_tls = false;
+    bool reject_unauthorized = true;
+    std::string server_name;
+    std::string alpn_list;
+    std::vector<uint8_t> tls_ca;
+    std::vector<uint8_t> tls_cert;
+    std::vector<uint8_t> tls_key;
+    std::string tls_passphrase;
   };
 
   struct PendingSend {
@@ -55,6 +62,13 @@ class LwsClientWrapper : public Napi::ObjectWrap<LwsClientWrapper> {
   std::condition_variable recv_cv_;
   std::deque<std::vector<uint8_t>> recv_queue_;
   std::deque<PendingSend> send_queue_;
+  std::vector<uint8_t> tls_ca_;
+  std::vector<uint8_t> tls_cert_;
+  std::vector<uint8_t> tls_key_;
+  std::string tls_passphrase_;
+  std::string tls_alpn_;
+  bool tls_reject_unauthorized_ = true;
+  std::string tls_server_name_;
 };
 
 static LwsClientWrapper* GetSelf(struct lws* wsi) {
@@ -113,6 +127,42 @@ LwsClientWrapper::Options LwsClientWrapper::ParseOptions(
     if (obj.Has("useTls")) {
       opts.use_tls = obj.Get("useTls").As<Napi::Boolean>().Value();
     }
+    if (obj.Has("tlsRejectUnauthorized")) {
+      opts.reject_unauthorized =
+          obj.Get("tlsRejectUnauthorized").As<Napi::Boolean>().Value();
+    }
+    if (obj.Has("tlsServername") && obj.Get("tlsServername").IsString()) {
+      opts.server_name = obj.Get("tlsServername").As<Napi::String>().Utf8Value();
+    }
+    if (obj.Has("tlsAlpn") && obj.Get("tlsAlpn").IsString()) {
+      opts.alpn_list = obj.Get("tlsAlpn").As<Napi::String>().Utf8Value();
+    }
+    if (obj.Has("tlsPassphrase") && obj.Get("tlsPassphrase").IsString()) {
+      opts.tls_passphrase = obj.Get("tlsPassphrase").As<Napi::String>().Utf8Value();
+    }
+
+    auto assignBuffer = [&](const char* prop, std::vector<uint8_t>& target) {
+      if (!obj.Has(prop)) return;
+      Napi::Value value = obj.Get(prop);
+      if (value.IsBuffer()) {
+        auto buf = value.As<Napi::Buffer<uint8_t>>();
+        target.assign(buf.Data(), buf.Data() + buf.Length());
+        return;
+      }
+      if (value.IsString()) {
+        auto str = value.As<Napi::String>().Utf8Value();
+        target.assign(str.begin(), str.end());
+      }
+    };
+
+    assignBuffer("tlsCa", opts.tls_ca);
+    assignBuffer("tlsCert", opts.tls_cert);
+    assignBuffer("tlsKey", opts.tls_key);
+
+    if (!opts.use_tls && (!opts.tls_ca.empty() || !opts.tls_cert.empty() ||
+                          !opts.tls_key.empty())) {
+      opts.use_tls = true;
+    }
     return opts;
   }
 
@@ -140,6 +190,14 @@ Napi::Value LwsClientWrapper::Connect(const Napi::CallbackInfo& info) {
     return env.Undefined();
   }
 
+  tls_ca_ = std::move(opts.tls_ca);
+  tls_cert_ = std::move(opts.tls_cert);
+  tls_key_ = std::move(opts.tls_key);
+  tls_passphrase_ = std::move(opts.tls_passphrase);
+  tls_alpn_ = std::move(opts.alpn_list);
+  tls_reject_unauthorized_ = opts.reject_unauthorized;
+  tls_server_name_ = std::move(opts.server_name);
+
   closing_ = false;
   connected_ = false;
 
@@ -161,7 +219,9 @@ Napi::Value LwsClientWrapper::Connect(const Napi::CallbackInfo& info) {
   std::memset(&ccinfo, 0, sizeof ccinfo);
   ccinfo.context = context_;
   ccinfo.address = opts.host.c_str();
-  ccinfo.host = opts.host.c_str();
+  const char* host_header = tls_server_name_.empty() ? opts.host.c_str()
+                                                     : tls_server_name_.c_str();
+  ccinfo.host = host_header;
   ccinfo.port = opts.port;
   ccinfo.path = "/";
   ccinfo.local_protocol_name = "qwormhole-raw";
@@ -169,9 +229,40 @@ Napi::Value LwsClientWrapper::Connect(const Napi::CallbackInfo& info) {
   ccinfo.userdata = nullptr;
   ccinfo.opaque_user_data = this;
   ccinfo.method = "RAW";
-  ccinfo.ssl_connection = opts.use_tls ? LCCSCF_USE_SSL : 0;
-  ccinfo.alpn = opts.use_tls ? "http/1.1" : nullptr;
+  int ssl_flags = opts.use_tls ? LCCSCF_USE_SSL : 0;
+  if (opts.use_tls && !tls_reject_unauthorized_) {
+    ssl_flags |= LCCSCF_ALLOW_SELFSIGNED |
+                 LCCSCF_SKIP_SERVER_CERT_HOSTNAME_CHECK |
+                 LCCSCF_ALLOW_INSECURE;
+  }
+  ccinfo.ssl_connection = ssl_flags;
+  if (!tls_alpn_.empty()) {
+    ccinfo.alpn = tls_alpn_.c_str();
+  } else {
+    ccinfo.alpn = opts.use_tls ? "http/1.1" : nullptr;
+  }
   ccinfo.pwsi = &wsi_;
+
+  if (!tls_passphrase_.empty()) {
+    cinfo.client_ssl_private_key_password = tls_passphrase_.c_str();
+  } else {
+    cinfo.client_ssl_private_key_password = nullptr;
+  }
+  if (!tls_cert_.empty()) {
+    cinfo.client_ssl_cert_mem = tls_cert_.data();
+    cinfo.client_ssl_cert_mem_len =
+        static_cast<unsigned int>(tls_cert_.size());
+  }
+  if (!tls_key_.empty()) {
+    cinfo.client_ssl_key_mem = tls_key_.data();
+    cinfo.client_ssl_key_mem_len =
+        static_cast<unsigned int>(tls_key_.size());
+  }
+  if (!tls_ca_.empty()) {
+    cinfo.client_ssl_ca_mem = tls_ca_.data();
+    cinfo.client_ssl_ca_mem_len =
+        static_cast<unsigned int>(tls_ca_.size());
+  }
 
   if (!lws_client_connect_via_info(&ccinfo)) {
     lws_context_destroy(context_);

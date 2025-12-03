@@ -76,6 +76,42 @@ describe("native binding loader", () => {
     });
   });
 
+  it("serializes TLS options for the lws backend", async () => {
+    const client = registerBinding("qwormhole_lws");
+    const native = await importNative();
+    const tcp = new native.NativeTcpClient();
+    const cert = Buffer.from("CERTDATA");
+    tcp.connect({
+      host: "secure.example",
+      port: 443,
+      tls: {
+        enabled: true,
+        cert,
+        key: "KEYDATA",
+        ca: [Buffer.from("CA")],
+        servername: "mtls.example",
+        passphrase: "secret",
+        alpnProtocols: ["h2", "http/1.1"],
+        rejectUnauthorized: false,
+      },
+    });
+    const payload = (client.connect as unknown as ReturnType<typeof vi.fn>).mock
+      .calls[0][0];
+    expect(payload.host).toBe("secure.example");
+    expect(payload.port).toBe(443);
+    expect(payload.useTls).toBe(true);
+    expect(Buffer.isBuffer(payload.tlsCert)).toBe(true);
+    expect(payload.tlsCert.equals(cert)).toBe(true);
+    expect(Buffer.isBuffer(payload.tlsKey)).toBe(true);
+    expect(payload.tlsKey.equals(Buffer.from("KEYDATA"))).toBe(true);
+    expect(Buffer.isBuffer(payload.tlsCa)).toBe(true);
+    expect(payload.tlsCa.equals(Buffer.from("CA"))).toBe(true);
+    expect(payload.tlsPassphrase).toBe("secret");
+    expect(payload.tlsAlpn).toBe("h2,http/1.1");
+    expect(payload.tlsRejectUnauthorized).toBe(false);
+    expect(payload.tlsServername).toBe("mtls.example");
+  });
+
   it("falls back to libsocket when lws missing and normalizes options", async () => {
     const client = registerBinding("qwormhole");
     const native = await importNative();
@@ -85,6 +121,15 @@ describe("native binding loader", () => {
     expect(client.connect).toHaveBeenCalledWith("mesh.sigil", 7000);
     tcp.connect("mesh.sigil", 8000);
     expect(client.connect).toHaveBeenCalledWith("mesh.sigil", 8000);
+  });
+
+  it("throws when TLS requested on libsocket backend", async () => {
+    registerBinding("qwormhole");
+    const native = await importNative();
+    const tcp = new native.NativeTcpClient();
+    expect(() =>
+      tcp.connect({ host: "mesh.sigil", port: 7443, useTls: true }),
+    ).toThrow(/does not support TLS/i);
   });
 
   it("respects preferred backend when both bindings exist", async () => {

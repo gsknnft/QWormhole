@@ -50,12 +50,16 @@ export interface NativeSocketOptions {
   interfaceName?: string;
   localAddress?: string;
   localPort?: number;
+  /**
+   * Optional TLS configuration. Mirrors the public TLS options so native bindings can wrap TLS sockets.
+   */
+  tls?: QWTlsOptions;
 }
 
 export interface NativeTcpClient {
   connect(opts: NativeSocketOptions | { host: string; port: number }): void;
-  send(data: string | Buffer): void;          // queues and flushes via LWS writable callbacks
-  recv(maxBytes?: number): Buffer;            // drains from the recv ring buffer; empty Buffer if none
+  send(data: string | Buffer): void; // queues and flushes via LWS writable callbacks
+  recv(maxBytes?: number): Buffer; // drains from the recv ring buffer; empty Buffer if none
   close(): void;
   backend?: NativeBackend;
 }
@@ -132,16 +136,18 @@ export interface QWormholeCommonOptions<TMessage = unknown> {
   onTelemetry?: (metrics: QWormholeTelemetry) => void;
 }
 
-export interface QWormholeClientOptions<TMessage = unknown>
-  extends QWormholeCommonOptions<TMessage> {
+export interface QWormholeClientOptions<
+  TMessage = unknown,
+> extends QWormholeCommonOptions<TMessage> {
   /**
    * When true, socket writes will throw if not connected instead of being ignored.
    */
   requireConnectedForSend?: boolean;
 }
 
-export interface QWormholeServerOptions<TMessage = unknown>
-  extends QWormholeCommonOptions<TMessage> {
+export interface QWormholeServerOptions<
+  TMessage = unknown,
+> extends QWormholeCommonOptions<TMessage> {
   allowHalfOpen?: boolean;
   /**
    * Maximum concurrent clients. Extra connections are rejected immediately.

@@ -1,11 +1,30 @@
 import bindings from "bindings";
-import type { NativeBackend, NativeSocketOptions } from "src/types/types";
+import type {
+  NativeBackend,
+  NativeSocketOptions,
+  QWTlsOptions,
+} from "src/types/types";
 
 const DEBUG_NATIVE = process.env.QWORMHOLE_DEBUG_NATIVE === "1";
 const logNative = (msg: string) => {
   if (DEBUG_NATIVE) {
     console.log(`[qwormhole][native] ${msg}`);
   }
+};
+
+type TlsBufferInput = string | Buffer | Array<string | Buffer> | undefined;
+
+const normalizeTlsBuffer = (value?: TlsBufferInput): Buffer | undefined => {
+  if (value === undefined) return undefined;
+  if (Array.isArray(value)) return normalizeTlsBuffer(value[0]);
+  if (typeof value === "string") return Buffer.from(value);
+  if (Buffer.isBuffer(value)) return value;
+  return undefined;
+};
+
+const serializeAlpn = (protocols?: string[]): string | undefined => {
+  if (!protocols || protocols.length === 0) return undefined;
+  return protocols.join(",");
 };
 
 type NativeBindingClient = {
@@ -107,19 +126,43 @@ export class NativeTcpClient implements NativeBindingClient {
       return;
     }
 
-    const { host, port: resolvedPort, useTls } = hostOrOptions;
+    const { host, port: resolvedPort } = hostOrOptions;
     if (!host || !resolvedPort) {
       throw new Error("connect requires host and port");
     }
 
+    const tlsOptions = hostOrOptions.tls;
+    const explicitUseTls = hostOrOptions.useTls;
+    const inferredTls =
+      typeof explicitUseTls === "boolean"
+        ? explicitUseTls
+        : tlsOptions
+          ? (tlsOptions.enabled ?? true)
+          : false;
+
     if (this.backend === "libsocket") {
+      if (inferredTls) {
+        throw new Error(
+          "Native libsocket backend does not support TLS. Switch to the libwebsockets backend or disable preferNative.",
+        );
+      }
       this.impl.connect(host, resolvedPort);
       return;
     }
 
+    const payload: Record<string, unknown> = {
+      host,
+      port: resolvedPort,
+      useTls: inferredTls,
+    };
+
+    if (inferredTls && tlsOptions) {
+      Object.assign(payload, this.serializeTlsOptions(tlsOptions));
+    }
+
     (
-      this.impl as unknown as { connect(opts: NativeSocketOptions): void }
-    ).connect({ host, port: resolvedPort, useTls });
+      this.impl as unknown as { connect(opts: Record<string, unknown>): void }
+    ).connect(payload);
   }
 
   send(data: string | Buffer): void {
@@ -132,5 +175,28 @@ export class NativeTcpClient implements NativeBindingClient {
 
   close(): void {
     this.impl.close();
+  }
+
+  private serializeTlsOptions(tls: QWTlsOptions): Record<string, unknown> {
+    const result: Record<string, unknown> = {};
+    const ca = normalizeTlsBuffer(tls.ca);
+    const cert = normalizeTlsBuffer(tls.cert);
+    const key = normalizeTlsBuffer(tls.key);
+    const alpn = serializeAlpn(tls.alpnProtocols);
+    if (ca) result.tlsCa = ca;
+    if (cert) result.tlsCert = cert;
+    if (key) result.tlsKey = key;
+    if (alpn) result.tlsAlpn = alpn;
+    if (tls.servername) result.tlsServername = tls.servername;
+    if (typeof tls.rejectUnauthorized === "boolean") {
+      result.tlsRejectUnauthorized = tls.rejectUnauthorized;
+    }
+    if (typeof tls.requestCert === "boolean") {
+      result.tlsRequestCert = tls.requestCert;
+    }
+    if (tls.passphrase) {
+      result.tlsPassphrase = tls.passphrase;
+    }
+    return result;
   }
 }
