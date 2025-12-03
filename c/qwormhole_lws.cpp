@@ -1,7 +1,17 @@
 #include <napi.h>
 #include <libwebsockets.h>
 
+#ifdef _WIN32
+#include <winsock2.h>
+#include <ws2tcpip.h>
+#else
+#include <arpa/inet.h>
+#include <netinet/in.h>
+#include <sys/socket.h>
+#endif
+
 #include <atomic>
+#include <chrono>
 #include <condition_variable>
 #include <cstdint>
 #include <cstring>
@@ -9,6 +19,7 @@
 #include <map>
 #include <memory>
 #include <mutex>
+#include <random>
 #include <string>
 #include <thread>
 #include <vector>
@@ -653,7 +664,20 @@ LwsServerWrapper::ServerOptions LwsServerWrapper::ParseServerOptions(
 
 std::string LwsServerWrapper::GenerateId() {
   std::lock_guard<std::mutex> lock(mutex_);
-  return "conn-" + std::to_string(++next_id_);
+  // Use timestamp + counter + random component for better uniqueness
+  auto now = std::chrono::steady_clock::now().time_since_epoch();
+  auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(now).count();
+  
+  static std::random_device rd;
+  static std::mt19937 gen(rd());
+  static std::uniform_int_distribution<uint32_t> dis(0, 0xFFFF);
+  
+  char buf[64];
+  snprintf(buf, sizeof(buf), "conn-%lx-%lu-%04x", 
+           static_cast<unsigned long>(ms), 
+           static_cast<unsigned long>(++next_id_), 
+           dis(gen));
+  return std::string(buf);
 }
 
 Napi::Value LwsServerWrapper::Listen(const Napi::CallbackInfo& info) {
@@ -825,13 +849,15 @@ Napi::Value LwsServerWrapper::Broadcast(const Napi::CallbackInfo& info) {
 Napi::Value LwsServerWrapper::Shutdown(const Napi::CallbackInfo& info) {
   Napi::Env env = info.Env();
 
-  int graceful_ms = 1000;
-  if (info.Length() >= 1 && info[0].IsNumber()) {
-    graceful_ms = info[0].As<Napi::Number>().Int32Value();
-  }
+  // Note: graceful_ms is accepted for API compatibility with TS server,
+  // but native server currently performs immediate shutdown.
+  // Graceful shutdown with connection draining is not yet implemented.
+  // int graceful_ms = 1000;
+  // if (info.Length() >= 1 && info[0].IsNumber()) {
+  //   graceful_ms = info[0].As<Napi::Number>().Int32Value();
+  // }
+  (void)info; // Suppress unused parameter warning
 
-  // For now, just do immediate shutdown
-  // TODO: Implement graceful shutdown with timeout
   Stop();
   EmitClose();
 
@@ -1046,13 +1072,38 @@ int LwsServerWrapper::ServerCallback(struct lws* wsi,
       std::string id = self->GenerateId();
 
       char peer_name[128] = {0};
-      lws_get_peer_simple(wsi, peer_name, sizeof(peer_name));
+      char peer_ip[64] = {0};
+      int peer_port = 0;
+      
+      // Try to get detailed peer info including port
+      int fd = lws_get_socket_fd(wsi);
+      if (fd >= 0) {
+        struct sockaddr_storage addr;
+        socklen_t addr_len = sizeof(addr);
+        if (getpeername(fd, (struct sockaddr*)&addr, &addr_len) == 0) {
+          if (addr.ss_family == AF_INET) {
+            struct sockaddr_in* s = (struct sockaddr_in*)&addr;
+            inet_ntop(AF_INET, &s->sin_addr, peer_ip, sizeof(peer_ip));
+            peer_port = ntohs(s->sin_port);
+          } else if (addr.ss_family == AF_INET6) {
+            struct sockaddr_in6* s = (struct sockaddr_in6*)&addr;
+            inet_ntop(AF_INET6, &s->sin6_addr, peer_ip, sizeof(peer_ip));
+            peer_port = ntohs(s->sin6_port);
+          }
+        }
+      }
+      
+      // Fallback to simple peer name if detailed info failed
+      if (peer_ip[0] == '\0') {
+        lws_get_peer_simple(wsi, peer_name, sizeof(peer_name));
+        strncpy(peer_ip, peer_name, sizeof(peer_ip) - 1);
+      }
 
       auto conn = std::make_shared<ClientConnection>();
       conn->id = id;
       conn->wsi = wsi;
-      conn->remote_address = peer_name;
-      conn->remote_port = 0; // libwebsockets doesn't easily expose this
+      conn->remote_address = peer_ip;
+      conn->remote_port = static_cast<uint16_t>(peer_port);
       conn->queued_bytes = 0;
       conn->backpressured = false;
 

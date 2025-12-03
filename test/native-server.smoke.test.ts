@@ -6,6 +6,27 @@ import { QWormholeClient, textDeserializer } from "../src";
  * when the native addon is available. This test is skipped if native is not built.
  */
 
+// Configurable timeout for CI environments (can be increased via env var)
+const TEST_WAIT_MS = parseInt(process.env.NATIVE_TEST_WAIT_MS ?? "200", 10);
+
+// Helper to wait for an event with timeout
+const waitForEvent = <T>(
+  emitter: { on: (event: string, fn: (arg: T) => void) => void },
+  event: string,
+  timeoutMs = TEST_WAIT_MS * 5,
+): Promise<T> => {
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => {
+      reject(new Error(`Timeout waiting for "${event}" event`));
+    }, timeoutMs);
+
+    emitter.on(event, (arg: T) => {
+      clearTimeout(timer);
+      resolve(arg);
+    });
+  });
+};
+
 // Check if native server is available
 const isNativeServerAvailable = async (): Promise<boolean> => {
   try {
@@ -64,7 +85,7 @@ describe("Native Server Smoke Test", async () => {
       await client.connect();
 
       // Give the server time to process the connection
-      await new Promise((resolve) => setTimeout(resolve, 100));
+      await new Promise((resolve) => setTimeout(resolve, TEST_WAIT_MS));
 
       expect(connectionReceived).toHaveBeenCalled();
     });
@@ -78,7 +99,7 @@ describe("Native Server Smoke Test", async () => {
       client.send("hello from TS client");
 
       // Give time for the message to be processed
-      await new Promise((resolve) => setTimeout(resolve, 100));
+      await new Promise((resolve) => setTimeout(resolve, TEST_WAIT_MS));
 
       expect(messageReceived).toHaveBeenCalled();
     });
@@ -92,7 +113,7 @@ describe("Native Server Smoke Test", async () => {
       server.broadcast("broadcast message");
 
       // Give time for the message to be processed
-      await new Promise((resolve) => setTimeout(resolve, 100));
+      await new Promise((resolve) => setTimeout(resolve, TEST_WAIT_MS));
 
       expect(messageReceived).toHaveBeenCalled();
     });
@@ -113,7 +134,7 @@ describe("Native Server Smoke Test", async () => {
       await client.disconnect();
 
       // Give time for the close event
-      await new Promise((resolve) => setTimeout(resolve, 100));
+      await new Promise((resolve) => setTimeout(resolve, TEST_WAIT_MS));
 
       expect(clientClosed).toHaveBeenCalled();
       client = null; // Mark as disconnected
