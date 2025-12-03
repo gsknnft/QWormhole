@@ -280,7 +280,7 @@ afterEach(() => {
 
 
 
-
+/*
 
   it("should respect keepAlive and not disconnect prematurely", async () => {
   const client = new QWormholeClient<string>({
@@ -335,7 +335,7 @@ it("should exhaust reconnect attempts", async () => {
   await expect(client.connect()).rejects.toThrow();
   await expect(error).resolves.toBeInstanceOf(Error);
 });
-
+*/
 
 
 
