@@ -87,11 +87,27 @@ const loadNativeServer = <TMessage>(
 
 let nativeServerBinding: LoadedServerBinding<unknown> | null = null;
 
-export const getNativeServerBackend = (): NativeBackend | null =>
-  nativeServerBinding?.kind ?? null;
+const ensureNativeServerBinding = (
+  preferred?: NativeBackend,
+): LoadedServerBinding<unknown> | null => {
+  if (preferred || !nativeServerBinding) {
+    nativeServerBinding =
+      (loadNativeServer<unknown>(
+        preferred,
+      ) as LoadedServerBinding<unknown> | null) ?? nativeServerBinding;
+  }
+  return nativeServerBinding;
+};
 
-export const isNativeServerAvailable = (): boolean =>
-  Boolean(nativeServerBinding);
+export const getNativeServerBackend = (): NativeBackend | null => {
+  ensureNativeServerBinding();
+  return nativeServerBinding?.kind ?? null;
+};
+
+export const isNativeServerAvailable = (): boolean => {
+  ensureNativeServerBinding();
+  return Boolean(nativeServerBinding);
+};
 
 const reemitEvents = <TMessage>(
   emitter: NativeServerHandle,
@@ -125,11 +141,10 @@ export class NativeQWormholeServer<TMessage = Buffer> extends TypedEventEmitter<
     preferred?: NativeBackend,
   ) {
     super();
-    if (!nativeServerBinding || preferred) {
-      nativeServerBinding =
-        (loadNativeServer<TMessage>(
-          preferred,
-        ) as LoadedServerBinding<unknown> | null) ?? nativeServerBinding;
+    if (preferred) {
+      ensureNativeServerBinding(preferred);
+    } else {
+      ensureNativeServerBinding();
     }
 
     if (!nativeServerBinding?.module?.QWormholeServerWrapper) {
