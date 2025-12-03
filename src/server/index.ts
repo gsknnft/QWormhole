@@ -1,5 +1,6 @@
 import net from "node:net";
-import { randomUUID } from "node:crypto";
+import tls from "node:tls";
+import { createHash, randomUUID } from "node:crypto";
 import { LengthPrefixedFramer } from "../framing";
 import { TypedEventEmitter } from "../typedEmitter";
 import { bufferDeserializer, defaultSerializer } from "../codecs";
@@ -20,6 +21,7 @@ import type {
   Deserializer,
   QWormholeTelemetry,
   SendOptions,
+  QWTlsOptions,
 } from "src/types/types";
 
 const randomId = () =>
@@ -47,6 +49,7 @@ type InternalServerOptions<TMessage> = Omit<
   rateLimitBytesPerSec?: number;
   rateLimitBurstBytes?: number;
   verifyHandshake?: (payload: unknown) => boolean | Promise<boolean>;
+  tls?: QWTlsOptions;
 };
 
 export class QWormholeServer<TMessage = Buffer> extends TypedEventEmitter<
@@ -68,12 +71,31 @@ export class QWormholeServer<TMessage = Buffer> extends TypedEventEmitter<
   constructor(options: QWormholeServerOptions<TMessage>) {
     super();
     this.options = this.buildOptions(options);
-    this.server = net.createServer(
-      { allowHalfOpen: this.options.allowHalfOpen },
-      socket => {
-        void this.handleConnection(socket);
-      },
-    );
+    if (this.options.tls?.enabled) {
+      this.server = tls.createServer(
+        {
+          key: this.options.tls.key,
+          cert: this.options.tls.cert,
+          ca: this.options.tls.ca,
+          requestCert: this.options.tls.requestCert,
+          rejectUnauthorized:
+            this.options.tls.rejectUnauthorized ??
+            Boolean(this.options.tls.requestCert),
+          ALPNProtocols: this.options.tls.alpnProtocols,
+          passphrase: this.options.tls.passphrase,
+        },
+        socket => {
+          void this.handleConnection(socket);
+        },
+      );
+    } else {
+      this.server = net.createServer(
+        { allowHalfOpen: this.options.allowHalfOpen },
+        socket => {
+          void this.handleConnection(socket);
+        },
+      );
+    }
     this.server.on("error", err => this.emit("error", err));
     this.on("error", err => {
       console.error("[QWormholeServer] error:", err);
@@ -391,6 +413,7 @@ export class QWormholeServer<TMessage = Buffer> extends TypedEventEmitter<
       },
       onAuthorizeConnection: options.onAuthorizeConnection,
       verifyHandshake: options.verifyHandshake,
+      tls: options.tls,
     };
   }
 
@@ -431,6 +454,15 @@ export class QWormholeServer<TMessage = Buffer> extends TypedEventEmitter<
         this.publishTelemetry();
         connection.handshakePending = false;
         return true;
+      }
+      if (!this.verifyTlsFingerprint(connection.socket, parsed.tags)) {
+        this.clients.delete(connection.id);
+        connection.socket.destroy(new Error("TLS fingerprint mismatch"));
+        this.emit("clientClosed", { client: connection, hadError: true });
+        this.telemetry.connections = this.clients.size;
+        this.publishTelemetry();
+        connection.handshakePending = false;
+        return false;
       }
       const verify = this.options.verifyHandshake;
       if (verify) {
@@ -523,13 +555,81 @@ export class QWormholeServer<TMessage = Buffer> extends TypedEventEmitter<
     connection: ManagedConnection,
     parsed: HandshakePayload,
   ): void {
+    const tlsInfo = this.collectTlsInfo(connection.socket, parsed.negHash);
     connection.handshake = {
       version: parsed.version,
       tags: parsed.tags,
       nIndex: parsed.nIndex,
       negHash: parsed.negHash,
+      tls: tlsInfo,
     };
     connection.handshakePending = false;
+  }
+
+  private collectTlsInfo(socket: net.Socket, negHash?: string) {
+    if (!(socket instanceof tls.TLSSocket)) return undefined;
+    const peer = socket.getPeerCertificate?.(true) as
+      | (tls.PeerCertificate & { fingerprint256?: string })
+      | null;
+    const cipher = socket.getCipher?.();
+    const rawProtocol = socket.getProtocol?.();
+    const tlsInfo = {
+      alpnProtocol: socket.alpnProtocol === null ? undefined : socket.alpnProtocol,
+      authorized: socket.authorized,
+      peerFingerprint256: peer?.fingerprint256,
+      peerFingerprint: peer?.fingerprint,
+      protocol: rawProtocol === null ? undefined : rawProtocol,
+      cipher: cipher?.name,
+      tlsSessionKey: this.deriveTlsSessionKey(socket, negHash),
+    };
+    return tlsInfo;
+  }
+
+  private deriveTlsSessionKey(
+    socket: tls.TLSSocket,
+    negHash?: string,
+  ): string | undefined {
+    const opts = this.options.tls?.exportKeyingMaterial;
+    if (!opts || typeof socket.exportKeyingMaterial !== "function") return;
+    const label = opts.label ?? "qwormhole-negentropic";
+    const length = opts.length ?? 32;
+    const context = opts.context ?? Buffer.alloc(0);
+    try {
+      const material = socket.exportKeyingMaterial(length, label, context);
+      if (negHash) {
+        return createHash("sha256")
+          .update(material)
+          .update(negHash)
+          .digest("base64");
+      }
+      return material.toString("base64");
+    } catch {
+      return undefined;
+    }
+  }
+
+  private verifyTlsFingerprint(
+    socket: net.Socket,
+    tags?: Record<string, unknown>,
+  ): boolean {
+    if (!(socket instanceof tls.TLSSocket)) return true;
+    if (!tags) return true;
+    const expected256 =
+      typeof (tags as Record<string, unknown>).tlsFingerprint256 === "string"
+        ? (tags as Record<string, string>).tlsFingerprint256
+        : undefined;
+    const expected =
+      typeof (tags as Record<string, unknown>).tlsFingerprint === "string"
+        ? (tags as Record<string, string>).tlsFingerprint
+        : undefined;
+    if (!expected256 && !expected) return true;
+    const peer = socket.getPeerCertificate?.(true) as
+      | (tls.PeerCertificate & { fingerprint256?: string })
+      | null;
+    if (!peer || Object.keys(peer).length === 0) return false;
+    if (expected256 && peer.fingerprint256 !== expected256) return false;
+    if (expected && peer.fingerprint !== expected) return false;
+    return true;
   }
 
   private publishTelemetry(): void {

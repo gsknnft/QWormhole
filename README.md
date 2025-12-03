@@ -396,6 +396,11 @@ Install attempts a native build automatically; if native fails, TS remains avail
 - Custom signer: provide `handshakeSigner` to send signed/negantropic handshakes (see `createNegantropicHandshake`).
 - Server verification: use `verifyHandshake` to accept/reject (version/tags/signatures/negHash). On reject the server closes the socket and emits `clientClosed` with `hadError: true`.
 
+## TLS (optional)
+- Set `tls.enabled=true` on client/server options to wrap sockets in Node’s `tls` module (cert/key/ca/passphrase, `alpnProtocols`, `requestCert`/`rejectUnauthorized` for mutual auth).
+- Handshake tags include TLS fingerprints when available (`tlsFingerprint256`, `tlsFingerprint`, `tlsAlpn`), and the server can pin/compare them before accepting the connection.
+- You can export TLS keying material (`tls.exportKeyingMaterial`) and combine it with negentropic handshake data; connections expose `handshake.tls.tlsSessionKey` for downstream use.
+
 ## Error handling & backpressure
 - Backpressure protection: server drops connections when `maxBackpressureBytes` is exceeded; emits `backpressure` and `clientClosed`.
 - Rate limiting: per-connection token bucket (bytes/sec + burst) and optional client-side rate limits.

@@ -1,20 +1,44 @@
 import { describe, expect, it, vi, beforeEach } from "vitest";
 
-// Mock tweetnacl and tweetnacl-util to keep crypto deterministic
-const mockKeyPair = {
-  publicKey: Uint8Array.from([1, 2, 3]),
-  secretKey: Uint8Array.from([4, 5, 6]),
-};
+const {
+  mockKeyPair,
+  beforeFn,
+  boxAfter,
+  boxOpenAfter,
+  randomBytesFn,
+  utilMock,
+} = vi.hoisted(() => {
+  return {
+    mockKeyPair: {
+      publicKey: Uint8Array.from([1, 2, 3]),
+      secretKey: Uint8Array.from([4, 5, 6]),
+    },
+    beforeFn: vi.fn((pub: Uint8Array, sec: Uint8Array) =>
+      Uint8Array.from([...pub, ...sec]),
+    ),
+    boxAfter: vi.fn(
+      (msg: Uint8Array, nonce: Uint8Array, shared: Uint8Array) =>
+        Uint8Array.from([...msg, ...nonce, ...shared]),
+    ),
+    boxOpenAfter: vi.fn(() => Uint8Array.from([116, 101, 115, 116])),
+    randomBytesFn: vi.fn((len: number) =>
+      Uint8Array.from({ length: len ?? 0 }, (_v, i) => i + 1),
+    ),
+    utilMock: {
+      encodeUTF8: (u: Uint8Array) => new TextDecoder().decode(u),
+      decodeUTF8: (s: string) => new TextEncoder().encode(s),
+      encodeBase64: (u: Uint8Array) => Buffer.from(u).toString("base64"),
+      decodeBase64: (s: string) => {
+        if (!/^[A-Za-z0-9+/=]+$/.test(s)) {
+          throw new Error("invalid base64");
+        }
+        return Uint8Array.from(Buffer.from(s, "base64"));
+      },
+    },
+  };
+});
 
 vi.mock("tweetnacl", () => {
-  const before = vi.fn((pub: Uint8Array, sec: Uint8Array) =>
-    Uint8Array.from([...pub, ...sec]),
-  );
-  const boxAfter = vi.fn(
-    (msg: Uint8Array, nonce: Uint8Array, shared: Uint8Array) =>
-      Uint8Array.from([...msg, ...nonce, ...shared]),
-  );
-  const boxOpenAfter = vi.fn(() => Uint8Array.from([116, 101, 115, 116])); // "test"
   const boxOpen = Object.assign(
     vi.fn(() => Uint8Array.from([116, 101, 115, 116])),
     { after: boxOpenAfter },
@@ -37,7 +61,7 @@ vi.mock("tweetnacl", () => {
     ),
     {
       keyPair: keyPairFn,
-      before,
+      before: beforeFn,
       after: boxAfter,
       open: boxOpen,
       nonceLength: 24,
@@ -46,27 +70,15 @@ vi.mock("tweetnacl", () => {
 
   const api = {
     box: boxFn,
-    randomBytes: vi.fn((len: number) =>
-      Uint8Array.from({ length: len ?? 0 }, (_v, i) => i + 1),
-    ),
+    randomBytes: randomBytesFn,
   };
   return { default: api, ...api };
 });
 
-vi.mock("tweetnacl-util", () => {
-  const api = {
-    encodeUTF8: (u: Uint8Array) => new TextDecoder().decode(u),
-    decodeUTF8: (s: string) => new TextEncoder().encode(s),
-    encodeBase64: (u: Uint8Array) => Buffer.from(u).toString("base64"),
-    decodeBase64: (s: string) => {
-      if (!/^[A-Za-z0-9+/=]+$/.test(s)) {
-        throw new Error("invalid base64");
-      }
-      return Uint8Array.from(Buffer.from(s, "base64"));
-    },
-  };
-  return { default: api, ...api };
-});
+vi.mock("tweetnacl-util", () => ({
+  ...utilMock,
+  default: utilMock,
+}));
 
 import {
   decryptFromPeer,

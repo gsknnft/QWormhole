@@ -56,6 +56,7 @@ export type {
   NativeSocketOptions,
   QWormholeTelemetry,
   SendOptions,
+  QWTlsOptions,
 } from "src/types/types";
 export {
   queryMLLayer,

@@ -10,6 +10,26 @@ export type FramingMode = "length-prefixed" | "none";
 export type TransportMode = "ts" | "native-lws" | "native-libsocket";
 export type NativeBackend = "lws" | "libsocket";
 
+export interface QWTlsOptions {
+  enabled?: boolean;
+  key?: string | Buffer;
+  cert?: string | Buffer;
+  ca?: Array<string | Buffer> | string | Buffer;
+  alpnProtocols?: string[];
+  requestCert?: boolean;
+  rejectUnauthorized?: boolean;
+  servername?: string;
+  passphrase?: string;
+  /**
+   * Export TLS keying material to bind with negentropic handshake results.
+   */
+  exportKeyingMaterial?: {
+    label?: string;
+    length?: number;
+    context?: Buffer;
+  };
+}
+
 export interface QWormholeReconnectOptions {
   enabled: boolean;
   initialDelayMs: number;
@@ -43,6 +63,10 @@ export interface NativeTcpClient {
 export interface QWormholeCommonOptions<TMessage = unknown> {
   host: string;
   port: number;
+  /**
+   * Optional TLS settings; when provided, connections wrap Node's tls module.
+   */
+  tls?: QWTlsOptions;
   /**
    * Optional local bind address (e.g., WireGuard interface IP).
    */
@@ -159,6 +183,15 @@ export interface QWormholeServerConnection {
     tags?: Record<string, unknown>;
     nIndex?: number;
     negHash?: string;
+    tls?: {
+      alpnProtocol?: string | false;
+      authorized?: boolean;
+      peerFingerprint256?: string;
+      peerFingerprint?: string;
+      tlsSessionKey?: string;
+      cipher?: string;
+      protocol?: string;
+    };
   };
   /**
    * Writes data to the client, respecting backpressure. Resolves once the data is accepted by the OS buffer.

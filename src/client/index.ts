@@ -1,4 +1,5 @@
 import net from "node:net";
+import tls from "node:tls";
 import { LengthPrefixedFramer } from "../framing";
 import { defaultSerializer, bufferDeserializer } from "../codecs";
 import { TypedEventEmitter } from "../typedEmitter";
@@ -99,26 +100,56 @@ export class QWormholeClient<TMessage = Buffer> extends TypedEventEmitter<
         return;
       }
 
-      const socket = net.createConnection(
-        {
-          host: this.options.host,
-          port: this.options.port,
-          localAddress,
-          localPort: this.options.localPort,
-        },
-        () => {
-          settled = true;
-          this.clearConnectTimer();
-          this.reconnectAttempts = 0;
-          if (this.options.protocolVersion) {
-            this.enqueueHandshake();
-          }
-          this.emit("connect", undefined as never);
-          this.emit("ready", undefined as never);
-          this.startHeartbeat();
-          resolve();
-        },
-      );
+      const socket = this.options.tls?.enabled
+        ? tls.connect(
+            {
+              host: this.options.host,
+              port: this.options.port,
+              servername: this.options.tls.servername ?? this.options.host,
+              key: this.options.tls.key,
+              cert: this.options.tls.cert,
+              ca: this.options.tls.ca,
+              passphrase: this.options.tls.passphrase,
+              ALPNProtocols: this.options.tls.alpnProtocols,
+              requestCert: this.options.tls.requestCert,
+              rejectUnauthorized:
+                this.options.tls.rejectUnauthorized ??
+                this.options.tls.requestCert ??
+                false,
+            },
+            () => {
+              settled = true;
+              this.clearConnectTimer();
+              this.reconnectAttempts = 0;
+              if (this.options.protocolVersion) {
+                this.enqueueHandshake();
+              }
+              this.emit("connect", undefined as never);
+              this.emit("ready", undefined as never);
+              this.startHeartbeat();
+              resolve();
+            },
+          )
+        : net.createConnection(
+            {
+              host: this.options.host,
+              port: this.options.port,
+              localAddress,
+              localPort: this.options.localPort,
+            },
+            () => {
+              settled = true;
+              this.clearConnectTimer();
+              this.reconnectAttempts = 0;
+              if (this.options.protocolVersion) {
+                this.enqueueHandshake();
+              }
+              this.emit("connect", undefined as never);
+              this.emit("ready", undefined as never);
+              this.startHeartbeat();
+              resolve();
+            },
+          );
 
       this.socket = socket;
 
@@ -260,6 +291,7 @@ export class QWormholeClient<TMessage = Buffer> extends TypedEventEmitter<
       handshakeSigner: options.handshakeSigner ?? undefined,
       heartbeatIntervalMs: options.heartbeatIntervalMs ?? undefined,
       heartbeatPayload: options.heartbeatPayload ?? undefined,
+      tls: options.tls,
     };
   }
 
@@ -328,11 +360,19 @@ export class QWormholeClient<TMessage = Buffer> extends TypedEventEmitter<
   public async enqueueHandshake(): Promise<void> {
     const signerPayload = (this.options.handshakeSigner?.() ??
       {}) as Partial<HandshakePayload>;
+    const tlsTags = this.buildTlsHandshakeTags();
+    const mergedTags = {
+      ...(this.options.handshakeTags ?? {}),
+      ...(signerPayload.tags ?? {}),
+      ...(tlsTags ?? {}),
+    };
+    const finalTags =
+      Object.keys(mergedTags).length > 0 ? mergedTags : undefined;
     const payload = handshakePayloadSchema.parse({
       type: "handshake",
       ...signerPayload,
       version: signerPayload.version ?? this.options.protocolVersion,
-      tags: signerPayload.tags ?? this.options.handshakeTags,
+      tags: finalTags,
     });
     this.enqueueSend(payload, { priority: -100 });
   }
@@ -354,6 +394,40 @@ export class QWormholeClient<TMessage = Buffer> extends TypedEventEmitter<
     if (this.heartbeatTimer) {
       clearInterval(this.heartbeatTimer);
       this.heartbeatTimer = undefined;
+    }
+  }
+
+  private buildTlsHandshakeTags(): Record<string, string | number> | undefined {
+    if (!this.socket || !(this.socket instanceof tls.TLSSocket)) return;
+    const tags: Record<string, string> = {};
+    const peer = this.socket.getPeerCertificate?.(true) as
+      | (tls.PeerCertificate & { fingerprint256?: string })
+      | null;
+    if (peer && Object.keys(peer).length) {
+      if (peer.fingerprint256) tags.tlsFingerprint256 = peer.fingerprint256;
+      if (peer.fingerprint) tags.tlsFingerprint = peer.fingerprint;
+    }
+    if (this.socket.alpnProtocol) {
+      tags.tlsAlpn = this.socket.alpnProtocol;
+    }
+    const exported = this.exportTlsSessionKey(this.socket);
+    if (exported) tags.tlsSessionKey = exported;
+    return Object.keys(tags).length ? tags : undefined;
+  }
+
+  private exportTlsSessionKey(socket: tls.TLSSocket): string | undefined {
+    if (!this.options.tls?.exportKeyingMaterial) return undefined;
+    if (typeof socket.exportKeyingMaterial !== "function") return undefined;
+    const label =
+      this.options.tls.exportKeyingMaterial.label ?? "qwormhole-negentropic";
+    const length = this.options.tls.exportKeyingMaterial.length ?? 32;
+    const context =
+      this.options.tls.exportKeyingMaterial.context ?? Buffer.alloc(0);
+    try {
+      const material = socket.exportKeyingMaterial(length, label, context);
+      return material.toString("base64");
+    } catch {
+      return undefined;
     }
   }
 }
