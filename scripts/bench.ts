@@ -1,10 +1,18 @@
-import net from "node:net";
 import { performance } from "node:perf_hooks";
 import {
   QWormholeClient,
-  isNativeAvailable,
   NativeTcpClient,
+  createQWormholeServer,
+  isNativeAvailable,
 } from "../src/index";
+import { isNativeServerAvailable } from "../src/native-server";
+import type {
+  Payload,
+  QWormholeServerOptions,
+  Serializer,
+} from "../src/types/types";
+
+type Mode = "ts" | "native-lws" | "native-libsocket";
 
 const MODES: Mode[] = ["ts", "native-lws", "native-libsocket"];
 function parseModeArg(): Mode[] {
@@ -16,11 +24,9 @@ function parseModeArg(): Mode[] {
   return MODES;
 }
 
-const PAYLOAD = Buffer.alloc(1024, 1); // 1 KB
+const PAYLOAD = Buffer.alloc(1024, 1);
 const TOTAL_MESSAGES = 10_000;
 const TIMEOUT_MS = 5000;
-
-type Mode = "ts" | "native-lws" | "native-libsocket";
 
 const detectNativeBackend = (backend: "lws" | "libsocket") => {
   try {
@@ -36,51 +42,143 @@ const detectNativeBackend = (backend: "lws" | "libsocket") => {
 const availableLws = detectNativeBackend("lws");
 const availableLibsocket = detectNativeBackend("libsocket");
 
-async function run(mode: Mode) {
-  // Simple TCP server that counts raw bytes received.
-  const server = net.createServer();
-  let receivedBytes = 0;
-  // let resolveDone: (() => void) | null = null;
-  // const done = new Promise<void>(resolve => {
-  //   resolveDone = resolve;
-  // });
+interface Scenario {
+  id: string;
+  preferNativeServer: boolean;
+  clientMode: Mode;
+}
 
-  server.on("connection", socket => {
-    socket.on("data", chunk => {
-      receivedBytes += chunk.length;
-      if (receivedBytes >= PAYLOAD.length * TOTAL_MESSAGES) {
-        server.close();
-      }
+const scenarios: Scenario[] = [];
+for (const preferNativeServer of [false, true]) {
+  for (const mode of MODES) {
+    scenarios.push({
+      id: `${preferNativeServer ? "native-server" : "ts-server"}+${mode}`,
+      preferNativeServer,
+      clientMode: mode,
     });
-  });
+  }
+}
 
-  const address = await new Promise<net.AddressInfo>((resolve, reject) => {
-    server.listen(0, "127.0.0.1", () => {
-      const info = server.address();
-      if (info && typeof info === "object") {
-        resolve(info);
-      } else {
-        reject(new Error("Failed to bind server"));
-      }
-    });
-  });
+const toBytes: Serializer = (payload: Payload): Buffer => {
+  if (Buffer.isBuffer(payload)) return payload;
+  if (payload instanceof Uint8Array) return Buffer.from(payload);
+  if (typeof payload === "string") return Buffer.from(payload);
+  if (payload instanceof ArrayBuffer) return Buffer.from(payload);
+  if (typeof payload === "object" && payload !== null) {
+    return Buffer.from(JSON.stringify(payload));
+  }
+  return Buffer.from(String(payload ?? ""));
+};
 
+const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
+
+const clientModeAvailable = (mode: Mode): boolean => {
+  if (mode === "ts") return true;
+  if (mode === "native-lws") return availableLws && isNativeAvailable();
+  return availableLibsocket && isNativeAvailable();
+};
+
+const serverModeAvailable = (preferNative: boolean): boolean => {
+  if (!preferNative) return true;
+  return isNativeServerAvailable();
+};
+
+type ScenarioResult = {
+  id: string;
+  serverMode: Mode;
+  clientMode: Mode;
+  durationMs: number;
+  messagesReceived: number;
+  bytesReceived: number;
+  skipped?: boolean;
+  reason?: string;
+};
+
+async function waitForCompletion(
+  predicate: () => boolean,
+  timeoutMs: number,
+): Promise<boolean> {
+  const start = performance.now();
+  while (performance.now() - start < timeoutMs) {
+    if (predicate()) return true;
+    await sleep(5);
+  }
+  return predicate();
+}
+
+async function runScenario({
+  id,
+  preferNativeServer,
+  clientMode,
+}: Scenario): Promise<ScenarioResult> {
+  if (!clientModeAvailable(clientMode)) {
+    return {
+      id,
+      clientMode,
+      serverMode: preferNativeServer ? "native-lws" : "ts",
+      durationMs: 0,
+      messagesReceived: 0,
+      bytesReceived: 0,
+      skipped: true,
+      reason: "Native client backend unavailable",
+    };
+  }
+
+  if (!serverModeAvailable(preferNativeServer)) {
+    return {
+      id,
+      clientMode,
+      serverMode: "ts",
+      durationMs: 0,
+      messagesReceived: 0,
+      bytesReceived: 0,
+      skipped: true,
+      reason: "Native server backend unavailable",
+    };
+  }
+
+  type BenchServerOptions = QWormholeServerOptions<Buffer> & {
+    preferNative?: boolean;
+  };
+  const serverResult = createQWormholeServer({
+    host: "127.0.0.1",
+    port: 0,
+    framing: "none",
+    serializer: toBytes,
+    deserializer: (data: Buffer) => data as Buffer,
+    preferNative: preferNativeServer,
+  } as BenchServerOptions);
+  const serverMode = serverResult.mode;
+  const serverInstance = serverResult.server;
+
+  const address = await serverInstance.listen();
   const port = address.port;
+
   let tsClient: QWormholeClient<Buffer> | null = null;
   let nativeClient: NativeTcpClient | null = null;
-
-  if (mode === "ts") {
+  if (clientMode === "ts") {
     tsClient = new QWormholeClient<Buffer>({
       host: "127.0.0.1",
       port,
-      framing: "none", // raw bytes for apples-to-apples comparison
+      framing: "none",
+      serializer: toBytes,
+      deserializer: (data: Buffer) => data,
     });
     await tsClient.connect();
   } else {
-    const backend = mode === "native-lws" ? "lws" : "libsocket";
+    const backend = clientMode === "native-lws" ? "lws" : "libsocket";
     nativeClient = new NativeTcpClient(backend);
     nativeClient.connect("127.0.0.1", port);
   }
+
+  let messagesReceived = 0;
+  let bytesReceived = 0;
+  const onMessage = ({ data }: { data: Buffer }) => {
+    const buffer = Buffer.isBuffer(data) ? data : toBytes(data);
+    messagesReceived += 1;
+    bytesReceived += buffer.length;
+  };
+  serverInstance.on("message", onMessage as never);
 
   const start = performance.now();
   for (let i = 0; i < TOTAL_MESSAGES; i++) {
@@ -91,14 +189,10 @@ async function run(mode: Mode) {
     }
   }
 
-  const waitStart = performance.now();
-  while (
-    receivedBytes < PAYLOAD.length * TOTAL_MESSAGES &&
-    performance.now() - waitStart < TIMEOUT_MS
-  ) {
-    await new Promise(r => setTimeout(r, 10));
-  }
+  await waitForCompletion(() => messagesReceived >= TOTAL_MESSAGES, TIMEOUT_MS);
   const duration = performance.now() - start;
+
+  serverInstance.off("message", onMessage as never);
 
   if (tsClient) {
     tsClient.disconnect();
@@ -106,47 +200,47 @@ async function run(mode: Mode) {
   if (nativeClient) {
     nativeClient.close();
   }
-  server.close();
+  await serverInstance.close();
 
   return {
+    id,
+    serverMode: serverMode as Mode,
+    clientMode,
     durationMs: duration,
-    receivedBytes,
-    messagesReceived: Math.floor(receivedBytes / PAYLOAD.length),
+    messagesReceived,
+    bytesReceived,
   };
 }
 
 async function main() {
   const modes = parseModeArg();
-  const results: Record<string, any> = {};
+  const results: ScenarioResult[] = [];
 
-  for (const mode of modes) {
-    if (mode === "ts") {
-      results["ts"] = await run("ts");
-    } else if (mode === "native-lws" && isNativeAvailable() && availableLws) {
-      results["native-lws"] = await run("native-lws");
-    } else if (
-      mode === "native-libsocket" &&
-      isNativeAvailable() &&
-      availableLibsocket
-    ) {
-      results["native-libsocket"] = await run("native-libsocket");
-    }
+  for (const scenario of scenarios) {
+    if (!modes.includes(scenario.clientMode)) continue;
+    const res = await runScenario(scenario);
+    results.push(res);
   }
 
-  // Print JSON
   // eslint-disable-next-line no-console
   console.log(JSON.stringify(results, null, 2));
 
-  // Print summary table
-  const pad = (s: string, n: number) => s.padEnd(n);
-  const header = `${pad("Backend", 18)}${pad("Duration (ms)", 16)}${pad("Messages", 12)}${pad("Bytes", 12)}`;
+  const pad = (s: string, n: number) => s.toString().padEnd(n);
+  const header = `${pad("Scenario", 28)}${pad("Server", 15)}${pad("Client", 15)}${pad(
+    "Duration (ms)",
+    16,
+  )}${pad("Messages", 12)}${pad("Bytes", 12)}${pad("Status", 10)}`;
   console.log("\n" + header);
   console.log("-".repeat(header.length));
-  for (const mode of modes) {
-    const r = results[mode];
-    if (!r) continue;
+  for (const res of results) {
     console.log(
-      `${pad(mode, 18)}${pad(r.durationMs.toFixed(2), 16)}${pad(r.messagesReceived + "", 12)}${pad(r.receivedBytes + "", 12)}`,
+      `${pad(res.id, 28)}${pad(res.serverMode, 15)}${pad(res.clientMode, 15)}${pad(
+        res.durationMs ? res.durationMs.toFixed(2) : "-",
+        16,
+      )}${pad(`${res.messagesReceived ?? "-"}`, 12)}${pad(
+        `${res.bytesReceived ?? "-"}`,
+        12,
+      )}${pad(res.skipped ? "skipped" : "ok", 10)}`,
     );
   }
 }

@@ -1,6 +1,11 @@
 import { QWormholeClient } from "./client";
 import { QWormholeServer } from "./server";
 import { getNativeBackend, isNativeAvailable, NativeTcpClient } from "./native";
+import {
+  getNativeServerBackend,
+  isNativeServerAvailable,
+  NativeQWormholeServer,
+} from "./native-server";
 // import { QWormholeError } from "./errors";
 import type {
   QWormholeClientOptions,
@@ -51,16 +56,43 @@ export function createQWormholeClient<TMessage = Buffer>(
   };
 }
 
+export interface CreateServerOptions<
+  TMessage,
+> extends QWormholeServerOptions<TMessage> {
+  preferNative?: boolean;
+  forceTs?: boolean;
+}
+
 export interface CreateServerResult<TMessage> {
-  server: QWormholeServer<TMessage>;
-  mode: "ts";
+  server: QWormholeServer<TMessage> | NativeQWormholeServer<TMessage>;
+  mode: TransportMode;
+  nativeAvailable: boolean;
+  nativeBackend: NativeBackend | null;
 }
 
 /**
  * Creates a server. Native server support is not available, so this always returns the TS server.
  */
 export function createQWormholeServer<TMessage = Buffer>(
-  options: QWormholeServerOptions<TMessage>,
+  options: CreateServerOptions<TMessage>,
 ): CreateServerResult<TMessage> {
-  return { server: new QWormholeServer<TMessage>(options), mode: "ts" };
+  const backend = getNativeServerBackend();
+  const nativeReady = isNativeServerAvailable();
+
+  if (!options.forceTs && options.preferNative && nativeReady) {
+    const resolvedBackend = backend ?? "lws";
+    return {
+      server: new NativeQWormholeServer<TMessage>(options, resolvedBackend),
+      mode: resolvedBackend === "lws" ? "native-lws" : "native-libsocket",
+      nativeAvailable: true,
+      nativeBackend: resolvedBackend,
+    };
+  }
+
+  return {
+    server: new QWormholeServer<TMessage>(options),
+    mode: "ts",
+    nativeAvailable: nativeReady,
+    nativeBackend: backend,
+  };
 }

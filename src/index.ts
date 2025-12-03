@@ -14,6 +14,11 @@ export {
   createCborDeserializer,
 } from "./codecs";
 export { NativeTcpClient, isNativeAvailable, getNativeBackend } from "./native";
+export {
+  NativeQWormholeServer,
+  isNativeServerAvailable,
+  getNativeServerBackend,
+} from "./native-server";
 export { createQWormholeClient, createQWormholeServer } from "./factory";
 export { QWormholeError } from "./errors";
 export type { QWormholeErrorCode } from "./errors";

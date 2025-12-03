@@ -40,6 +40,7 @@
   so peers can degrade gracefully according to `scp-capabilities.md`.
 - Use Zod schemas (now added as dev dependency) to validate handshake payloads in both TS and native paths before sending/accepting them.
 - Native server telemetry should still emit NV/intent/shard events exactly as the TS server does, feeding the spec’s negentropy/state models.
+- Telemetry/metadata tagging: emit `transport=ts|native`, `backend=lws|libsocket`, `abi=<node_abi>`, `platform=<os/arch>`, and `fallbackReason=<string>` for CI/ops dashboards.
 
 ### Error-handling & Fallback Rules
 1. Binding missing → log `[native-server] binding not found, falling back to TS` once per process.
@@ -72,4 +73,12 @@
 - Document operational toggles (`QWORMHOLE_NATIVE=force-ts`, `preferNative` flags) in `README.md` so ops know how to control deployments.
 
 ---
+
+## Device Registry Integration (optional)
+
+- **Boundary:** Keep a clear control-plane boundary (IPC/gRPC) between QWormhole transport and the device-registry/wireguard-fpga controller. Transport emits telemetry and link state; registry owns policy and keys.
+- **DTOs/schemas:** Define protobuf/JSON for peer registration, keys, routes, health, and transport mode (ts/native) signals.
+- **Health probes:** Surface transport health (connectivity, RTT, reconnects, mode, fallbackReason) and FPGA health (link up/down, crypto engine status, CSR checks) through the registry adapter.
+- **Policy toggles:** Allow the registry to force TS or native per peer/region (e.g., `forceTs`, `preferNative`), and propagate those into the transport factory/loader.
+- **Docs:** Capture HW/SW partitioning (wire-speed dataplane vs. software control plane) and how transport telemetry feeds registry decisions.
 These steps give Codex a clear target for implementing the native server wrapper while keeping the TypeScript path reliable. Once Codex lands the bindings, we’ll plug them into the factory, apply the Zod-validated handshake, and light up the benchmark matrix above.
