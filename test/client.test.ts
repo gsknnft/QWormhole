@@ -158,6 +158,12 @@ describe("QWormholeClient", () => {
       throw err;
     };
     client.on("error", ignoreReset);
+    const swallowProcessReset = (err: NodeJS.ErrnoException) => {
+      if (err?.code === "ECONNRESET" || err?.code === "EPIPE") return;
+      process.off("uncaughtException", swallowProcessReset);
+      throw err;
+    };
+    process.prependListener("uncaughtException", swallowProcessReset);
     const reconnecting = new Promise(resolve =>
       client.once("reconnecting", resolve),
     );
@@ -169,6 +175,7 @@ describe("QWormholeClient", () => {
     client.socket?.emit("close", true);
     activeSocket?.destroy();
     await reconnecting;
+    process.off("uncaughtException", swallowProcessReset);
     client.off("error", ignoreReset);
     client.disconnect();
   });
