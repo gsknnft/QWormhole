@@ -469,7 +469,7 @@ Native is optional; the TS transport works everywhere. Two native addons are ava
 
 TLS support for native mode mirrors the TypeScript transport when the libwebsockets backend is loaded. Provide the same `tls` object and the native client will load your PEM/DER blobs, enforce ALPN, and surface the TLS metadata in handshake tags. The legacy libsocket backend is plaintext-only; requesting TLS while it is active throws so you never unknowingly downgrade security.
 
-> **Server bindings:** the libwebsockets client path ships today; the native server wrapper exists but is still experimental (coverage hovers around 60% and no prebuilt `.node` is published yet). Until native parity lands, the TypeScript server remains the supported default.
+> **Server bindings:** the libwebsockets native server wrapper is now implemented and available for testing (`QWormholeServerWrapper` in `qwormhole_lws.node`). It supports the core server lifecycle (`listen`, `close`, `broadcast`, `shutdown`), connection tracking, TLS options, and event emission. Coverage is improving but the TypeScript server remains the recommended default for production until the native server reaches full parity. Set `preferNative: true` on `createQWormholeServer()` to opt in to the experimental native server.
 
 macOS runners always bypass the libsocket target; they will build the libwebsockets backend when toolchains are present and fall back to TS otherwise. On Linux/WSL you can still disable libsocket explicitly via `QWORMHOLE_BUILD_LIBSOCKET=0` if you only need libwebsockets.
 
@@ -524,15 +524,22 @@ Use WireGuard, SSH tunnels, or TLS termination if required.
 Secure Streams will provide encrypted, multiplexed channels.
 
 ## Known issues / roadmap
-- Server transport is TS-only; native server bindings (libwebsockets/libsocket) are planned.
+- Native server wrapper is now implemented but still experimental; the TypeScript server is recommended for production.
 - More telemetry/export hooks and Secure Streams are planned for a later release.
 
 ### Focus items (v1.x)
-1. Native server parity + automated coverage
-2. TLS playbooks (mTLS, Let's Encrypt, WireGuard interop) so operators can copy/paste secure deployments
+1. Native server parity + automated coverage (wrapper implemented, testing in progress)
+2. TLS playbooks (mTLS, Let's Encrypt, WireGuard interop) — see [docs/tls-examples.md](docs/tls-examples.md)
 3. Sovereign tunnel upgrades: session key rotation, replay guards, forward secrecy toggle
 4. SCP semantic layer reference implementation + clearer boundary docs
 5. QUIC/WebTransport exploration for high-latency meshes
+
+## 📚 Documentation
+
+- [TLS Examples](docs/tls-examples.md) — Mutual TLS, Let's Encrypt, client certs, fingerprint pinning
+- [Mesh Network Tutorial](docs/mesh-network-tutorial.md) — Building mesh networks with WireGuard
+- [Deployment Patterns](docs/deployment-patterns.md) — Docker, Kubernetes, Systemd, PM2
+- [Security Policy](SECURITY.md) — Vulnerability reporting and security considerations
 
 ## 🗺 Roadmap
 

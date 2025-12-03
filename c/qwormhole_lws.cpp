@@ -6,6 +6,8 @@
 #include <cstdint>
 #include <cstring>
 #include <deque>
+#include <map>
+#include <memory>
 #include <mutex>
 #include <string>
 #include <thread>
@@ -459,8 +461,693 @@ int LwsClientWrapper::Callback(struct lws* wsi,
   return 0;
 }
 
+// ---------------------------------------------------------------------------
+// LwsServerWrapper - Native server implementation using libwebsockets
+// ---------------------------------------------------------------------------
+
+class LwsServerWrapper : public Napi::ObjectWrap<LwsServerWrapper> {
+ public:
+  static Napi::Object Init(Napi::Env env, Napi::Object exports);
+  explicit LwsServerWrapper(const Napi::CallbackInfo& info);
+  ~LwsServerWrapper() override;
+
+  static int ServerCallback(struct lws* wsi, enum lws_callback_reasons reason,
+                            void* user, void* in, size_t len);
+
+ private:
+  struct ServerOptions {
+    std::string host;
+    uint16_t port = 0;
+    bool use_tls = false;
+    bool request_cert = false;
+    bool reject_unauthorized = true;
+    std::string alpn_list;
+    std::vector<uint8_t> tls_ca;
+    std::vector<uint8_t> tls_cert;
+    std::vector<uint8_t> tls_key;
+    std::string tls_passphrase;
+    size_t max_backpressure_bytes = 5 * 1024 * 1024;
+  };
+
+  struct ClientConnection {
+    std::string id;
+    struct lws* wsi;
+    std::string remote_address;
+    uint16_t remote_port;
+    std::deque<std::vector<uint8_t>> send_queue;
+    size_t queued_bytes;
+    bool backpressured;
+  };
+
+  // N-API methods
+  Napi::Value Listen(const Napi::CallbackInfo& info);
+  Napi::Value Close(const Napi::CallbackInfo& info);
+  Napi::Value Broadcast(const Napi::CallbackInfo& info);
+  Napi::Value Shutdown(const Napi::CallbackInfo& info);
+  Napi::Value GetConnection(const Napi::CallbackInfo& info);
+  Napi::Value GetConnectionCount(const Napi::CallbackInfo& info);
+
+  void ServiceLoop();
+  void Stop();
+  std::string GenerateId();
+  ServerOptions ParseServerOptions(const Napi::CallbackInfo& info);
+
+  void EmitEvent(const std::string& event, Napi::Object payload);
+  void EmitListening(uint16_t port);
+  void EmitConnection(const std::string& client_id);
+  void EmitMessage(const std::string& client_id, const std::vector<uint8_t>& data);
+  void EmitClientClosed(const std::string& client_id, bool had_error);
+  void EmitError(const std::string& message);
+  void EmitBackpressure(const std::string& client_id, size_t queued_bytes, size_t threshold);
+  void EmitDrain(const std::string& client_id);
+  void EmitClose();
+
+  std::atomic<bool> listening_{false};
+  std::atomic<bool> closing_{false};
+  struct lws_context* context_ = nullptr;
+  std::thread service_thread_;
+  std::mutex mutex_;
+  std::map<struct lws*, std::shared_ptr<ClientConnection>> connections_;
+  std::map<std::string, std::shared_ptr<ClientConnection>> connections_by_id_;
+  ServerOptions options_;
+  uint64_t next_id_ = 0;
+
+  // Thread-safe function for emitting events to JS
+  Napi::ThreadSafeFunction tsfn_;
+  Napi::ObjectReference self_ref_;
+};
+
+static struct lws_protocols kServerProtocols[] = {
+    {
+        "qwormhole-server",
+        LwsServerWrapper::ServerCallback,
+        0,
+        16 * 1024,
+    },
+    {nullptr, nullptr, 0, 0},
+};
+
+static LwsServerWrapper* GetServerSelf(struct lws* wsi) {
+  struct lws_context* ctx = lws_get_context(wsi);
+  return static_cast<LwsServerWrapper*>(lws_context_user(ctx));
+}
+
+LwsServerWrapper::LwsServerWrapper(const Napi::CallbackInfo& info)
+    : Napi::ObjectWrap<LwsServerWrapper>(info) {
+  options_ = ParseServerOptions(info);
+}
+
+LwsServerWrapper::~LwsServerWrapper() {
+  Stop();
+  if (!tsfn_.IsAborted()) {
+    tsfn_.Release();
+  }
+}
+
+Napi::Object LwsServerWrapper::Init(Napi::Env env, Napi::Object exports) {
+  Napi::Function func =
+      DefineClass(env, "QWormholeServerWrapper",
+                  {
+                      InstanceMethod<&LwsServerWrapper::Listen>("listen"),
+                      InstanceMethod<&LwsServerWrapper::Close>("close"),
+                      InstanceMethod<&LwsServerWrapper::Broadcast>("broadcast"),
+                      InstanceMethod<&LwsServerWrapper::Shutdown>("shutdown"),
+                      InstanceMethod<&LwsServerWrapper::GetConnection>("getConnection"),
+                      InstanceMethod<&LwsServerWrapper::GetConnectionCount>("getConnectionCount"),
+                  });
+
+  exports.Set("QWormholeServerWrapper", func);
+  return exports;
+}
+
+LwsServerWrapper::ServerOptions LwsServerWrapper::ParseServerOptions(
+    const Napi::CallbackInfo& info) {
+  Napi::Env env = info.Env();
+  ServerOptions opts;
+
+  if (info.Length() == 0 || !info[0].IsObject()) {
+    return opts;
+  }
+
+  Napi::Object obj = info[0].As<Napi::Object>();
+
+  if (obj.Has("host") && obj.Get("host").IsString()) {
+    opts.host = obj.Get("host").As<Napi::String>().Utf8Value();
+  }
+  if (obj.Has("port") && obj.Get("port").IsNumber()) {
+    opts.port = static_cast<uint16_t>(obj.Get("port").As<Napi::Number>().Uint32Value());
+  }
+  if (obj.Has("maxBackpressureBytes") && obj.Get("maxBackpressureBytes").IsNumber()) {
+    opts.max_backpressure_bytes = obj.Get("maxBackpressureBytes").As<Napi::Number>().Int64Value();
+  }
+
+  // TLS options
+  if (obj.Has("tls") && obj.Get("tls").IsObject()) {
+    Napi::Object tls = obj.Get("tls").As<Napi::Object>();
+
+    if (tls.Has("enabled") && tls.Get("enabled").IsBoolean()) {
+      opts.use_tls = tls.Get("enabled").As<Napi::Boolean>().Value();
+    }
+    if (tls.Has("requestCert") && tls.Get("requestCert").IsBoolean()) {
+      opts.request_cert = tls.Get("requestCert").As<Napi::Boolean>().Value();
+    }
+    if (tls.Has("rejectUnauthorized") && tls.Get("rejectUnauthorized").IsBoolean()) {
+      opts.reject_unauthorized = tls.Get("rejectUnauthorized").As<Napi::Boolean>().Value();
+    }
+    if (tls.Has("alpnProtocols") && tls.Get("alpnProtocols").IsArray()) {
+      Napi::Array protocols = tls.Get("alpnProtocols").As<Napi::Array>();
+      std::string alpn;
+      for (uint32_t i = 0; i < protocols.Length(); i++) {
+        if (i > 0) alpn += ",";
+        alpn += protocols.Get(i).As<Napi::String>().Utf8Value();
+      }
+      opts.alpn_list = alpn;
+    }
+    if (tls.Has("passphrase") && tls.Get("passphrase").IsString()) {
+      opts.tls_passphrase = tls.Get("passphrase").As<Napi::String>().Utf8Value();
+    }
+
+    auto assignBuffer = [&](const char* prop, std::vector<uint8_t>& target) {
+      if (!tls.Has(prop)) return;
+      Napi::Value value = tls.Get(prop);
+      if (value.IsBuffer()) {
+        auto buf = value.As<Napi::Buffer<uint8_t>>();
+        target.assign(buf.Data(), buf.Data() + buf.Length());
+      } else if (value.IsString()) {
+        auto str = value.As<Napi::String>().Utf8Value();
+        target.assign(str.begin(), str.end());
+      }
+    };
+
+    assignBuffer("ca", opts.tls_ca);
+    assignBuffer("cert", opts.tls_cert);
+    assignBuffer("key", opts.tls_key);
+
+    if (!opts.tls_cert.empty() || !opts.tls_key.empty()) {
+      opts.use_tls = true;
+    }
+  }
+
+  return opts;
+}
+
+std::string LwsServerWrapper::GenerateId() {
+  std::lock_guard<std::mutex> lock(mutex_);
+  return "conn-" + std::to_string(++next_id_);
+}
+
+Napi::Value LwsServerWrapper::Listen(const Napi::CallbackInfo& info) {
+  Napi::Env env = info.Env();
+
+  if (listening_ || context_) {
+    auto deferred = Napi::Promise::Deferred::New(env);
+    deferred.Reject(Napi::Error::New(env, "Server already listening").Value());
+    return deferred.Promise();
+  }
+
+  // Store reference to self for event emission
+  self_ref_ = Napi::ObjectReference::New(info.This().As<Napi::Object>(), 1);
+
+  // Create thread-safe function for emitting events
+  tsfn_ = Napi::ThreadSafeFunction::New(
+      env,
+      Napi::Function::New(env, [](const Napi::CallbackInfo&) {}),
+      "QWormholeServerEvents",
+      0,
+      1);
+
+  closing_ = false;
+
+  struct lws_context_creation_info cinfo;
+  std::memset(&cinfo, 0, sizeof cinfo);
+  cinfo.port = options_.port;
+  cinfo.protocols = kServerProtocols;
+  cinfo.user = this;
+  cinfo.options = LWS_SERVER_OPTION_DO_SSL_GLOBAL_INIT;
+  cinfo.pt_serv_buf_size = 16 * 1024;
+
+  if (!options_.host.empty() && options_.host != "0.0.0.0") {
+    cinfo.iface = options_.host.c_str();
+  }
+
+  // TLS configuration
+  if (options_.use_tls) {
+    cinfo.options |= LWS_SERVER_OPTION_DO_SSL_GLOBAL_INIT;
+
+    if (!options_.tls_cert.empty()) {
+      cinfo.server_ssl_cert_mem = options_.tls_cert.data();
+      cinfo.server_ssl_cert_mem_len = static_cast<unsigned int>(options_.tls_cert.size());
+    }
+    if (!options_.tls_key.empty()) {
+      cinfo.server_ssl_private_key_mem = options_.tls_key.data();
+      cinfo.server_ssl_private_key_mem_len = static_cast<unsigned int>(options_.tls_key.size());
+    }
+    if (!options_.tls_ca.empty()) {
+      cinfo.server_ssl_ca_mem = options_.tls_ca.data();
+      cinfo.server_ssl_ca_mem_len = static_cast<unsigned int>(options_.tls_ca.size());
+    }
+    if (!options_.tls_passphrase.empty()) {
+      cinfo.server_ssl_private_key_password = options_.tls_passphrase.c_str();
+    }
+    if (options_.request_cert) {
+      cinfo.options |= LWS_SERVER_OPTION_REQUIRE_VALID_OPENSSL_CLIENT_CERT;
+    }
+  }
+
+  context_ = lws_create_context(&cinfo);
+  if (!context_) {
+    auto deferred = Napi::Promise::Deferred::New(env);
+    deferred.Reject(Napi::Error::New(env, "Failed to create server context").Value());
+    return deferred.Promise();
+  }
+
+  listening_ = true;
+  service_thread_ = std::thread(&LwsServerWrapper::ServiceLoop, this);
+
+  // Return address info
+  auto deferred = Napi::Promise::Deferred::New(env);
+  Napi::Object address = Napi::Object::New(env);
+  address.Set("address", options_.host.empty() ? "0.0.0.0" : options_.host);
+  address.Set("port", options_.port);
+  address.Set("family", "IPv4");
+  deferred.Resolve(address);
+
+  EmitListening(options_.port);
+
+  return deferred.Promise();
+}
+
+void LwsServerWrapper::ServiceLoop() {
+  while (!closing_ && listening_) {
+    int result = lws_service(context_, 50);
+    if (result < 0) {
+      break;
+    }
+  }
+  listening_ = false;
+}
+
+void LwsServerWrapper::Stop() {
+  closing_ = true;
+  listening_ = false;
+
+  if (context_) {
+    lws_cancel_service(context_);
+  }
+
+  if (service_thread_.joinable()) {
+    service_thread_.join();
+  }
+
+  {
+    std::lock_guard<std::mutex> lock(mutex_);
+    connections_.clear();
+    connections_by_id_.clear();
+  }
+
+  if (context_) {
+    lws_context_destroy(context_);
+    context_ = nullptr;
+  }
+}
+
+Napi::Value LwsServerWrapper::Close(const Napi::CallbackInfo& info) {
+  Napi::Env env = info.Env();
+
+  Stop();
+  EmitClose();
+
+  auto deferred = Napi::Promise::Deferred::New(env);
+  deferred.Resolve(env.Undefined());
+  return deferred.Promise();
+}
+
+Napi::Value LwsServerWrapper::Broadcast(const Napi::CallbackInfo& info) {
+  Napi::Env env = info.Env();
+
+  if (info.Length() < 1) {
+    Napi::TypeError::New(env, "broadcast(data) required").ThrowAsJavaScriptException();
+    return env.Undefined();
+  }
+
+  std::vector<uint8_t> data;
+  if (info[0].IsBuffer()) {
+    auto buf = info[0].As<Napi::Buffer<uint8_t>>();
+    data.assign(buf.Data(), buf.Data() + buf.Length());
+  } else if (info[0].IsString()) {
+    std::string str = info[0].As<Napi::String>().Utf8Value();
+    data.assign(str.begin(), str.end());
+  } else {
+    // Serialize object to JSON
+    Napi::Object global = env.Global();
+    Napi::Object json = global.Get("JSON").As<Napi::Object>();
+    Napi::Function stringify = json.Get("stringify").As<Napi::Function>();
+    std::string str = stringify.Call(json, {info[0]}).As<Napi::String>().Utf8Value();
+    data.assign(str.begin(), str.end());
+  }
+
+  {
+    std::lock_guard<std::mutex> lock(mutex_);
+    for (auto& [wsi, conn] : connections_) {
+      conn->send_queue.push_back(data);
+      conn->queued_bytes += data.size();
+      lws_callback_on_writable(wsi);
+    }
+  }
+
+  if (context_) {
+    lws_cancel_service(context_);
+  }
+
+  return env.Undefined();
+}
+
+Napi::Value LwsServerWrapper::Shutdown(const Napi::CallbackInfo& info) {
+  Napi::Env env = info.Env();
+
+  int graceful_ms = 1000;
+  if (info.Length() >= 1 && info[0].IsNumber()) {
+    graceful_ms = info[0].As<Napi::Number>().Int32Value();
+  }
+
+  // For now, just do immediate shutdown
+  // TODO: Implement graceful shutdown with timeout
+  Stop();
+  EmitClose();
+
+  auto deferred = Napi::Promise::Deferred::New(env);
+  deferred.Resolve(env.Undefined());
+  return deferred.Promise();
+}
+
+Napi::Value LwsServerWrapper::GetConnection(const Napi::CallbackInfo& info) {
+  Napi::Env env = info.Env();
+
+  if (info.Length() < 1 || !info[0].IsString()) {
+    return env.Undefined();
+  }
+
+  std::string id = info[0].As<Napi::String>().Utf8Value();
+
+  std::lock_guard<std::mutex> lock(mutex_);
+  auto it = connections_by_id_.find(id);
+  if (it == connections_by_id_.end()) {
+    return env.Undefined();
+  }
+
+  Napi::Object conn = Napi::Object::New(env);
+  conn.Set("id", it->second->id);
+  conn.Set("remoteAddress", it->second->remote_address);
+  conn.Set("remotePort", it->second->remote_port);
+  return conn;
+}
+
+Napi::Value LwsServerWrapper::GetConnectionCount(const Napi::CallbackInfo& info) {
+  std::lock_guard<std::mutex> lock(mutex_);
+  return Napi::Number::New(info.Env(), static_cast<double>(connections_.size()));
+}
+
+// Event emission helpers
+void LwsServerWrapper::EmitListening(uint16_t port) {
+  if (tsfn_.IsAborted()) return;
+
+  auto callback = [this, port](Napi::Env env, Napi::Function) {
+    Napi::Object self = self_ref_.Value();
+    if (self.Has("emit") && self.Get("emit").IsFunction()) {
+      Napi::Function emit = self.Get("emit").As<Napi::Function>();
+      Napi::Object address = Napi::Object::New(env);
+      address.Set("address", options_.host.empty() ? "0.0.0.0" : options_.host);
+      address.Set("port", port);
+      address.Set("family", "IPv4");
+      emit.Call(self, {Napi::String::New(env, "listening"), address});
+    }
+  };
+
+  tsfn_.NonBlockingCall(callback);
+}
+
+void LwsServerWrapper::EmitConnection(const std::string& client_id) {
+  if (tsfn_.IsAborted()) return;
+
+  auto callback = [this, client_id](Napi::Env env, Napi::Function) {
+    Napi::Object self = self_ref_.Value();
+    if (self.Has("emit") && self.Get("emit").IsFunction()) {
+      Napi::Function emit = self.Get("emit").As<Napi::Function>();
+
+      std::lock_guard<std::mutex> lock(mutex_);
+      auto it = connections_by_id_.find(client_id);
+      if (it == connections_by_id_.end()) return;
+
+      Napi::Object conn = Napi::Object::New(env);
+      conn.Set("id", it->second->id);
+      conn.Set("remoteAddress", it->second->remote_address);
+      conn.Set("remotePort", it->second->remote_port);
+      emit.Call(self, {Napi::String::New(env, "connection"), conn});
+    }
+  };
+
+  tsfn_.NonBlockingCall(callback);
+}
+
+void LwsServerWrapper::EmitMessage(const std::string& client_id, const std::vector<uint8_t>& data) {
+  if (tsfn_.IsAborted()) return;
+
+  auto callback = [this, client_id, data](Napi::Env env, Napi::Function) {
+    Napi::Object self = self_ref_.Value();
+    if (self.Has("emit") && self.Get("emit").IsFunction()) {
+      Napi::Function emit = self.Get("emit").As<Napi::Function>();
+
+      std::lock_guard<std::mutex> lock(mutex_);
+      auto it = connections_by_id_.find(client_id);
+      if (it == connections_by_id_.end()) return;
+
+      Napi::Object payload = Napi::Object::New(env);
+      Napi::Object client = Napi::Object::New(env);
+      client.Set("id", it->second->id);
+      client.Set("remoteAddress", it->second->remote_address);
+      client.Set("remotePort", it->second->remote_port);
+      payload.Set("client", client);
+      payload.Set("data", Napi::Buffer<uint8_t>::Copy(env, data.data(), data.size()));
+      emit.Call(self, {Napi::String::New(env, "message"), payload});
+    }
+  };
+
+  tsfn_.NonBlockingCall(callback);
+}
+
+void LwsServerWrapper::EmitClientClosed(const std::string& client_id, bool had_error) {
+  if (tsfn_.IsAborted()) return;
+
+  auto callback = [this, client_id, had_error](Napi::Env env, Napi::Function) {
+    Napi::Object self = self_ref_.Value();
+    if (self.Has("emit") && self.Get("emit").IsFunction()) {
+      Napi::Function emit = self.Get("emit").As<Napi::Function>();
+
+      Napi::Object payload = Napi::Object::New(env);
+      Napi::Object client = Napi::Object::New(env);
+      client.Set("id", client_id);
+      payload.Set("client", client);
+      payload.Set("hadError", had_error);
+      emit.Call(self, {Napi::String::New(env, "clientClosed"), payload});
+    }
+  };
+
+  tsfn_.NonBlockingCall(callback);
+}
+
+void LwsServerWrapper::EmitError(const std::string& message) {
+  if (tsfn_.IsAborted()) return;
+
+  auto callback = [this, message](Napi::Env env, Napi::Function) {
+    Napi::Object self = self_ref_.Value();
+    if (self.Has("emit") && self.Get("emit").IsFunction()) {
+      Napi::Function emit = self.Get("emit").As<Napi::Function>();
+      Napi::Error error = Napi::Error::New(env, message);
+      emit.Call(self, {Napi::String::New(env, "error"), error.Value()});
+    }
+  };
+
+  tsfn_.NonBlockingCall(callback);
+}
+
+void LwsServerWrapper::EmitBackpressure(const std::string& client_id, size_t queued_bytes, size_t threshold) {
+  if (tsfn_.IsAborted()) return;
+
+  auto callback = [this, client_id, queued_bytes, threshold](Napi::Env env, Napi::Function) {
+    Napi::Object self = self_ref_.Value();
+    if (self.Has("emit") && self.Get("emit").IsFunction()) {
+      Napi::Function emit = self.Get("emit").As<Napi::Function>();
+
+      std::lock_guard<std::mutex> lock(mutex_);
+      auto it = connections_by_id_.find(client_id);
+      if (it == connections_by_id_.end()) return;
+
+      Napi::Object payload = Napi::Object::New(env);
+      Napi::Object client = Napi::Object::New(env);
+      client.Set("id", client_id);
+      payload.Set("client", client);
+      payload.Set("queuedBytes", static_cast<double>(queued_bytes));
+      payload.Set("threshold", static_cast<double>(threshold));
+      emit.Call(self, {Napi::String::New(env, "backpressure"), payload});
+    }
+  };
+
+  tsfn_.NonBlockingCall(callback);
+}
+
+void LwsServerWrapper::EmitDrain(const std::string& client_id) {
+  if (tsfn_.IsAborted()) return;
+
+  auto callback = [this, client_id](Napi::Env env, Napi::Function) {
+    Napi::Object self = self_ref_.Value();
+    if (self.Has("emit") && self.Get("emit").IsFunction()) {
+      Napi::Function emit = self.Get("emit").As<Napi::Function>();
+
+      std::lock_guard<std::mutex> lock(mutex_);
+      auto it = connections_by_id_.find(client_id);
+      if (it == connections_by_id_.end()) return;
+
+      Napi::Object payload = Napi::Object::New(env);
+      Napi::Object client = Napi::Object::New(env);
+      client.Set("id", client_id);
+      payload.Set("client", client);
+      emit.Call(self, {Napi::String::New(env, "drain"), payload});
+    }
+  };
+
+  tsfn_.NonBlockingCall(callback);
+}
+
+void LwsServerWrapper::EmitClose() {
+  if (tsfn_.IsAborted()) return;
+
+  auto callback = [this](Napi::Env env, Napi::Function) {
+    Napi::Object self = self_ref_.Value();
+    if (self.Has("emit") && self.Get("emit").IsFunction()) {
+      Napi::Function emit = self.Get("emit").As<Napi::Function>();
+      emit.Call(self, {Napi::String::New(env, "close"), env.Undefined()});
+    }
+  };
+
+  tsfn_.NonBlockingCall(callback);
+}
+
+int LwsServerWrapper::ServerCallback(struct lws* wsi,
+                                     enum lws_callback_reasons reason,
+                                     void* user, void* in, size_t len) {
+  (void)user;
+
+  auto* self = GetServerSelf(wsi);
+  if (!self) return 0;
+
+  switch (reason) {
+    case LWS_CALLBACK_RAW_ADOPT: {
+      // New connection accepted
+      std::string id = self->GenerateId();
+
+      char peer_name[128] = {0};
+      lws_get_peer_simple(wsi, peer_name, sizeof(peer_name));
+
+      auto conn = std::make_shared<ClientConnection>();
+      conn->id = id;
+      conn->wsi = wsi;
+      conn->remote_address = peer_name;
+      conn->remote_port = 0; // libwebsockets doesn't easily expose this
+      conn->queued_bytes = 0;
+      conn->backpressured = false;
+
+      {
+        std::lock_guard<std::mutex> lock(self->mutex_);
+        self->connections_[wsi] = conn;
+        self->connections_by_id_[id] = conn;
+      }
+
+      self->EmitConnection(id);
+      break;
+    }
+
+    case LWS_CALLBACK_RAW_RX: {
+      if (in && len > 0) {
+        std::string client_id;
+        {
+          std::lock_guard<std::mutex> lock(self->mutex_);
+          auto it = self->connections_.find(wsi);
+          if (it != self->connections_.end()) {
+            client_id = it->second->id;
+          }
+        }
+        if (!client_id.empty()) {
+          std::vector<uint8_t> data(static_cast<uint8_t*>(in),
+                                    static_cast<uint8_t*>(in) + len);
+          self->EmitMessage(client_id, data);
+        }
+      }
+      break;
+    }
+
+    case LWS_CALLBACK_RAW_WRITEABLE: {
+      std::shared_ptr<ClientConnection> conn;
+      {
+        std::lock_guard<std::mutex> lock(self->mutex_);
+        auto it = self->connections_.find(wsi);
+        if (it != self->connections_.end()) {
+          conn = it->second;
+        }
+      }
+
+      if (conn && !conn->send_queue.empty()) {
+        auto data = conn->send_queue.front();
+        conn->send_queue.pop_front();
+        conn->queued_bytes -= data.size();
+
+        std::vector<uint8_t> buffer(LWS_PRE + data.size());
+        std::memcpy(buffer.data() + LWS_PRE, data.data(), data.size());
+        ssize_t written = lws_write(wsi, buffer.data() + LWS_PRE,
+                                    data.size(), LWS_WRITE_RAW);
+
+        if (written < 0) {
+          // Write failed, close connection
+          return -1;
+        }
+
+        if (!conn->send_queue.empty()) {
+          lws_callback_on_writable(wsi);
+        } else if (conn->backpressured) {
+          conn->backpressured = false;
+          self->EmitDrain(conn->id);
+        }
+      }
+      break;
+    }
+
+    case LWS_CALLBACK_RAW_CLOSE: {
+      std::string client_id;
+      {
+        std::lock_guard<std::mutex> lock(self->mutex_);
+        auto it = self->connections_.find(wsi);
+        if (it != self->connections_.end()) {
+          client_id = it->second->id;
+          self->connections_by_id_.erase(client_id);
+          self->connections_.erase(it);
+        }
+      }
+      if (!client_id.empty()) {
+        self->EmitClientClosed(client_id, false);
+      }
+      break;
+    }
+
+    default:
+      break;
+  }
+
+  return 0;
+}
+
 Napi::Object InitAll(Napi::Env env, Napi::Object exports) {
-  return LwsClientWrapper::Init(env, exports);
+  LwsClientWrapper::Init(env, exports);
+  LwsServerWrapper::Init(env, exports);
+  return exports;
 }
 
 }  // namespace
