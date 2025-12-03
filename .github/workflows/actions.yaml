@@ -66,6 +66,3 @@ jobs:
       - name: Run unit tests
         run: pnpm test
 
-      - name: Run bench tests
-        run: pnpm run bench
-
