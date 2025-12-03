@@ -7,18 +7,10 @@ import {
   verify,
 } from "node:crypto";
 import { Buffer } from "node:buffer";
-
-export interface NegantropicHandshake {
-  type: "handshake";
-  version?: string;
-  ts: number;
-  nonce: string; // base64
-  publicKey: string; // base64
-  negHash: string; // hex
-  nIndex: number;
-  tags?: Record<string, string | number>;
-  signature: string; // base64
-}
+import {
+  negantropicHandshakeSchema,
+  type NegantropicHandshake,
+} from "../schema/scp";
 
 export interface NegantropicHandshakeParams {
   version?: string;
@@ -82,6 +74,24 @@ class FieldCoherentRNG {
   }
 }
 
+function canonicalizeRecord(value: Record<string, unknown>): string {
+  return JSON.stringify(value, (_, current) => {
+    if (
+      current &&
+      typeof current === "object" &&
+      !Array.isArray(current) &&
+      !Buffer.isBuffer(current)
+    ) {
+      const sorted = Object.keys(current as Record<string, unknown>).sort();
+      return sorted.reduce<Record<string, unknown>>((acc, key) => {
+        acc[key] = (current as Record<string, unknown>)[key];
+        return acc;
+      }, {});
+    }
+    return current;
+  });
+}
+
 /**
  * Build a signed handshake payload that includes negentropic hash and nonce.
  */
@@ -119,9 +129,10 @@ export function createNegantropicHandshake(
     tags: params.tags,
   };
 
+  const canonicalUnsigned = canonicalizeRecord(unsigned);
   const signature = sign(
     null,
-    Buffer.from(JSON.stringify(unsigned)),
+    Buffer.from(canonicalUnsigned),
     createPrivateKey({
       key: Buffer.from(kp.secretKey, "base64"),
       format: "der",
@@ -129,23 +140,27 @@ export function createNegantropicHandshake(
     }),
   ).toString("base64");
 
-  return { ...unsigned, signature };
+  return negantropicHandshakeSchema.parse({ ...unsigned, signature });
 }
 
 /**
  * Verify a negantropic handshake (signature and hash consistency).
  */
 export function verifyNegantropicHandshake(hs: unknown): boolean {
-  if (!isNegantropicHandshake(hs)) {
+  const parsed = negantropicHandshakeSchema.safeParse(hs);
+  if (!parsed.success) {
     return false;
   }
-  const { signature, ...unsigned } = hs;
+  const { signature, ...unsigned } = parsed.data;
   const nIndex = computeNIndex(unsigned.publicKey);
   const expectedHash = deriveNegentropicHash(unsigned.publicKey, nIndex);
   if (unsigned.negHash !== expectedHash) return false;
+  const canonicalUnsigned = canonicalizeRecord(
+    unsigned as Record<string, unknown>,
+  );
   return verify(
     null,
-    Buffer.from(JSON.stringify(unsigned)),
+    Buffer.from(canonicalUnsigned),
     createPublicKey({
       key: Buffer.from(unsigned.publicKey, "base64"),
       format: "der",
@@ -158,13 +173,5 @@ export function verifyNegantropicHandshake(hs: unknown): boolean {
 export function isNegantropicHandshake(
   payload: unknown,
 ): payload is NegantropicHandshake {
-  if (!payload || typeof payload !== "object") return false;
-  const candidate = payload as Partial<NegantropicHandshake>;
-  return (
-    candidate.type === "handshake" &&
-    typeof candidate.publicKey === "string" &&
-    typeof candidate.negHash === "string" &&
-    typeof candidate.nIndex === "number" &&
-    typeof candidate.signature === "string"
-  );
+  return negantropicHandshakeSchema.safeParse(payload).success;
 }

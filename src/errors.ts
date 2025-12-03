@@ -6,6 +6,7 @@ export type QWormholeErrorCode =
   | "E_NATIVE_UNAVAILABLE"
   | "E_INVALID_HANDSHAKE_SIGNATURE"
   | "E_INVALID_HANDSHAKE"
+  | 'E_INVALID_HANDSHAKE_PAYLOAD'
   | "E_INTERFACE_NOT_FOUND";
 
 export class QWormholeError extends Error {

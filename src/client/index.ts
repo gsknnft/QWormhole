@@ -5,6 +5,7 @@ import { TypedEventEmitter } from "../typedEmitter";
 import { resolveInterfaceAddress } from "../utils/netUtils";
 import { QWormholeError } from "../errors";
 import { TokenBucket, PriorityQueue, delay } from "../qos";
+import { handshakePayloadSchema, type HandshakePayload } from "../schema/scp";
 import type {
   QWormholeClientEvents,
   QWormholeClientOptions,
@@ -325,11 +326,14 @@ export class QWormholeClient<TMessage = Buffer> extends TypedEventEmitter<
   }
 
   public async enqueueHandshake(): Promise<void> {
-    const payload = this.options.handshakeSigner?.() ?? {
+    const signerPayload = (this.options.handshakeSigner?.() ??
+      {}) as Partial<HandshakePayload>;
+    const payload = handshakePayloadSchema.parse({
       type: "handshake",
-      version: this.options.protocolVersion,
-      tags: this.options.handshakeTags,
-    };
+      ...signerPayload,
+      version: signerPayload.version ?? this.options.protocolVersion,
+      tags: signerPayload.tags ?? this.options.handshakeTags,
+    });
     this.enqueueSend(payload, { priority: -100 });
   }
 

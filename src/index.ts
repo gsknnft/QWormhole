@@ -27,8 +27,17 @@ export { QWormholeClient as TcpClient } from "./client";
 export {
   createNegantropicHandshake,
   verifyNegantropicHandshake,
-  type NegantropicHandshake,
 } from "./handshake/negantropic-handshake";
+export {
+  type NegantropicHandshake,
+  handshakePayloadSchema,
+  scpCapabilitySetSchema,
+  scpStatePayloadSchema,
+  negantropicHandshakeSchema,
+  type HandshakePayload,
+  type SCPCapabilitySet,
+  type SCPStatePayload,
+} from "./schema/scp";
 export { createConsoleTelemetryLogger } from "./telemetry-logger";
 export { createHandshakeVerifier } from "./handshake/handshake-policy";
 export type {

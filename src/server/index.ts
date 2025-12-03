@@ -9,10 +9,8 @@ import {
   isNegantropicHandshake,
   verifyNegantropicHandshake,
 } from "../handshake/negantropic-handshake";
-import {
-  isHandshakePayload,
-  type HandshakePayload,
-} from "../handshake/handshake-policy";
+import { type HandshakePayload } from "../handshake/handshake-policy";
+import { handshakePayloadSchema } from "../schema/scp";
 import type {
   Payload,
   QWormholeServerConnection,
@@ -403,8 +401,24 @@ export class QWormholeServer<TMessage = Buffer> extends TypedEventEmitter<
     let verified = false;
     try {
       const parsedPayload = JSON.parse(data.toString("utf8"));
-      if (!isHandshakePayload(parsedPayload)) return false;
-      const parsed: HandshakePayload = parsedPayload;
+      const parsedResult = handshakePayloadSchema.safeParse(parsedPayload);
+      if (!parsedResult.success) {
+        this.emit(
+          "error",
+          new QWormholeError(
+            "E_INVALID_HANDSHAKE_PAYLOAD",
+            "Invalid handshake payload",
+          ),
+        );
+        this.clients.delete(connection.id);
+        connection.socket.destroy(new Error("Invalid handshake payload"));
+        this.emit("clientClosed", { client: connection, hadError: true });
+        this.telemetry.connections = this.clients.size;
+        this.publishTelemetry();
+        connection.handshakePending = false;
+        return true;
+      }
+      const parsed: HandshakePayload = parsedResult.data;
       if (
         this.options.protocolVersion &&
         parsed.version &&

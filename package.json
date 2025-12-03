@@ -92,8 +92,7 @@
     "typescript": "^5.9.3",
     "typescript-eslint": "^8.46.4",
     "vite": "7.2.4",
-    "vitest": "^4.0.9",
-    "zod": "^4.1.13"
+    "vitest": "^4.0.9"
   },
   "publishConfig": {
     "access": "restricted"
@@ -106,6 +105,7 @@
     "tweetnacl-util": "^0.15.1",
     "bindings": "^1.5.0",
     "cbor": "^9.0.1",
-    "ws": "^8.18.3"
+    "ws": "^8.18.3",
+    "zod": "^4.1.13"
   }
 }

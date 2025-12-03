@@ -125,6 +125,47 @@ describe("QWormholeServer handshake rejection", () => {
     await server.close();
   });
 
+  it("rejects handshake payloads that fail schema validation", async () => {
+    const server = new QWormholeServer<any>({
+      host: "127.0.0.1",
+      port: 0,
+      framing: "length-prefixed",
+      protocolVersion: "1.0.0",
+      deserializer: jsonDeserializer,
+    });
+    const address = await server.listen();
+
+    const errorSeen = new Promise<boolean>(resolve => {
+      server.once("error", () => resolve(true));
+    });
+    const closed = new Promise<boolean>(resolve => {
+      server.once("clientClosed", ({ hadError }) => resolve(hadError));
+    });
+
+    const framer = new LengthPrefixedFramer();
+    const socket = net.createConnection(address.port, address.address);
+    const invalid = {
+      type: "handshake",
+      version: "1.0.0",
+      tags: { region: true },
+    };
+    socket.write(framer.encode(Buffer.from(JSON.stringify(invalid))));
+
+    const hadError = await Promise.race([
+      closed,
+      new Promise<boolean>(resolve => setTimeout(() => resolve(false), 800)),
+    ]);
+    const err = await Promise.race([
+      errorSeen,
+      new Promise<boolean>(resolve => setTimeout(() => resolve(false), 800)),
+    ]);
+    expect(hadError).toBe(true);
+    expect(err).toBe(true);
+    expect(server.getConnectionCount()).toBe(0);
+    socket.destroy();
+    await server.close();
+  });
+
   it(
     "rejects invalid negantropic handshake signatures",
     { timeout: 8000 },
@@ -187,7 +228,8 @@ describe("QWormholeServer handshake rejection", () => {
       protocolVersion: "1.0.0",
       deserializer: jsonDeserializer,
       verifyHandshake: (): Promise<never> => Promise.reject(new Error("nope")),
-      onTelemetry: (snapshot: Record<string, unknown>) => telemetry.push({ ...snapshot }),
+      onTelemetry: (snapshot: Record<string, unknown>) =>
+        telemetry.push({ ...snapshot }),
     });
 
     const connectionReady = new Promise<void>(resolve => {
@@ -203,7 +245,9 @@ describe("QWormholeServer handshake rejection", () => {
 
     await connectionReady;
     socket.write(
-      framer.encode(Buffer.from(JSON.stringify({ type: "handshake", version: "1.0.0" }))),
+      framer.encode(
+        Buffer.from(JSON.stringify({ type: "handshake", version: "1.0.0" })),
+      ),
     );
 
     const hadError = await Promise.race([
@@ -237,7 +281,8 @@ describe("QWormholeServer handshake rejection", () => {
     const server = new QWormholeServer<Buffer>({
       host: "127.0.0.1",
       port: 0,
-      onTelemetry: (snapshot: TelemetrySnapshot) => telemetry.push({ ...snapshot }),
+      onTelemetry: (snapshot: TelemetrySnapshot) =>
+        telemetry.push({ ...snapshot }),
     });
     const connectionReady = new Promise<any>(resolve => {
       server.once("connection", client => resolve(client));

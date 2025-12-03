@@ -1,5 +1,13 @@
 //TODO: Full coverage of client tests
-import { describe, it, expect, beforeEach, afterEach } from "vitest";
+import {
+  describe,
+  it,
+  expect,
+  beforeEach,
+  afterEach,
+  beforeAll,
+  afterAll,
+} from "vitest";
 import { QWormholeClient } from "../src/client/index.js";
 import { jsonDeserializer, textDeserializer } from "../src/codecs.js";
 import net from "node:net";
@@ -12,6 +20,19 @@ describe("QWormholeClient", () => {
   let server: QWormholeServer;
   let port: number;
   let address: net.AddressInfo;
+  const swallowProcessReset = (err: NodeJS.ErrnoException) => {
+    if (err?.code === "ECONNRESET" || err?.code === "EPIPE") return;
+    process.off("uncaughtException", swallowProcessReset);
+    throw err;
+  };
+
+  beforeAll(() => {
+    process.on("uncaughtException", swallowProcessReset);
+  });
+
+  afterAll(() => {
+    process.off("uncaughtException", swallowProcessReset);
+  });
 
   beforeEach(async () => {
     server = new QWormholeServer<any>({
@@ -20,6 +41,9 @@ describe("QWormholeClient", () => {
       protocolVersion: "1.0.0",
       framing: "length-prefixed",
       deserializer: jsonDeserializer, // default
+    });
+    server.on("error", () => {
+      // swallow expected connection resets during teardown-heavy tests
     });
     address = await server.listen();
     port = address.port;
@@ -47,6 +71,7 @@ describe("QWormholeClient", () => {
       const client = new QWormholeClient<any>({
         host: "127.0.0.1",
         port: address.port,
+        protocolVersion: "1.0.0",
         deserializer: jsonDeserializer, // <-- use jsonDeserializer here
       });
       await client.connect();
@@ -67,6 +92,7 @@ describe("QWormholeClient", () => {
     const client = new QWormholeClient<string>({
       host: "badhost",
       port,
+      protocolVersion: "1.0.0",
       deserializer: textDeserializer,
       connectTimeoutMs: 100,
       reconnect: { enabled: false },
@@ -82,6 +108,7 @@ describe("QWormholeClient", () => {
     const client = new QWormholeClient<string>({
       host,
       port,
+      protocolVersion: "1.0.0",
       deserializer: textDeserializer,
       requireConnectedForSend: true,
     });
@@ -94,6 +121,7 @@ describe("QWormholeClient", () => {
     const client = new QWormholeClient<string>({
       host,
       port,
+      protocolVersion: "1.0.0",
       deserializer: textDeserializer,
     });
     await client.connect();
@@ -106,6 +134,7 @@ describe("QWormholeClient", () => {
       host: "127.0.0.1",
       port,
       interfaceName: "nonexistent0",
+      protocolVersion: "1.0.0",
       deserializer: jsonDeserializer,
     });
     await expect(client.connect()).rejects.toThrow(
@@ -117,6 +146,7 @@ describe("QWormholeClient", () => {
     const client = new QWormholeClient<string>({
       host: "127.0.0.1",
       port,
+      protocolVersion: "1.0.0",
       idleTimeoutMs: 10,
       deserializer: jsonDeserializer,
     });
@@ -130,6 +160,7 @@ describe("QWormholeClient", () => {
     const client = new QWormholeClient<string>({
       host: "127.0.0.1",
       port,
+      protocolVersion: "1.0.0",
       deserializer: jsonDeserializer,
     });
     await client.connect();
@@ -143,6 +174,7 @@ describe("QWormholeClient", () => {
     const client = new QWormholeClient<string>({
       host: "127.0.0.1",
       port,
+      protocolVersion: "1.0.0",
       deserializer: jsonDeserializer,
       reconnect: {
         enabled: true,
@@ -158,12 +190,6 @@ describe("QWormholeClient", () => {
       throw err;
     };
     client.on("error", ignoreReset);
-    const swallowProcessReset = (err: NodeJS.ErrnoException) => {
-      if (err?.code === "ECONNRESET" || err?.code === "EPIPE") return;
-      process.off("uncaughtException", swallowProcessReset);
-      throw err;
-    };
-    process.prependListener("uncaughtException", swallowProcessReset);
     const reconnecting = new Promise(resolve =>
       client.once("reconnecting", resolve),
     );
@@ -175,7 +201,6 @@ describe("QWormholeClient", () => {
     client.socket?.emit("close", true);
     activeSocket?.destroy();
     await reconnecting;
-    process.off("uncaughtException", swallowProcessReset);
     client.off("error", ignoreReset);
     client.disconnect();
   });
@@ -245,6 +270,7 @@ describe("QWormholeClient", () => {
     const client = new QWormholeClient<string>({
       host: "127.0.0.1",
       port,
+      protocolVersion: "1.0.0",
       deserializer: jsonDeserializer,
       requireConnectedForSend: false,
     });
@@ -255,6 +281,7 @@ describe("QWormholeClient", () => {
     const client = new QWormholeClient<string>({
       host: "127.0.0.1",
       port,
+      protocolVersion: "1.0.0",
       deserializer: jsonDeserializer,
       rateLimitBytesPerSec: 1,
       rateLimitBurstBytes: 1,
@@ -268,6 +295,7 @@ describe("QWormholeClient", () => {
     const client = new QWormholeClient<string>({
       host: "127.0.0.1",
       port,
+      protocolVersion: "1.0.0",
       deserializer: jsonDeserializer,
     });
     await client.connect();

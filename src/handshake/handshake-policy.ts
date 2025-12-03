@@ -1,19 +1,9 @@
-export interface HandshakePayload {
-  type: "handshake";
-  version?: string;
-  tags?: Record<string, unknown>;
-  nIndex?: number;
-  negHash?: string;
-  [key: string]: unknown;
-}
+import { handshakePayloadSchema, type HandshakePayload } from "../schema/scp";
 
-export const isHandshakePayload = (
-  value: unknown,
-): value is HandshakePayload => {
-  if (!value || typeof value !== "object") return false;
-  const candidate = value as Record<string, unknown>;
-  return candidate.type === "handshake";
-};
+export { type HandshakePayload } from "../schema/scp";
+
+export const isHandshakePayload = (value: unknown): value is HandshakePayload =>
+  handshakePayloadSchema.safeParse(value).success;
 
 export interface HandshakePolicyOptions {
   allowedVersions?: string[];
