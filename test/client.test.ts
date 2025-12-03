@@ -13,21 +13,21 @@ describe("QWormholeClient", () => {
   let port: number;
   let address: net.AddressInfo;
 
-beforeEach(async () => {
-  server = new QWormholeServer<any>({
-    host,
-    port: 0,
-    protocolVersion: "1.0.0",
-    framing: "length-prefixed",
-    deserializer: jsonDeserializer, // default
+  beforeEach(async () => {
+    server = new QWormholeServer<any>({
+      host,
+      port: 0,
+      protocolVersion: "1.0.0",
+      framing: "length-prefixed",
+      deserializer: jsonDeserializer, // default
+    });
+    address = await server.listen();
+    port = address.port;
   });
-  address = await server.listen();
-  port = address.port;
-});
 
-afterEach(() => {
-  server.close();
-});
+  afterEach(async () => {
+    await server.close();
+  });
   // beforeEach(async () => {
   //   server = new QWormholeServer<any>({
   //     host: "127.0.0.1",
@@ -165,7 +165,9 @@ afterEach(() => {
     client.on("close", () => {
       // ensure reconnect logic or silent teardown
     });
+    const activeSocket = client.socket;
     client.socket?.emit("close", true);
+    activeSocket?.destroy();
     await reconnecting;
     client.off("error", ignoreReset);
     client.disconnect();
@@ -278,9 +280,7 @@ afterEach(() => {
     client.disconnect();
   });
 
-
-
-/*
+  /*
 
   it("should respect keepAlive and not disconnect prematurely", async () => {
   const client = new QWormholeClient<string>({
@@ -336,7 +336,4 @@ it("should exhaust reconnect attempts", async () => {
   await expect(error).resolves.toBeInstanceOf(Error);
 });
 */
-
-
-
 });
