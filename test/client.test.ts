@@ -13,33 +13,32 @@ describe("QWormholeClient", () => {
   let port: number;
   let address: net.AddressInfo;
 
-  beforeEach(async () => {
-    server = new QWormholeServer<any>({
-      host,
-      port: 0,
-      protocolVersion: "1.0.0",
-      framing: "length-prefixed",
-      deserializer: textDeserializer,
-    });
-    address = await server.listen();
-    port = address.port;
+beforeEach(async () => {
+  server = new QWormholeServer<any>({
+    host,
+    port: 0,
+    protocolVersion: "1.0.0",
+    framing: "length-prefixed",
+    deserializer: jsonDeserializer, // default
   });
+  address = await server.listen();
+  port = address.port;
+});
 
-  afterEach(() => {
-    server.close();
-  });
-
-  beforeEach(async () => {
-    server = new QWormholeServer<any>({
-      host: "127.0.0.1",
-      port: 0,
-      protocolVersion: "1.0.0",
-      framing: "length-prefixed",
-      deserializer: jsonDeserializer, // <-- ensure this is jsonDeserializer
-    });
-    address = await server.listen();
-    port = address.port;
-  });
+afterEach(() => {
+  server.close();
+});
+  // beforeEach(async () => {
+  //   server = new QWormholeServer<any>({
+  //     host: "127.0.0.1",
+  //     port: 0,
+  //     protocolVersion: "1.0.0",
+  //     framing: "length-prefixed",
+  //     deserializer: jsonDeserializer, // <-- ensure this is jsonDeserializer
+  //   });
+  //   address = await server.listen();
+  //   port = address.port;
+  // });
 
   it(
     "should connect to server and send/receive messages",
@@ -162,6 +161,10 @@ describe("QWormholeClient", () => {
     const reconnecting = new Promise(resolve =>
       client.once("reconnecting", resolve),
     );
+    // Also guard 'close' events
+    client.on("close", () => {
+      // ensure reconnect logic or silent teardown
+    });
     client.socket?.emit("close", true);
     await reconnecting;
     client.off("error", ignoreReset);
@@ -274,4 +277,66 @@ describe("QWormholeClient", () => {
     await client.enqueueHandshake();
     client.disconnect();
   });
+
+
+
+
+
+  it("should respect keepAlive and not disconnect prematurely", async () => {
+  const client = new QWormholeClient<string>({
+    host,
+    port,
+    deserializer: jsonDeserializer,
+    keepAlive: true,
+    keepAliveDelayMs: 50,
+  });
+  await client.connect();
+  // Wait a bit longer than keepAliveDelayMs
+  await new Promise(res => setTimeout(res, 100));
+  expect(client.isConnected()).toBe(true);
+  client.disconnect();
+});
+
+it("should emit error if serializer throws", async () => {
+  const client = new QWormholeClient<string>({
+    host,
+    port,
+    serializer: () => { throw new Error("bad serializer"); },
+    deserializer: jsonDeserializer,
+  });
+  await client.connect();
+  const error = new Promise(resolve => client.once("error", resolve));
+  client.send("test");
+  await expect(error).resolves.toBeInstanceOf(Error);
+  client.disconnect();
+});
+
+it("should enforce maxFrameLength", async () => {
+  const client = new QWormholeClient<string>({
+    host,
+    port,
+    deserializer: jsonDeserializer,
+    maxFrameLength: 10,
+  });
+  await client.connect();
+  await expect(client.send("this message is too long"))
+    .rejects.toThrow(/frame length/i);
+  client.disconnect();
+});
+
+it("should exhaust reconnect attempts", async () => {
+  const client = new QWormholeClient<string>({
+    host: "badhost",
+    port,
+    deserializer: jsonDeserializer,
+    reconnect: { enabled: true, maxAttempts: 1, initialDelayMs: 10, maxDelayMs: 20, multiplier: 2 },
+  });
+  const error = new Promise(resolve => client.once("error", resolve));
+  await expect(client.connect()).rejects.toThrow();
+  await expect(error).resolves.toBeInstanceOf(Error);
+});
+
+
+
+
 });

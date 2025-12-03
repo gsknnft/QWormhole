@@ -9,7 +9,7 @@ This document outlines near-term enhancements for @gsknnft/qwormhole. Items are 
  - **Batching / backpressure**: optional batching/coalescing mode; backpressure counters surfaced via telemetry.
 
 ## Install & Tooling
-- **Native build switches**: `QWORMHOLE_NATIVE=0` to skip native, `QWORMHOLE_BUILD_LIBSOCKET=0` to skip libsocket on POSIX if leaning into LWS-only.
+- **Native build switches**: `QWORMHOLE_NATIVE=0` to skip native, `QWORMHOLE_NATIVE=1` to force it, and `QWORMHOLE_BUILD_LIBSOCKET=0` to skip libsocket on Linux/WSL when leaning into LWS-only (macOS now auto-skips libsocket entirely).
 - **Better logging**: add `QWORMHOLE_DEBUG_NATIVE=1` to emit which backend loaded and why fallback happened.
 - **Prebuilt binaries (exploratory)**: evaluate CI-built precompiled addons for common platforms to reduce local toolchain friction.
 

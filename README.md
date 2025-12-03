@@ -109,7 +109,7 @@ client.on("message", console.log);
 - [Install](#install)
 - [Handshake & security](#handshake--security)
 - [Error handling & backpressure](#error-handling--backpressure)
-- [Integration notes](#integration-notes-sigilnetdevice-registrywireguard)
+- [ML adapters](#ml-adapters)
 - [Native backends](#native-backends-libwebsockets--libsocket)
 - [Benchmarks](#benchmarks)
 - [Troubleshooting](#troubleshooting-native-build)
@@ -220,7 +220,7 @@ import { QWormholeRuntime } from '@gsknnft/qwormhole';
 // Runtime: orchestrates client/server with shared defaults and native preference
 const rt = new QWormholeRuntime({
   protocolVersion: '1.0.0',
-  handshakeTags: { service: 'sigilnet', device: 'alpha' },
+  handshakeTags: { service: 'telemetry-core', node: 'alpha' },
   preferNative: true,
   interfaceName: 'wg0',
   rateLimitBytesPerSec: 1_000_000,
@@ -274,6 +274,8 @@ Transport selection order:
 1. `qwormhole_lws.node` (libwebsockets)
 2. `qwormhole.node` (libsocket)
 3. TypeScript fallback
+
+- _macOS automatically skips the libsocket build because Darwin lacks the Linux-only APIs libsocket depends on. Use `QWORMHOLE_NATIVE=1` only if you intentionally want to attempt the unsupported build._
 
 - __Native acceleration when you want it. TypeScript clarity when you need it.__
 
@@ -399,11 +401,39 @@ Install attempts a native build automatically; if native fails, TS remains avail
 - Rate limiting: per-connection token bucket (bytes/sec + burst) and optional client-side rate limits.
 - Errors bubble via the `error` event; telemetry snapshots are delivered via `onTelemetry` (bytesIn/out, connections, backpressure and drain counts).
 
-## ML adapters (optional)
-- Default: lightweight `qworm_torch` adapter computes coherence/entropy/anomaly scores from numeric metrics (no external services).
-- RPC: `QWORMHOLE_ML_ADAPTER=rpc` with `QWORMHOLE_ML_RPC_URL=https://...` posts metrics to your endpoint.
-- Spawn: `QWORMHOLE_ML_ADAPTER=spawn` with `QWORMHOLE_ML_SPAWN_CMD="python -m your_module"` streams metrics to any CLI.
-- Programmatic: `setMLAdapter(createQwormTorchAdapter())` or swap in your own `MLAdapter`.
+## ML adapters
+
+QWormhole now ships with a real ML hook so telemetry can be scored without pulling in an external stack.
+
+- **Default (`qworm_torch`)** – derives entropy/coherence/anomaly scores from any numeric metrics using the same negentropic math the transport uses elsewhere. Installs get useful signals immediately, no RPC required.
+- **RPC adapter** – forward metrics to an HTTP endpoint. Configure with `QWORMHOLE_ML_ADAPTER=rpc` and `QWORMHOLE_ML_RPC_URL=https://...`. Optional `QWORMHOLE_ML_RPC_HEADERS` (JSON or `key:value,key:value`) and `QWORMHOLE_ML_RPC_TIMEOUT`.
+- **Spawn adapter** – shell out to any CLI (legacy Python, Rust CLI, etc.). Set `QWORMHOLE_ML_ADAPTER=spawn`, `QWORMHOLE_ML_SPAWN_CMD="python"`, and `QWORMHOLE_ML_SPAWN_ARGS="-m my.module"`.
+- **Custom adapters** – call `setMLAdapter(createNoopAdapter())` or pass any object matching `{ name, run() }`.
+
+Programmatic usage:
+
+```ts
+import {
+  queryMLLayer,
+  setMLAdapter,
+  createRpcAdapter,
+  createQwormTorchAdapter,
+} from "@gsknnft/qwormhole";
+
+// Keep qworm_torch but tweak thresholds
+setMLAdapter(createQwormTorchAdapter({ sampleLimit: 2048 }));
+
+// Or switch to RPC dynamically
+setMLAdapter(createRpcAdapter({ url: "https://torch.example/ml" }));
+
+const insight = await queryMLLayer({
+  latencyMs: [12, 11, 40, 200, 9],
+  drops: 2,
+});
+console.log(insight);
+```
+
+Adapters can also be selected at runtime via `QWORMHOLE_ML_ADAPTER` (`noop`, `qworm_torch`, `rpc`, `spawn`). When no adapter is configured explicitly, QWormhole defaults to `qworm_torch`.
 
 ## Native backends (libwebsockets + libsocket)
 
@@ -411,6 +441,8 @@ Native is optional; the TS transport works everywhere. Two native addons are ava
 
 - `qwormhole_lws.node` (libwebsockets raw socket backend, preferred, cross-platform: Windows/macOS/Linux)
 - `qwormhole.node` (libsocket backend, Linux/WSL only)
+
+macOS runners always bypass the libsocket target; they will build the libwebsockets backend when toolchains are present and fall back to TS otherwise. On Linux/WSL you can still disable libsocket explicitly via `QWORMHOLE_BUILD_LIBSOCKET=0` if you only need libwebsockets.
 
 Build on Windows (libwebsockets):
 ```bash
@@ -442,6 +474,7 @@ Notes:
 - **node-gyp/toolchain**: ensure VS Build Tools (win) or build-essential (linux) are present.
 - **Platform mismatch (esbuild/rollup)**: reinstall `node_modules` on the target platform instead of reusing from another OS/WSL.
 - **Skip native in CI**: set `QWORMHOLE_NATIVE=0` to avoid native build attempts.
+- **macOS libsocket errors**: Darwin lacks `accept4`, `SIOCGIFINDEX`, and related flags required by libsocket. The installer now skips that backend automatically; force a build only if you are experimenting with a custom libsocket patchset.
 
 ## Platform support
 - Windows: TS + native-lws
