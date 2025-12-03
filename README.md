@@ -136,6 +136,10 @@ pnpm add @gsknnft/qwormhole
 
 QWormhole abstracts the transport layer, selecting native or TS based on availability and preference. The runtime layer handles orchestration, framing, rate limiting, and handshake semantics.
 
+> **SCP vs QWormhole**
+>
+> The Sovereign Compute Protocol (SCP) spec in `spec/` defines the semantic layer: negentropic identity, intent graphs, shard topology, and sovereign registries. QWormhole is the transport ritual that carries those semantics safely across TCP/TLS. Today we ship the transport (handshake tags, negentropy vectors, TLS binding) and expose hooks so the SCP layer can evolve independently. Think of QWormhole as the substrate; SCP rides on top.
+
 **Architecture Overview**
 
   Client (TS/native)
@@ -398,6 +402,11 @@ Install attempts a native build automatically; if native fails, TS remains avail
 - **TLS-aware metadata** – when `tls` options are provided, the client captures peer fingerprints, ALPN, and exported keying material, then merges them into `handshake.tags`. The server pins those fingerprints via `verifyTlsFingerprint`, derives a session-bound key, and attaches the TLS snapshot to `connection.handshake.tls` for your app.
 - **Policy hooks** – `verifyHandshake` and `createHandshakeVerifier` make it easy to reject unwanted versions, tags, or signatures; failures immediately drop the socket and emit `clientClosed(hadError: true)`.
 
+### Negantropic handshake tests
+- Property-based fuzzing (fast-check) now hammers `computeNIndex` with balanced entropy, repeated bytes, malformed Base64, and multi-kilobyte payloads. Every run asserts the metric is finite, non-NaN, and clamped to `[0,1]`.
+- Regression tests cover empties (`""`, `"===="`) plus pathological long strings (`"A".repeat(10_000)`) to guarantee graceful fallbacks instead of entropy collapse.
+- These invariants backstop roadmap targets: native server parity/reconnect logic keep using the same bounded negentropy values, TLS playbooks can bind fingerprints without skew, session-key rotation/replay guards inherit deterministic coherence math, SCP semantics get stable identity vectors, and QUIC/WebTransport research can rely on identical entropy contracts.
+
 ## TLS (optional)
 - **TS transport** – enabling `tls.enabled=true` on the client/server wraps the socket in Node's `tls` module with cert/key/CA, ALPN, passphrase, and mutual-auth toggles. `exportKeyingMaterial` lets you mix TLS secrets into negentropic hashes for additional binding.
 - **Native transport** – the libwebsockets backend now accepts the same `tls` object (PEM strings or buffers) and configures client certs, private keys, CA bundles, passphrases, and ALPN directly inside the native context. The legacy `libsocket` backend remains plaintext-only and will throw if TLS is requested.
@@ -408,6 +417,7 @@ Install attempts a native build automatically; if native fails, TS remains avail
 - **Identity & attestation** – use negantropic handshakes or custom `handshakeSigner` payloads so every socket announces a signed identity with coherence metadata.
 - **Policy enforcement** – `verifyHandshake`, TLS fingerprint pinning, rate limits, and backpressure guards let the server enforce both crypto posture and resource usage before promoting a socket to application traffic.
 - **Layered defense** – TLS metadata is merged into handshake tags, so downstream routers or registries can insist on matching TLS fingerprints *and* negantropic hashes; external tunnels (WireGuard, SSH) remain optional but compose cleanly via `localAddress` / `interfaceName`.
+- **Forward-secrecy roadmap** – sovereign tunnel sessions use long-lived X25519-derived keys today; rotation + replay protection are on the shortlist so meshes that need FS guarantees can opt in without bolting on a second transport.
 
 ## Error handling & backpressure
 - Backpressure protection: server drops connections when `maxBackpressureBytes` is exceeded; emits `backpressure` and `clientClosed`.
@@ -417,6 +427,8 @@ Install attempts a native build automatically; if native fails, TS remains avail
 ## ML adapters
 
 QWormhole now ships with a real ML hook so telemetry can be scored without pulling in an external stack.
+
+> Sovereign/mesh deployments often need to close the loop between transport telemetry (drops, latency skew, entropy collapse) and routing or throttling decisions. The ML adapter API is a portable way to derive those signals (in-process, RPC, or spawned CLI) without forcing any specific analytics stack. If you prefer raw metrics, leave the default adapter alone or swap in `createNoopAdapter`.
 
 - **Default (`qworm_torch`)** – derives entropy/coherence/anomaly scores from any numeric metrics using the same negentropic math the transport uses elsewhere. Installs get useful signals immediately, no RPC required.
 - **RPC adapter** – forward metrics to an HTTP endpoint. Configure with `QWORMHOLE_ML_ADAPTER=rpc` and `QWORMHOLE_ML_RPC_URL=https://...`. Optional `QWORMHOLE_ML_RPC_HEADERS` (JSON or `key:value,key:value`) and `QWORMHOLE_ML_RPC_TIMEOUT`.
@@ -456,6 +468,8 @@ Native is optional; the TS transport works everywhere. Two native addons are ava
 - `qwormhole.node` (libsocket backend, Linux/WSL only)
 
 TLS support for native mode mirrors the TypeScript transport when the libwebsockets backend is loaded. Provide the same `tls` object and the native client will load your PEM/DER blobs, enforce ALPN, and surface the TLS metadata in handshake tags. The legacy libsocket backend is plaintext-only; requesting TLS while it is active throws so you never unknowingly downgrade security.
+
+> **Server bindings:** the libwebsockets client path ships today; the native server wrapper exists but is still experimental (coverage hovers around 60% and no prebuilt `.node` is published yet). Until native parity lands, the TypeScript server remains the supported default.
 
 macOS runners always bypass the libsocket target; they will build the libwebsockets backend when toolchains are present and fall back to TS otherwise. On Linux/WSL you can still disable libsocket explicitly via `QWORMHOLE_BUILD_LIBSOCKET=0` if you only need libwebsockets.
 
@@ -513,12 +527,19 @@ Secure Streams will provide encrypted, multiplexed channels.
 - Server transport is TS-only; native server bindings (libwebsockets/libsocket) are planned.
 - More telemetry/export hooks and Secure Streams are planned for a later release.
 
+### Focus items (v1.x)
+1. Native server parity + automated coverage
+2. TLS playbooks (mTLS, Let's Encrypt, WireGuard interop) so operators can copy/paste secure deployments
+3. Sovereign tunnel upgrades: session key rotation, replay guards, forward secrecy toggle
+4. SCP semantic layer reference implementation + clearer boundary docs
+5. QUIC/WebTransport exploration for high-latency meshes
+
 ## 🗺 Roadmap
 
-Secure Streams
-TLS/TCP wrappers
-Multiplexing
-WebSocket transport
-UDP transport
-Browser transport (WebRTC)
+- Secure Streams
+- TLS/TCP wrappers
+- Multiplexing
+- WebSocket transport
+- UDP transport
+- Browser transport (WebRTC)
 

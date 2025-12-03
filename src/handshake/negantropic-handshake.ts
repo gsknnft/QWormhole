@@ -33,14 +33,17 @@ function calculateEntropy(bytes: Uint8Array): number {
   return entropy || 0;
 }
 
-function computeNIndex(pubKeyB64: string): number {
+export function computeNIndex(pubKeyB64: string): number {
   const bytes = toBytes(pubKeyB64);
   const entropy = Math.max(calculateEntropy(bytes), 1e-6);
   const coherence = bytes.length
     ? bytes[0] / (bytes.reduce((a, b) => a + b, 0) || 1)
     : 0;
   const nIndex = coherence / entropy;
-  return Number.isFinite(nIndex) ? nIndex : 0;
+  if (!Number.isFinite(nIndex)) {
+    return 0;
+  }
+  return Math.min(Math.max(nIndex, 0), 1);
 }
 
 function deriveNegentropicHash(publicKey: string, nIndex: number): string {

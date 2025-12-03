@@ -1,4 +1,5 @@
 import { describe, it, expect } from "vitest";
+import fc from "fast-check";
 import { jsonDeserializer } from "../src/codecs.js";
 import {
   QWormholeClient,
@@ -6,6 +7,48 @@ import {
   createNegantropicHandshake,
   verifyNegantropicHandshake,
 } from "../src/index.js";
+import { computeNIndex } from "../src/handshake/negantropic-handshake.js";
+
+describe("computeNIndex", () => {
+  const adversarialBase64 = fc.oneof(
+    fc.string(),
+    fc.base64String(),
+    fc.constant(""),
+    fc.constant("===="),
+  );
+
+  it("always returns a finite clamped value", () => {
+    fc.assert(
+      fc.property(adversarialBase64, input => {
+        const nIndex = computeNIndex(input);
+        expect(Number.isFinite(nIndex)).toBe(true);
+        expect(nIndex).toBeGreaterThanOrEqual(0);
+        expect(nIndex).toBeLessThanOrEqual(1);
+      }),
+      { numRuns: 250 },
+    );
+  });
+
+  it("handles massive inputs without skewing bounds", () => {
+    fc.assert(
+      fc.property(
+        fc.base64String({ minLength: 4096, maxLength: 16384 }),
+        input => {
+          const nIndex = computeNIndex(input);
+          expect(nIndex).toBeGreaterThanOrEqual(0);
+          expect(nIndex).toBeLessThanOrEqual(1);
+        },
+      ),
+      { numRuns: 50 },
+    );
+  });
+
+  it("returns zero for empty or malformed payloads", () => {
+    expect(computeNIndex("")).toBe(0);
+    expect(computeNIndex("====")).toBe(0);
+    expect(computeNIndex("A".repeat(10000))).toBeLessThanOrEqual(1);
+  });
+});
 
 describe("Negantropic handshake", () => {
   it("creates and verifies signed handshake payloads", () => {
