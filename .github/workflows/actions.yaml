@@ -16,9 +16,6 @@ jobs:
   test:
     name: Node ${{ matrix.node-version }} on ${{ matrix.os }}
     runs-on: ${{ matrix.os }}
-    env:
-      QWORMHOLE_NATIVE: 1
-      QWORMHOLE_BUILD_LIBSOCKET: ${{ matrix.os == 'ubuntu-latest' && '1' || '0' }}
     strategy:
       fail-fast: false
       matrix:
@@ -61,7 +58,7 @@ jobs:
         run: pnpm install --no-frozen-lockfile
 
       - name: Build native bindings
-        run: pnpm --filter @gsknnft/qwormhole run rebuild
+        run: pnpm run rebuild
 
       - name: Lint
         run: pnpm run lint
