@@ -30,8 +30,8 @@
   "scripts": {
     "build:tsup": "tsup",
     "build:vite": "vite build",
-    "rebuild:bindings": "node -e \"const fs=require('fs');const path=require('path');fs.mkdirSync(path.join(__dirname,'dist','native'),{recursive:true});for (const name of ['qwormhole.node','qwormhole_lws.node']){const src=path.join(__dirname,'build','Release',name);const dst=path.join(__dirname,'dist','native',name);if(fs.existsSync(src)){fs.copyFileSync(src,dst);console.log('[qwormhole] copied',src,'->',dst);}}\"  && pnpm run install",
-    "rebuild": "node-gyp rebuild && pnpm run rebuild:bindings",
+    "rebuild": "node -e \"const fs=require('fs');const path=require('path');fs.mkdirSync(path.join(__dirname,'dist','native'),{recursive:true});for (const name of ['qwormhole.node','qwormhole_lws.node']){const src=path.join(__dirname,'build','Release',name);const dst=path.join(__dirname,'dist','native',name);if(fs.existsSync(src)){fs.copyFileSync(src,dst);console.log('[qwormhole] copied',src,'->',dst);}}\"  && pnpm run install",
+    "rebuild:nodegyp": "node-gyp rebuild && pnpm run rebuild",
     "build:tsc": "tsc --p tsconfig.json",
     "build:rollup": "rollup -c rollup.config.js",
     "build": "vite build && pnpm run build:tsc && pnpm run build:decl && pnpm run build:rollup",
