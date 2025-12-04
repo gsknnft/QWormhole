@@ -8,6 +8,7 @@ import {
 import { isNativeServerAvailable } from "../src/native-server";
 import type {
   FramingMode,
+  NativeBackend,
   Payload,
   QWormholeServerOptions,
   Serializer,
@@ -60,16 +61,38 @@ interface Scenario {
   id: string;
   preferNativeServer: boolean;
   clientMode: Mode;
+  serverBackend?: NativeBackend;
+}
+
+const serverBackends: NativeBackend[] = [];
+if (isNativeServerAvailable("lws")) {
+  serverBackends.push("lws");
+}
+if (isNativeServerAvailable("libsocket")) {
+  serverBackends.push("libsocket");
 }
 
 const scenarios: Scenario[] = [];
 for (const preferNativeServer of [false, true]) {
-  for (const mode of MODES) {
-    scenarios.push({
-      id: `${preferNativeServer ? "native-server" : "ts-server"}+${mode}`,
-      preferNativeServer,
-      clientMode: mode,
-    });
+  const serverTargets = preferNativeServer
+    ? serverBackends.length
+      ? serverBackends
+      : [undefined]
+    : [undefined];
+  for (const backend of serverTargets) {
+    for (const mode of MODES) {
+      const serverLabel = preferNativeServer
+        ? backend
+          ? `native-server(${backend})`
+          : "native-server"
+        : "ts-server";
+      scenarios.push({
+        id: `${serverLabel}+${mode}`,
+        preferNativeServer,
+        clientMode: mode,
+        serverBackend: backend,
+      });
+    }
   }
 }
 
@@ -92,15 +115,19 @@ const clientModeAvailable = (mode: Mode): boolean => {
   return availableLibsocket && isNativeAvailable();
 };
 
-const serverModeAvailable = (preferNative: boolean): boolean => {
+const serverModeAvailable = (
+  preferNative: boolean,
+  backend?: NativeBackend,
+): boolean => {
   if (!preferNative) return true;
-  return isNativeServerAvailable();
+  return isNativeServerAvailable(backend);
 };
 
 type ScenarioResult = {
   id: string;
   serverMode: Mode;
   clientMode: Mode;
+  preferredServerBackend?: NativeBackend;
   durationMs: number;
   messagesReceived: number;
   bytesReceived: number;
@@ -127,6 +154,7 @@ async function runScenario({
   id,
   preferNativeServer,
   clientMode,
+  serverBackend,
 }: Scenario): Promise<ScenarioResult> {
   if (!clientModeAvailable(clientMode)) {
     return {
@@ -142,22 +170,26 @@ async function runScenario({
     };
   }
 
-  if (!serverModeAvailable(preferNativeServer)) {
+  if (!serverModeAvailable(preferNativeServer, serverBackend)) {
     return {
       id,
       clientMode,
       serverMode: "ts",
+      preferredServerBackend: serverBackend,
       durationMs: 0,
       messagesReceived: 0,
       bytesReceived: 0,
       framing: BENCH_FRAMING,
       skipped: true,
-      reason: "Native server backend unavailable",
+      reason: serverBackend
+        ? `Native server backend ${serverBackend} unavailable`
+        : "Native server backend unavailable",
     };
   }
 
   type BenchServerOptions = QWormholeServerOptions<Buffer> & {
     preferNative?: boolean;
+    preferredNativeBackend?: NativeBackend;
   };
   const serverResult = createQWormholeServer({
     host: "127.0.0.1",
@@ -166,6 +198,7 @@ async function runScenario({
     serializer: toBytes,
     deserializer: (data: Buffer) => data as Buffer,
     preferNative: preferNativeServer,
+    preferredNativeBackend: serverBackend,
   } as BenchServerOptions);
   const serverMode = serverResult.mode;
   const serverInstance = serverResult.server;
@@ -235,6 +268,7 @@ async function runScenario({
     id,
     serverMode: serverMode as Mode,
     clientMode,
+    preferredServerBackend: serverBackend,
     durationMs: duration,
     messagesReceived,
     bytesReceived,

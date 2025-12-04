@@ -84,8 +84,10 @@ describe("QWormhole client/server", () => {
     const client = new QWormholeClient<string>({
       host: "10.255.255.1", // unroutable
       port: 9,
-      connectTimeoutMs: 100,
+      connectTimeoutMs: 500,
+      reconnect: { enabled: false },
     });
+    client.on("error", () => {}); // swallow expected timeout errors
     await expect(client.connect()).rejects.toThrow(/Connection timed out/);
   });
 

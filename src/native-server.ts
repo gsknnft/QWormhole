@@ -21,6 +21,18 @@ const logNativeServer = (msg: string) => {
   }
 };
 
+const parsePreferredBackend = (raw?: string): NativeBackend | undefined => {
+  if (raw === "lws" || raw === "libsocket") {
+    return raw;
+  }
+  return undefined;
+};
+
+const DEFAULT_NATIVE_SERVER_BACKEND =
+  parsePreferredBackend(process.env.QWORMHOLE_NATIVE_SERVER_PREFERRED) ??
+  parsePreferredBackend(process.env.QWORMHOLE_NATIVE_PREFERRED) ??
+  (process.platform === "linux" ? "libsocket" : undefined);
+
 type NativeServerHandle = NodeJS.EventEmitter & {
   listen(): Promise<net.AddressInfo>;
   close(): Promise<void>;
@@ -111,51 +123,93 @@ const tryLoadBinding = <TMessage>(
   }
 };
 
-const loadNativeServer = <TMessage>(
-  preferred?: NativeBackend,
+const loadServerBackend = <TMessage>(
+  kind: NativeBackend,
 ): LoadedServerBinding<TMessage> | null => {
-  const order: NativeBackend[] = preferred
-    ? [preferred, preferred === "lws" ? "libsocket" : "lws"]
-    : ["lws", "libsocket"];
-
-  for (const kind of order) {
-    const bindingName = kind === "lws" ? "qwormhole_lws" : "qwormhole";
-    logNativeServer(`trying server backend: ${kind} (${bindingName})`);
-    const module = tryLoadBinding<TMessage>(bindingName);
-    if (module?.QWormholeServerWrapper) {
-      logNativeServer(
-        `loaded native server backend "${kind}" from ${bindingName}`,
-      );
-      return { kind, module };
-    }
-    logNativeServer(`server backend "${kind}" unavailable`);
+  const bindingName = kind === "lws" ? "qwormhole_lws" : "qwormhole";
+  logNativeServer(`trying server backend: ${kind} (${bindingName})`);
+  const module = tryLoadBinding<TMessage>(bindingName);
+  if (module?.QWormholeServerWrapper) {
+    logNativeServer(
+      `loaded native server backend "${kind}" from ${bindingName}`,
+    );
+    return { kind, module };
   }
-  logNativeServer("no native server backend loaded; TS transport will be used");
+  logNativeServer(`server backend "${kind}" unavailable`);
   return null;
 };
 
+const loadNativeServer = <TMessage>(
+  preferred?: NativeBackend,
+): LoadedServerBinding<TMessage> | null => {
+  if (preferred) {
+    return (
+      loadServerBackend<TMessage>(preferred) ??
+      loadServerBackend<TMessage>(preferred === "lws" ? "libsocket" : "lws")
+    );
+  }
+  return (
+    loadServerBackend<TMessage>("lws") ??
+    loadServerBackend<TMessage>("libsocket")
+  );
+};
+
+const bindingCache: Partial<
+  Record<NativeBackend, LoadedServerBinding<unknown>>
+> = {};
 let nativeServerBinding: LoadedServerBinding<unknown> | null = null;
 
 const ensureNativeServerBinding = (
   preferred?: NativeBackend,
 ): LoadedServerBinding<unknown> | null => {
-  if (preferred || !nativeServerBinding) {
-    nativeServerBinding =
-      (loadNativeServer<unknown>(
-        preferred,
-      ) as LoadedServerBinding<unknown> | null) ?? nativeServerBinding;
+  if (preferred) {
+    if (!bindingCache[preferred]) {
+      const loaded = loadServerBackend<unknown>(preferred);
+      if (loaded) {
+        bindingCache[preferred] = loaded;
+      }
+    }
+    if (bindingCache[preferred]) {
+      nativeServerBinding = bindingCache[preferred] ?? nativeServerBinding;
+      return bindingCache[preferred] ?? null;
+    }
+    return null;
   }
+
+  if (nativeServerBinding) {
+    return nativeServerBinding;
+  }
+
+  let resolved: LoadedServerBinding<unknown> | null = null;
+  if (DEFAULT_NATIVE_SERVER_BACKEND) {
+    resolved =
+      bindingCache[DEFAULT_NATIVE_SERVER_BACKEND] ??
+      loadServerBackend<unknown>(DEFAULT_NATIVE_SERVER_BACKEND);
+    if (resolved) {
+      bindingCache[resolved.kind] = resolved;
+    }
+  }
+
+  if (!resolved) {
+    resolved = loadNativeServer<unknown>();
+    if (resolved) {
+      bindingCache[resolved.kind] = resolved;
+    }
+  }
+
+  nativeServerBinding = resolved ?? nativeServerBinding;
   return nativeServerBinding;
 };
 
-export const getNativeServerBackend = (): NativeBackend | null => {
-  ensureNativeServerBinding();
-  return nativeServerBinding?.kind ?? null;
+export const getNativeServerBackend = (
+  preferred?: NativeBackend,
+): NativeBackend | null => {
+  const binding = ensureNativeServerBinding(preferred);
+  return binding?.kind ?? null;
 };
 
-export const isNativeServerAvailable = (): boolean => {
-  ensureNativeServerBinding();
-  return Boolean(nativeServerBinding);
+export const isNativeServerAvailable = (preferred?: NativeBackend): boolean => {
+  return Boolean(ensureNativeServerBinding(preferred));
 };
 
 export class NativeQWormholeServer<TMessage = Buffer> extends TypedEventEmitter<

@@ -61,6 +61,7 @@ export interface CreateServerOptions<
 > extends QWormholeServerOptions<TMessage> {
   preferNative?: boolean;
   forceTs?: boolean;
+  preferredNativeBackend?: NativeBackend;
 }
 
 export interface CreateServerResult<TMessage> {
@@ -76,11 +77,11 @@ export interface CreateServerResult<TMessage> {
 export function createQWormholeServer<TMessage = Buffer>(
   options: CreateServerOptions<TMessage>,
 ): CreateServerResult<TMessage> {
-  const backend = getNativeServerBackend();
-  const nativeReady = isNativeServerAvailable();
+  const backend = getNativeServerBackend(options.preferredNativeBackend);
+  const nativeReady = isNativeServerAvailable(options.preferredNativeBackend);
 
-  if (!options.forceTs && options.preferNative && nativeReady) {
-    const resolvedBackend = backend ?? "lws";
+  if (!options.forceTs && options.preferNative && nativeReady && backend) {
+    const resolvedBackend = backend;
     return {
       server: new NativeQWormholeServer<TMessage>(options, resolvedBackend),
       mode: resolvedBackend === "lws" ? "native-lws" : "native-libsocket",

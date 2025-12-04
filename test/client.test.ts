@@ -52,17 +52,6 @@ describe("QWormholeClient", () => {
   afterEach(async () => {
     await server.close();
   });
-  // beforeEach(async () => {
-  //   server = new QWormholeServer<any>({
-  //     host: "127.0.0.1",
-  //     port: 0,
-  //     protocolVersion: "1.0.0",
-  //     framing: "length-prefixed",
-  //     deserializer: jsonDeserializer, // <-- ensure this is jsonDeserializer
-  //   });
-  //   address = await server.listen();
-  //   port = address.port;
-  // });
 
   it(
     "should connect to server and send/receive messages",

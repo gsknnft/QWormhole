@@ -47,4 +47,32 @@ describe("native server detection", () => {
     expect(isNativeServerAvailable()).toBe(false);
     expect(bindingFactory).toHaveBeenCalled();
   });
+
+  it("respects preferred backend overrides", async () => {
+    const original = process.env.QWORMHOLE_NATIVE_SERVER_PREFERRED;
+    process.env.QWORMHOLE_NATIVE_SERVER_PREFERRED = "libsocket";
+
+    bindingFactory.mockImplementation(
+      (arg: string | { module_root: string; bindings: string }) => {
+        const bindingName = typeof arg === "string" ? arg : arg.bindings;
+        if (bindingName === "qwormhole") {
+          return { QWormholeServerWrapper: vi.fn() };
+        }
+        const err = new Error("not found");
+        throw err;
+      },
+    );
+
+    const { isNativeServerAvailable, getNativeServerBackend } =
+      await import("../src/native-server.js");
+
+    expect(isNativeServerAvailable("libsocket")).toBe(true);
+    expect(getNativeServerBackend("libsocket")).toBe("libsocket");
+
+    if (typeof original === "string") {
+      process.env.QWORMHOLE_NATIVE_SERVER_PREFERRED = original;
+    } else {
+      delete process.env.QWORMHOLE_NATIVE_SERVER_PREFERRED;
+    }
+  });
 });

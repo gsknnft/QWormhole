@@ -496,6 +496,34 @@ pnpm --filter @gsknnft/qwormhole run build:native
 # outputs dist/native/qwormhole_lws.node and/or qwormhole.node
 ```
 
+To build the libwebsockets static archive inside WSL (required because `qwormhole_lws` links it as a shared object), run:
+
+```bash
+wsl -e bash -lc '
+set -e
+cd /mnt/c/Users/G/Desktop/Builds/sigilnet/packages/QWormhole/libwebsockets
+rm -rf build-linux
+mkdir build-linux && cd build-linux
+cmake .. -DCMAKE_POSITION_INDEPENDENT_CODE=ON \
+         -DLWS_WITH_STATIC=ON \
+         -DLWS_WITH_SHARED=OFF \
+         -DLWS_WITH_SSL=ON \
+         -DLWS_WITH_ZLIB=ON
+cmake --build . --config Release --parallel
+mkdir -p ../build/lib
+cp ./lib/libwebsockets.a ../build/lib/libwebsockets.a
+'
+```
+
+This keeps the Windows `libwebsockets/build` directory intact while producing a PIC-enabled archive for WSL/Linux builds.
+
+**Backend selection**
+
+- `QWORMHOLE_NATIVE_PREFERRED` &mdash; default backend for both client and server loaders (`lws` or `libsocket`).
+- `QWORMHOLE_NATIVE_SERVER_PREFERRED` / `QWORMHOLE_NATIVE_CLIENT_PREFERRED` &mdash; override detection per side without touching the other.
+- `preferNative: true` on `createQWormholeServer()` now accepts `preferredNativeBackend` to force a backend per instance (used by the bench harness to run both `native-lws` and `native-libsocket`).
+- `QWORMHOLE_BUILD_LIBSOCKET=0` still skips libsocket entirely when you only need libwebsockets.
+
 This runs `node-gyp` to build native addons, then drops any produced `.node` binaries under `dist/native/`. The loader prefers libwebsockets (`qwormhole_lws`), falls back to libsocket, otherwise uses the TS transport automatically.
 
 Notes:
