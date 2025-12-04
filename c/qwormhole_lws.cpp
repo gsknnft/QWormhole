@@ -1,4 +1,5 @@
 #include <napi.h>
+#include <atomic>
 #include <libwebsockets.h>
 #include <openssl/evp.h>
 #include <openssl/sha.h>
