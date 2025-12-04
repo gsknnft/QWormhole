@@ -1,5 +1,7 @@
 #include <napi.h>
 #include <libwebsockets.h>
+#include <openssl/evp.h>
+#include <openssl/sha.h>
 
 #ifdef _WIN32
 #include <winsock2.h>
@@ -10,21 +12,712 @@
 #include <sys/socket.h>
 #endif
 
-#include <atomic>
+#include <algorithm>
+#include <array>
 #include <chrono>
+#include <cmath>
+#include <cctype>
 #include <condition_variable>
 #include <cstdint>
 #include <cstring>
 #include <deque>
+#include <iomanip>
+#include <limits>
 #include <map>
-#include <memory>
 #include <mutex>
+#include <memory>
+#include <optional>
 #include <random>
+#include <sstream>
 #include <string>
 #include <thread>
+#include <variant>
 #include <vector>
 
 namespace {
+
+constexpr const char kServerVhostName[] = "qwormhole-native-server";
+constexpr const char kDefaultVhostName[] = "default";
+
+constexpr size_t kFrameHeaderBytes = 4;
+constexpr size_t kDefaultMaxFrameLength = 4 * 1024 * 1024;
+
+enum class JsonType { Null, Boolean, Number, String, Object, Array };
+
+struct JsonValue {
+  JsonType type = JsonType::Null;
+  double number_value = 0.0;
+  bool bool_value = false;
+  std::string string_value;
+  std::map<std::string, JsonValue> object_value;
+  std::vector<JsonValue> array_value;
+};
+
+class SimpleJsonParser {
+ public:
+  explicit SimpleJsonParser(const std::string& input) : input_(input) {}
+
+  bool Parse(JsonValue* out, std::string* error) {
+    pos_ = 0;
+    SkipWhitespace();
+    if (!ParseValue(out, error)) {
+      return false;
+    }
+    SkipWhitespace();
+    if (pos_ != input_.size()) {
+      if (error) {
+        *error = "Trailing data in JSON payload";
+      }
+      return false;
+    }
+    return true;
+  }
+
+  bool ParseValue(JsonValue* out, std::string* error) {
+    if (pos_ >= input_.size()) {
+      if (error) *error = "Unexpected end of JSON input";
+      return false;
+    }
+
+    char ch = input_[pos_];
+    if (ch == '{') {
+      return ParseObject(out, error);
+    }
+    if (ch == '[') {
+      return ParseArray(out, error);
+    }
+    if (ch == '"') {
+      std::string value;
+      if (!ParseString(&value, error)) {
+        return false;
+      }
+      out->type = JsonType::String;
+      out->string_value = std::move(value);
+      return true;
+    }
+    if (ch == '-' || (ch >= '0' && ch <= '9')) {
+      return ParseNumber(out, error);
+    }
+    return ParseLiteral(out, error);
+  }
+
+  bool ParseObject(JsonValue* out, std::string* error) {
+    if (!Match('{')) {
+      if (error) {
+        *error = "Expected '{'";
+      }
+      return false;
+    }
+    out->type = JsonType::Object;
+    out->object_value.clear();
+    SkipWhitespace();
+    if (Match('}')) {
+      return true;
+    }
+    while (true) {
+      std::string key;
+      if (!ParseString(&key, error)) {
+        return false;
+      }
+      SkipWhitespace();
+      if (!Match(':')) {
+        if (error) {
+          *error = "Expected ':' after object key";
+        }
+        return false;
+      }
+      SkipWhitespace();
+      JsonValue value;
+      if (!ParseValue(&value, error)) {
+        return false;
+      }
+      out->object_value.emplace(std::move(key), std::move(value));
+      SkipWhitespace();
+      if (Match('}')) {
+        break;
+      }
+      if (!Match(',')) {
+        if (error) {
+          *error = "Expected ',' between object entries";
+        }
+        return false;
+      }
+      SkipWhitespace();
+    }
+    return true;
+  }
+
+  bool ParseArray(JsonValue* out, std::string* error) {
+    if (!Match('[')) {
+      if (error) *error = "Expected '['";
+      return false;
+    }
+    out->type = JsonType::Array;
+    out->array_value.clear();
+    SkipWhitespace();
+    if (Match(']')) {
+      return true;
+    }
+    while (true) {
+      JsonValue value;
+      if (!ParseValue(&value, error)) {
+        return false;
+      }
+      out->array_value.push_back(std::move(value));
+      SkipWhitespace();
+      if (Match(']')) {
+        break;
+      }
+      if (!Match(',')) {
+        if (error) *error = "Expected ',' between array entries";
+        return false;
+      }
+      SkipWhitespace();
+    }
+    return true;
+  }
+
+  bool ParseString(std::string* out, std::string* error) {
+    if (!Match('"')) {
+      if (error) *error = "Expected string";
+      return false;
+    }
+    std::string result;
+    while (pos_ < input_.size()) {
+      char ch = input_[pos_++];
+      if (ch == '"') {
+        *out = std::move(result);
+        return true;
+      }
+      if (ch == '\\') {
+        if (pos_ >= input_.size()) {
+          if (error) *error = "Invalid escape sequence";
+          return false;
+        }
+        char esc = input_[pos_++];
+        switch (esc) {
+          case '"': result.push_back('"'); break;
+          case '\\': result.push_back('\\'); break;
+          case '/': result.push_back('/'); break;
+          case 'b': result.push_back('\b'); break;
+          case 'f': result.push_back('\f'); break;
+          case 'n': result.push_back('\n'); break;
+          case 'r': result.push_back('\r'); break;
+          case 't': result.push_back('\t'); break;
+          case 'u': {
+            uint32_t codepoint = 0;
+            if (!ParseUnicodeEscape(&codepoint, error)) {
+              return false;
+            }
+            AppendUtf8(codepoint, &result);
+            break;
+          }
+          default:
+            if (error) *error = "Unknown escape sequence";
+            return false;
+        }
+        continue;
+      }
+      result.push_back(ch);
+    }
+    if (error) *error = "Unterminated string";
+    return false;
+  }
+
+  bool ParseUnicodeEscape(uint32_t* codepoint, std::string* error) {
+    if (pos_ + 3 >= input_.size()) {
+      if (error) *error = "Invalid unicode escape";
+      return false;
+    }
+    uint32_t value = 0;
+    for (int i = 0; i < 4; ++i) {
+      char c = input_[pos_++];
+      value <<= 4;
+      if (c >= '0' && c <= '9') {
+        value |= static_cast<uint32_t>(c - '0');
+      } else if (c >= 'a' && c <= 'f') {
+        value |= static_cast<uint32_t>(10 + c - 'a');
+      } else if (c >= 'A' && c <= 'F') {
+        value |= static_cast<uint32_t>(10 + c - 'A');
+      } else {
+        if (error) *error = "Invalid unicode escape";
+        return false;
+      }
+    }
+    *codepoint = value;
+    return true;
+  }
+
+  void AppendUtf8(uint32_t cp, std::string* out) {
+    if (cp <= 0x7F) {
+      out->push_back(static_cast<char>(cp));
+    } else if (cp <= 0x7FF) {
+      out->push_back(static_cast<char>(0xC0 | ((cp >> 6) & 0x1F)));
+      out->push_back(static_cast<char>(0x80 | (cp & 0x3F)));
+    } else if (cp <= 0xFFFF) {
+      out->push_back(static_cast<char>(0xE0 | ((cp >> 12) & 0x0F)));
+      out->push_back(static_cast<char>(0x80 | ((cp >> 6) & 0x3F)));
+      out->push_back(static_cast<char>(0x80 | (cp & 0x3F)));
+    } else {
+      out->push_back(static_cast<char>(0xF0 | ((cp >> 18) & 0x07)));
+      out->push_back(static_cast<char>(0x80 | ((cp >> 12) & 0x3F)));
+      out->push_back(static_cast<char>(0x80 | ((cp >> 6) & 0x3F)));
+      out->push_back(static_cast<char>(0x80 | (cp & 0x3F)));
+    }
+  }
+
+  bool ParseNumber(JsonValue* out, std::string* error) {
+    size_t start = pos_;
+    if (input_[pos_] == '-') {
+      ++pos_;
+    }
+    if (pos_ >= input_.size()) {
+      if (error) *error = "Unexpected end in number";
+      return false;
+    }
+    if (input_[pos_] == '0') {
+      ++pos_;
+    } else {
+      if (!std::isdigit(static_cast<unsigned char>(input_[pos_]))) {
+        if (error) *error = "Invalid number";
+        return false;
+      }
+      while (pos_ < input_.size() &&
+             std::isdigit(static_cast<unsigned char>(input_[pos_]))) {
+        ++pos_;
+      }
+    }
+    if (pos_ < input_.size() && input_[pos_] == '.') {
+      ++pos_;
+      if (pos_ >= input_.size() ||
+          !std::isdigit(static_cast<unsigned char>(input_[pos_]))) {
+        if (error) *error = "Invalid fractional part";
+        return false;
+      }
+      while (pos_ < input_.size() &&
+             std::isdigit(static_cast<unsigned char>(input_[pos_]))) {
+        ++pos_;
+      }
+    }
+    if (pos_ < input_.size() && (input_[pos_] == 'e' || input_[pos_] == 'E')) {
+      ++pos_;
+      if (pos_ < input_.size() && (input_[pos_] == '+' || input_[pos_] == '-')) {
+        ++pos_;
+      }
+      if (pos_ >= input_.size() ||
+          !std::isdigit(static_cast<unsigned char>(input_[pos_]))) {
+        if (error) *error = "Invalid exponent";
+        return false;
+      }
+      while (pos_ < input_.size() &&
+             std::isdigit(static_cast<unsigned char>(input_[pos_]))) {
+        ++pos_;
+      }
+    }
+
+    double value = 0.0;
+    try {
+      value = std::stod(input_.substr(start, pos_ - start));
+    } catch (const std::exception&) {
+      if (error) *error = "Invalid number";
+      return false;
+    }
+    out->type = JsonType::Number;
+    out->number_value = value;
+    return true;
+  }
+
+  bool ParseLiteral(JsonValue* out, std::string* error) {
+    if (MatchLiteral("true")) {
+      out->type = JsonType::Boolean;
+      out->bool_value = true;
+      return true;
+    }
+    if (MatchLiteral("false")) {
+      out->type = JsonType::Boolean;
+      out->bool_value = false;
+      return true;
+    }
+    if (MatchLiteral("null")) {
+      out->type = JsonType::Null;
+      return true;
+    }
+    if (error) *error = "Invalid literal";
+    return false;
+  }
+
+  bool Match(char expected) {
+    if (pos_ < input_.size() && input_[pos_] == expected) {
+      ++pos_;
+      return true;
+    }
+    return false;
+  }
+
+  bool MatchLiteral(const char* literal) {
+    size_t len = std::strlen(literal);
+    if (pos_ + len > input_.size()) {
+      return false;
+    }
+    if (input_.compare(pos_, len, literal) == 0) {
+      pos_ += len;
+      return true;
+    }
+    return false;
+  }
+
+  void SkipWhitespace() {
+    while (pos_ < input_.size()) {
+      char ch = input_[pos_];
+      if (ch == ' ' || ch == '\n' || ch == '\r' || ch == '\t') {
+        ++pos_;
+      } else {
+        break;
+      }
+    }
+  }
+
+  const std::string& input_;
+  size_t pos_ = 0;
+};
+
+struct HandshakeMetadata {
+  bool has_version = false;
+  std::string version;
+  std::map<std::string, std::variant<std::string, double>> tags;
+  bool has_nindex = false;
+  double nindex = 0.0;
+  bool has_neghash = false;
+  std::string neghash;
+};
+
+const JsonValue* GetObjectMember(const JsonValue& value, const std::string& key) {
+  if (value.type != JsonType::Object) {
+    return nullptr;
+  }
+  auto it = value.object_value.find(key);
+  if (it == value.object_value.end()) {
+    return nullptr;
+  }
+  return &it->second;
+}
+
+std::optional<std::string> GetStringMember(const JsonValue& value, const std::string& key) {
+  auto member = GetObjectMember(value, key);
+  if (!member || member->type != JsonType::String) {
+    return std::nullopt;
+  }
+  return member->string_value;
+}
+
+std::optional<double> GetNumberMember(const JsonValue& value, const std::string& key) {
+  auto member = GetObjectMember(value, key);
+  if (!member) {
+    return std::nullopt;
+  }
+  if (member->type == JsonType::Number) {
+    return member->number_value;
+  }
+  if (member->type == JsonType::String) {
+    try {
+      return std::stod(member->string_value);
+    } catch (const std::exception&) {
+      return std::nullopt;
+    }
+  }
+  return std::nullopt;
+}
+
+std::string EscapeString(const std::string& input) {
+  std::string out;
+  out.reserve(input.size());
+  for (char ch : input) {
+    switch (ch) {
+      case '"': out += "\\\""; break;
+      case '\\': out += "\\\\"; break;
+      case '\b': out += "\\b"; break;
+      case '\f': out += "\\f"; break;
+      case '\n': out += "\\n"; break;
+      case '\r': out += "\\r"; break;
+      case '\t': out += "\\t"; break;
+      default:
+        if (static_cast<unsigned char>(ch) < 0x20) {
+          std::ostringstream oss;
+          oss << "\\u" << std::hex << std::uppercase << std::setw(4) << std::setfill('0')
+              << static_cast<int>(static_cast<unsigned char>(ch));
+          out += oss.str();
+        } else {
+          out.push_back(ch);
+        }
+        break;
+    }
+  }
+  return out;
+}
+
+std::string FormatNumber(double value) {
+  if (!std::isfinite(value) || value == 0.0) {
+    return "0";
+  }
+  std::ostringstream oss;
+  oss.setf(std::ios::fmtflags(0), std::ios::floatfield);
+  oss << std::setprecision(15) << value;
+  std::string out = oss.str();
+  auto pos = out.find('.');
+  if (pos != std::string::npos) {
+    while (!out.empty() && out.back() == '0') {
+      out.pop_back();
+    }
+    if (!out.empty() && out.back() == '.') {
+      out.pop_back();
+    }
+    if (out.empty()) {
+      out = "0";
+    }
+  }
+  return out;
+}
+
+std::string SerializeJson(const JsonValue& value, bool skip_signature_root, bool is_root = true);
+
+std::string SerializeArray(const JsonValue& value, bool skip_signature_root) {
+  std::string out = "[";
+  bool first = true;
+  for (const auto& entry : value.array_value) {
+    if (!first) {
+      out.push_back(',');
+    }
+    first = false;
+    out += SerializeJson(entry, skip_signature_root, false);
+  }
+  out.push_back(']');
+  return out;
+}
+
+std::string SerializeJson(const JsonValue& value, bool skip_signature_root, bool is_root) {
+  switch (value.type) {
+    case JsonType::Null:
+      return "null";
+    case JsonType::Boolean:
+      return value.bool_value ? "true" : "false";
+    case JsonType::Number:
+      return FormatNumber(value.number_value);
+    case JsonType::String:
+      return std::string("\"") + EscapeString(value.string_value) + "\"";
+    case JsonType::Array:
+      return SerializeArray(value, skip_signature_root);
+    case JsonType::Object: {
+      std::string out = "{";
+      bool first = true;
+      for (const auto& pair : value.object_value) {
+        if (skip_signature_root && is_root && pair.first == "signature") {
+          continue;
+        }
+        if (!first) {
+          out.push_back(',');
+        }
+        first = false;
+        out += "\"" + EscapeString(pair.first) + "\":";
+        out += SerializeJson(pair.second, skip_signature_root, false);
+      }
+      out.push_back('}');
+      return out;
+    }
+  }
+  return "null";
+}
+
+std::string HexEncode(const unsigned char* data, size_t len) {
+  static const char* hex = "0123456789abcdef";
+  std::string out;
+  out.reserve(len * 2);
+  for (size_t i = 0; i < len; ++i) {
+    out.push_back(hex[(data[i] >> 4) & 0xF]);
+    out.push_back(hex[data[i] & 0xF]);
+  }
+  return out;
+}
+
+std::optional<std::vector<uint8_t>> Base64Decode(const std::string& input) {
+  if (input.empty()) {
+    return std::vector<uint8_t>();
+  }
+  std::vector<uint8_t> output((input.size() * 3) / 4 + 3);
+  int len = EVP_DecodeBlock(output.data(),
+                            reinterpret_cast<const unsigned char*>(input.data()),
+                            (int)input.size());
+  if (len < 0) {
+    return std::nullopt;
+  }
+  size_t padding = 0;
+  if (!input.empty() && input.back() == '=') padding++;
+  if (input.size() > 1 && input[input.size() - 2] == '=') padding++;
+  if ((size_t)len < padding) {
+    return std::nullopt;
+  }
+  output.resize((size_t)len - padding);
+  return output;
+}
+
+double ComputeEntropy(const std::vector<uint8_t>& data) {
+  if (data.empty()) {
+    return 0.0;
+  }
+  std::array<size_t, 256> counts = {};
+  for (auto byte : data) {
+    counts[byte] += 1;
+  }
+  double entropy = 0.0;
+  const double len = static_cast<double>(data.size());
+  for (auto count : counts) {
+    if (!count) continue;
+    double p = count / len;
+    entropy -= p * std::log2(p);
+  }
+  return entropy;
+}
+
+double ComputeNIndex(const std::vector<uint8_t>& public_key) {
+  if (public_key.empty()) {
+    return 0.0;
+  }
+  double entropy = ComputeEntropy(public_key);
+  if (entropy <= 0.0) {
+    entropy = 1e-6;
+  }
+  double numerator = public_key.front();
+  double denominator = 0.0;
+  for (auto byte : public_key) {
+    denominator += byte;
+  }
+  if (denominator <= 0.0) {
+    denominator = 1.0;
+  }
+  double coherence = numerator / denominator;
+  double result = coherence / entropy;
+  if (!std::isfinite(result)) {
+    return 0.0;
+  }
+  return std::clamp(result, 0.0, 1.0);
+}
+
+std::string DeriveNegentropicHash(const std::vector<uint8_t>& public_key,
+                                   double nindex) {
+  const double weight = std::clamp(nindex, 0.0, 1.0);
+  const uint8_t mask = static_cast<uint8_t>(std::floor(weight * 255.0));
+  std::vector<uint8_t> salted(public_key.size());
+  for (size_t i = 0; i < public_key.size(); ++i) {
+    salted[i] = static_cast<uint8_t>(public_key[i] ^ mask);
+  }
+  std::ostringstream oss;
+  oss << std::fixed << std::setprecision(6) << nindex;
+  auto idx_str = oss.str();
+
+  SHA256_CTX ctx;
+  SHA256_Init(&ctx);
+  if (!public_key.empty()) {
+    SHA256_Update(&ctx, public_key.data(), public_key.size());
+  }
+  if (!salted.empty()) {
+    SHA256_Update(&ctx, salted.data(), salted.size());
+  }
+  SHA256_Update(&ctx, idx_str.data(), idx_str.size());
+  unsigned char digest[SHA256_DIGEST_LENGTH];
+  SHA256_Final(digest, &ctx);
+  return HexEncode(digest, SHA256_DIGEST_LENGTH);
+}
+
+bool VerifyEd25519Signature(const std::vector<uint8_t>& public_key,
+                            const std::vector<uint8_t>& signature,
+                            const std::string& message) {
+  EVP_PKEY* pkey = EVP_PKEY_new_raw_public_key(EVP_PKEY_ED25519, nullptr,
+                                               public_key.data(), (int)public_key.size());
+  if (!pkey) {
+    return false;
+  }
+  EVP_MD_CTX* ctx = EVP_MD_CTX_new();
+  if (!ctx) {
+    EVP_PKEY_free(pkey);
+    return false;
+  }
+  bool ok = false;
+  if (EVP_DigestVerifyInit(ctx, nullptr, nullptr, nullptr, pkey) == 1) {
+    if (EVP_DigestVerify(ctx, signature.data(), signature.size(),
+                         reinterpret_cast<const unsigned char*>(message.data()),
+                         message.size()) == 1) {
+      ok = true;
+    }
+  }
+  EVP_MD_CTX_free(ctx);
+  EVP_PKEY_free(pkey);
+  return ok;
+}
+
+bool LooksNegantropicHandshake(const JsonValue& root) {
+  return GetObjectMember(root, "publicKey") && GetObjectMember(root, "signature") &&
+         GetObjectMember(root, "negHash") && GetObjectMember(root, "nIndex");
+}
+
+bool VerifyNegantropicHandshake(const JsonValue& root,
+                                HandshakeMetadata* metadata,
+                                std::string* error) {
+  auto public_key_b64 = GetStringMember(root, "publicKey");
+  auto signature_b64 = GetStringMember(root, "signature");
+  auto neg_hash = GetStringMember(root, "negHash");
+  if (!public_key_b64 || !signature_b64 || !neg_hash) {
+    if (error) *error = "Missing negantropic handshake fields";
+    return false;
+  }
+  auto public_key = Base64Decode(*public_key_b64);
+  auto signature = Base64Decode(*signature_b64);
+  if (!public_key || !signature) {
+    if (error) *error = "Invalid base64 in handshake";
+    return false;
+  }
+  double nindex = ComputeNIndex(*public_key);
+  const std::string derived_hash = DeriveNegentropicHash(*public_key, nindex);
+  if (derived_hash != *neg_hash) {
+    if (error) *error = "Negantropic hash mismatch";
+    return false;
+  }
+  const std::string canonical = SerializeJson(root, true);
+  if (!VerifyEd25519Signature(*public_key, *signature, canonical)) {
+    if (error) *error = "Invalid handshake signature";
+    return false;
+  }
+  metadata->has_nindex = true;
+  metadata->nindex = nindex;
+  metadata->has_neghash = true;
+  metadata->neghash = derived_hash;
+  return true;
+}
+
+HandshakeMetadata BuildHandshakeMetadata(const JsonValue& root) {
+  HandshakeMetadata meta;
+  if (auto version = GetStringMember(root, "version")) {
+    meta.has_version = true;
+    meta.version = *version;
+  }
+  if (auto nindex = GetNumberMember(root, "nIndex")) {
+    meta.has_nindex = true;
+    meta.nindex = *nindex;
+  }
+  if (auto neg_hash = GetStringMember(root, "negHash")) {
+    meta.has_neghash = true;
+    meta.neghash = *neg_hash;
+  }
+  auto tags_value = GetObjectMember(root, "tags");
+  if (tags_value && tags_value->type == JsonType::Object) {
+    for (const auto& [key, val] : tags_value->object_value) {
+      if (val.type == JsonType::String) {
+        meta.tags.emplace(key, val.string_value);
+      } else if (val.type == JsonType::Number) {
+        meta.tags.emplace(key, val.number_value);
+      }
+    }
+  }
+  return meta;
+}
 
 class LwsClientWrapper : public Napi::ObjectWrap<LwsClientWrapper> {
  public:
@@ -498,6 +1191,9 @@ class LwsServerWrapper : public Napi::ObjectWrap<LwsServerWrapper> {
     std::vector<uint8_t> tls_key;
     std::string tls_passphrase;
     size_t max_backpressure_bytes = 5 * 1024 * 1024;
+    bool length_prefixed = true;
+    size_t max_frame_length = kDefaultMaxFrameLength;
+    std::string protocol_version;
   };
 
   struct ClientConnection {
@@ -508,7 +1204,19 @@ class LwsServerWrapper : public Napi::ObjectWrap<LwsServerWrapper> {
     std::deque<std::vector<uint8_t>> send_queue;
     size_t queued_bytes;
     bool backpressured;
+    bool closing;
+    std::vector<uint8_t> rx_buffer;
+    size_t rx_offset = 0;
+    bool handshake_complete = false;
+    bool connection_announced = false;
+    bool handshake_required = false;
+    HandshakeMetadata handshake_metadata;
   };
+
+  friend void AttachHandshakeMetadataToClient(
+      Napi::Env env,
+      const std::shared_ptr<ClientConnection>& conn,
+      Napi::Object* target);
 
   // N-API methods
   Napi::Value Listen(const Napi::CallbackInfo& info);
@@ -517,6 +1225,7 @@ class LwsServerWrapper : public Napi::ObjectWrap<LwsServerWrapper> {
   Napi::Value Shutdown(const Napi::CallbackInfo& info);
   Napi::Value GetConnection(const Napi::CallbackInfo& info);
   Napi::Value GetConnectionCount(const Napi::CallbackInfo& info);
+  Napi::Value CloseConnection(const Napi::CallbackInfo& info);
 
   void ServiceLoop();
   void Stop();
@@ -532,10 +1241,20 @@ class LwsServerWrapper : public Napi::ObjectWrap<LwsServerWrapper> {
   void EmitBackpressure(const std::string& client_id, size_t queued_bytes, size_t threshold);
   void EmitDrain(const std::string& client_id);
   void EmitClose();
+  void UpdateListenMetadata();
+  uint16_t EffectiveListenPort() const;
+  bool ProcessIncomingData(const std::shared_ptr<ClientConnection>& conn,
+                           const uint8_t* data, size_t len);
+  bool ProcessBufferedFrames(const std::shared_ptr<ClientConnection>& conn);
+  bool HandleHandshakeFrame(const std::shared_ptr<ClientConnection>& conn,
+                            const std::vector<uint8_t>& frame);
+  void TrimRxBuffer(ClientConnection* conn);
+  std::vector<uint8_t> BuildFramedPayload(const std::vector<uint8_t>& data);
 
   std::atomic<bool> listening_{false};
   std::atomic<bool> closing_{false};
   struct lws_context* context_ = nullptr;
+  struct lws_vhost* vhost_ = nullptr;
   std::thread service_thread_;
   std::mutex mutex_;
   std::map<struct lws*, std::shared_ptr<ClientConnection>> connections_;
@@ -546,6 +1265,8 @@ class LwsServerWrapper : public Napi::ObjectWrap<LwsServerWrapper> {
   // Thread-safe function for emitting events to JS
   Napi::ThreadSafeFunction tsfn_;
   Napi::ObjectReference self_ref_;
+  bool tsfn_ready_ = false;
+  uint16_t listen_port_ = 0;
 };
 
 static struct lws_protocols kServerProtocols[] = {
@@ -563,6 +1284,44 @@ static LwsServerWrapper* GetServerSelf(struct lws* wsi) {
   return static_cast<LwsServerWrapper*>(lws_context_user(ctx));
 }
 
+void AttachHandshakeMetadataToClient(
+    Napi::Env env,
+    const std::shared_ptr<LwsServerWrapper::ClientConnection>& conn,
+    Napi::Object* target) {
+  if (!conn || !target) {
+    return;
+  }
+  if (!conn->handshake_complete) {
+    return;
+  }
+  const HandshakeMetadata& meta = conn->handshake_metadata;
+  if (!meta.has_version && meta.tags.empty() && !meta.has_nindex && !meta.has_neghash) {
+    return;
+  }
+  Napi::Object handshake = Napi::Object::New(env);
+  if (meta.has_version) {
+    handshake.Set("version", Napi::String::New(env, meta.version));
+  }
+  if (!meta.tags.empty()) {
+    Napi::Object tags = Napi::Object::New(env);
+    for (const auto& [key, value] : meta.tags) {
+      if (std::holds_alternative<std::string>(value)) {
+        tags.Set(key, Napi::String::New(env, std::get<std::string>(value)));
+      } else {
+        tags.Set(key, Napi::Number::New(env, std::get<double>(value)));
+      }
+    }
+    handshake.Set("tags", tags);
+  }
+  if (meta.has_nindex) {
+    handshake.Set("nIndex", Napi::Number::New(env, meta.nindex));
+  }
+  if (meta.has_neghash) {
+    handshake.Set("negHash", Napi::String::New(env, meta.neghash));
+  }
+  target->Set("handshake", handshake);
+}
+
 LwsServerWrapper::LwsServerWrapper(const Napi::CallbackInfo& info)
     : Napi::ObjectWrap<LwsServerWrapper>(info) {
   options_ = ParseServerOptions(info);
@@ -570,8 +1329,9 @@ LwsServerWrapper::LwsServerWrapper(const Napi::CallbackInfo& info)
 
 LwsServerWrapper::~LwsServerWrapper() {
   Stop();
-  if (!tsfn_.IsAborted()) {
+  if (tsfn_ready_) {
     tsfn_.Release();
+    tsfn_ready_ = false;
   }
 }
 
@@ -585,6 +1345,7 @@ Napi::Object LwsServerWrapper::Init(Napi::Env env, Napi::Object exports) {
                       InstanceMethod<&LwsServerWrapper::Shutdown>("shutdown"),
                       InstanceMethod<&LwsServerWrapper::GetConnection>("getConnection"),
                       InstanceMethod<&LwsServerWrapper::GetConnectionCount>("getConnectionCount"),
+                        InstanceMethod<&LwsServerWrapper::CloseConnection>("closeConnection"),
                   });
 
   exports.Set("QWormholeServerWrapper", func);
@@ -610,6 +1371,21 @@ LwsServerWrapper::ServerOptions LwsServerWrapper::ParseServerOptions(
   }
   if (obj.Has("maxBackpressureBytes") && obj.Get("maxBackpressureBytes").IsNumber()) {
     opts.max_backpressure_bytes = obj.Get("maxBackpressureBytes").As<Napi::Number>().Int64Value();
+  }
+
+  if (obj.Has("framing") && obj.Get("framing").IsString()) {
+    auto framing = obj.Get("framing").As<Napi::String>().Utf8Value();
+    opts.length_prefixed = framing != "none";
+  }
+  if (obj.Has("maxFrameLength") && obj.Get("maxFrameLength").IsNumber()) {
+    opts.max_frame_length = static_cast<size_t>(
+        obj.Get("maxFrameLength").As<Napi::Number>().Int64Value());
+    if (opts.max_frame_length == 0) {
+      opts.max_frame_length = kDefaultMaxFrameLength;
+    }
+  }
+  if (obj.Has("protocolVersion") && obj.Get("protocolVersion").IsString()) {
+    opts.protocol_version = obj.Get("protocolVersion").As<Napi::String>().Utf8Value();
   }
 
   // TLS options
@@ -699,6 +1475,7 @@ Napi::Value LwsServerWrapper::Listen(const Napi::CallbackInfo& info) {
       "QWormholeServerEvents",
       0,
       1);
+  tsfn_ready_ = true;
 
   closing_ = false;
 
@@ -707,8 +1484,12 @@ Napi::Value LwsServerWrapper::Listen(const Napi::CallbackInfo& info) {
   cinfo.port = options_.port;
   cinfo.protocols = kServerProtocols;
   cinfo.user = this;
-  cinfo.options = LWS_SERVER_OPTION_DO_SSL_GLOBAL_INIT;
+  cinfo.options = LWS_SERVER_OPTION_DO_SSL_GLOBAL_INIT |
+                  LWS_SERVER_OPTION_ADOPT_APPLY_LISTEN_ACCEPT_CONFIG;
+  cinfo.listen_accept_role = "raw-skt";
+  cinfo.listen_accept_protocol = "qwormhole-server";
   cinfo.pt_serv_buf_size = 16 * 1024;
+  cinfo.vhost_name = kServerVhostName;
 
   if (!options_.host.empty() && options_.host != "0.0.0.0") {
     cinfo.iface = options_.host.c_str();
@@ -731,7 +1512,7 @@ Napi::Value LwsServerWrapper::Listen(const Napi::CallbackInfo& info) {
       cinfo.server_ssl_ca_mem_len = static_cast<unsigned int>(options_.tls_ca.size());
     }
     if (!options_.tls_passphrase.empty()) {
-      cinfo.server_ssl_private_key_password = options_.tls_passphrase.c_str();
+      cinfo.ssl_private_key_password = options_.tls_passphrase.c_str();
     }
     if (options_.request_cert) {
       cinfo.options |= LWS_SERVER_OPTION_REQUIRE_VALID_OPENSSL_CLIENT_CERT;
@@ -745,6 +1526,9 @@ Napi::Value LwsServerWrapper::Listen(const Napi::CallbackInfo& info) {
     return deferred.Promise();
   }
 
+  UpdateListenMetadata();
+  uint16_t reported_port = EffectiveListenPort();
+
   listening_ = true;
   service_thread_ = std::thread(&LwsServerWrapper::ServiceLoop, this);
 
@@ -752,11 +1536,11 @@ Napi::Value LwsServerWrapper::Listen(const Napi::CallbackInfo& info) {
   auto deferred = Napi::Promise::Deferred::New(env);
   Napi::Object address = Napi::Object::New(env);
   address.Set("address", options_.host.empty() ? "0.0.0.0" : options_.host);
-  address.Set("port", options_.port);
+  address.Set("port", reported_port);
   address.Set("family", "IPv4");
   deferred.Resolve(address);
 
-  EmitListening(options_.port);
+  EmitListening(reported_port);
 
   return deferred.Promise();
 }
@@ -793,6 +1577,9 @@ void LwsServerWrapper::Stop() {
     lws_context_destroy(context_);
     context_ = nullptr;
   }
+
+  vhost_ = nullptr;
+  listen_port_ = 0;
 }
 
 Napi::Value LwsServerWrapper::Close(const Napi::CallbackInfo& info) {
@@ -830,11 +1617,20 @@ Napi::Value LwsServerWrapper::Broadcast(const Napi::CallbackInfo& info) {
     data.assign(str.begin(), str.end());
   }
 
+  std::vector<uint8_t> framed = BuildFramedPayload(data);
+
   {
     std::lock_guard<std::mutex> lock(mutex_);
     for (auto& [wsi, conn] : connections_) {
-      conn->send_queue.push_back(data);
-      conn->queued_bytes += data.size();
+      conn->send_queue.push_back(framed);
+      conn->queued_bytes += framed.size();
+
+      if (!conn->backpressured &&
+          conn->queued_bytes >= options_.max_backpressure_bytes) {
+        conn->backpressured = true;
+        EmitBackpressure(conn->id, conn->queued_bytes, options_.max_backpressure_bytes);
+      }
+
       lws_callback_on_writable(wsi);
     }
   }
@@ -893,9 +1689,40 @@ Napi::Value LwsServerWrapper::GetConnectionCount(const Napi::CallbackInfo& info)
   return Napi::Number::New(info.Env(), static_cast<double>(connections_.size()));
 }
 
+Napi::Value LwsServerWrapper::CloseConnection(const Napi::CallbackInfo& info) {
+  Napi::Env env = info.Env();
+
+  if (info.Length() < 1 || !info[0].IsString()) {
+    Napi::TypeError::New(env, "closeConnection(id) requires connection id")
+        .ThrowAsJavaScriptException();
+    return env.Undefined();
+  }
+
+  std::string id = info[0].As<Napi::String>().Utf8Value();
+  std::shared_ptr<ClientConnection> target;
+  {
+    std::lock_guard<std::mutex> lock(mutex_);
+    auto it = connections_by_id_.find(id);
+    if (it == connections_by_id_.end()) {
+      return env.Undefined();
+    }
+    target = it->second;
+    target->closing = true;
+  }
+
+  if (target && target->wsi) {
+    lws_callback_on_writable(target->wsi);
+    if (context_) {
+      lws_cancel_service(context_);
+    }
+  }
+
+  return env.Undefined();
+}
+
 // Event emission helpers
 void LwsServerWrapper::EmitListening(uint16_t port) {
-  if (tsfn_.IsAborted()) return;
+  if (!tsfn_ready_) return;
 
   auto callback = [this, port](Napi::Env env, Napi::Function) {
     Napi::Object self = self_ref_.Value();
@@ -913,7 +1740,7 @@ void LwsServerWrapper::EmitListening(uint16_t port) {
 }
 
 void LwsServerWrapper::EmitConnection(const std::string& client_id) {
-  if (tsfn_.IsAborted()) return;
+  if (!tsfn_ready_) return;
 
   auto callback = [this, client_id](Napi::Env env, Napi::Function) {
     Napi::Object self = self_ref_.Value();
@@ -928,6 +1755,7 @@ void LwsServerWrapper::EmitConnection(const std::string& client_id) {
       conn.Set("id", it->second->id);
       conn.Set("remoteAddress", it->second->remote_address);
       conn.Set("remotePort", it->second->remote_port);
+      AttachHandshakeMetadataToClient(env, it->second, &conn);
       emit.Call(self, {Napi::String::New(env, "connection"), conn});
     }
   };
@@ -936,7 +1764,7 @@ void LwsServerWrapper::EmitConnection(const std::string& client_id) {
 }
 
 void LwsServerWrapper::EmitMessage(const std::string& client_id, const std::vector<uint8_t>& data) {
-  if (tsfn_.IsAborted()) return;
+  if (!tsfn_ready_) return;
 
   auto callback = [this, client_id, data](Napi::Env env, Napi::Function) {
     Napi::Object self = self_ref_.Value();
@@ -952,6 +1780,7 @@ void LwsServerWrapper::EmitMessage(const std::string& client_id, const std::vect
       client.Set("id", it->second->id);
       client.Set("remoteAddress", it->second->remote_address);
       client.Set("remotePort", it->second->remote_port);
+      AttachHandshakeMetadataToClient(env, it->second, &client);
       payload.Set("client", client);
       payload.Set("data", Napi::Buffer<uint8_t>::Copy(env, data.data(), data.size()));
       emit.Call(self, {Napi::String::New(env, "message"), payload});
@@ -962,7 +1791,7 @@ void LwsServerWrapper::EmitMessage(const std::string& client_id, const std::vect
 }
 
 void LwsServerWrapper::EmitClientClosed(const std::string& client_id, bool had_error) {
-  if (tsfn_.IsAborted()) return;
+  if (!tsfn_ready_) return;
 
   auto callback = [this, client_id, had_error](Napi::Env env, Napi::Function) {
     Napi::Object self = self_ref_.Value();
@@ -982,7 +1811,7 @@ void LwsServerWrapper::EmitClientClosed(const std::string& client_id, bool had_e
 }
 
 void LwsServerWrapper::EmitError(const std::string& message) {
-  if (tsfn_.IsAborted()) return;
+  if (!tsfn_ready_) return;
 
   auto callback = [this, message](Napi::Env env, Napi::Function) {
     Napi::Object self = self_ref_.Value();
@@ -997,7 +1826,7 @@ void LwsServerWrapper::EmitError(const std::string& message) {
 }
 
 void LwsServerWrapper::EmitBackpressure(const std::string& client_id, size_t queued_bytes, size_t threshold) {
-  if (tsfn_.IsAborted()) return;
+  if (!tsfn_ready_) return;
 
   auto callback = [this, client_id, queued_bytes, threshold](Napi::Env env, Napi::Function) {
     Napi::Object self = self_ref_.Value();
@@ -1022,7 +1851,7 @@ void LwsServerWrapper::EmitBackpressure(const std::string& client_id, size_t que
 }
 
 void LwsServerWrapper::EmitDrain(const std::string& client_id) {
-  if (tsfn_.IsAborted()) return;
+  if (!tsfn_ready_) return;
 
   auto callback = [this, client_id](Napi::Env env, Napi::Function) {
     Napi::Object self = self_ref_.Value();
@@ -1045,7 +1874,7 @@ void LwsServerWrapper::EmitDrain(const std::string& client_id) {
 }
 
 void LwsServerWrapper::EmitClose() {
-  if (tsfn_.IsAborted()) return;
+  if (!tsfn_ready_) return;
 
   auto callback = [this](Napi::Env env, Napi::Function) {
     Napi::Object self = self_ref_.Value();
@@ -1056,6 +1885,160 @@ void LwsServerWrapper::EmitClose() {
   };
 
   tsfn_.NonBlockingCall(callback);
+}
+
+void LwsServerWrapper::UpdateListenMetadata() {
+  listen_port_ = options_.port;
+  vhost_ = nullptr;
+  if (!context_) {
+    return;
+  }
+
+  vhost_ = lws_get_vhost_by_name(context_, kServerVhostName);
+  if (!vhost_) {
+    vhost_ = lws_get_vhost_by_name(context_, kDefaultVhostName);
+  }
+
+  if (!vhost_) {
+    return;
+  }
+
+  int resolved = lws_get_vhost_listen_port(vhost_);
+  if (resolved > 0 && resolved <= std::numeric_limits<uint16_t>::max()) {
+    listen_port_ = static_cast<uint16_t>(resolved);
+  }
+}
+
+uint16_t LwsServerWrapper::EffectiveListenPort() const {
+  if (listen_port_ != 0) {
+    return listen_port_;
+  }
+  return options_.port;
+}
+
+void LwsServerWrapper::TrimRxBuffer(ClientConnection* conn) {
+  if (!conn) return;
+  if (conn->rx_offset == 0) {
+    return;
+  }
+  if (conn->rx_offset >= conn->rx_buffer.size()) {
+    conn->rx_buffer.clear();
+    conn->rx_offset = 0;
+    return;
+  }
+  if (conn->rx_offset > conn->rx_buffer.size() / 2) {
+    std::vector<uint8_t> remaining(conn->rx_buffer.begin() + conn->rx_offset,
+                                   conn->rx_buffer.end());
+    conn->rx_buffer.swap(remaining);
+    conn->rx_offset = 0;
+  }
+}
+
+bool LwsServerWrapper::HandleHandshakeFrame(
+    const std::shared_ptr<ClientConnection>& conn,
+    const std::vector<uint8_t>& frame) {
+  if (!conn) {
+    return false;
+  }
+  const std::string payload(frame.begin(), frame.end());
+  JsonValue root;
+  std::string error;
+  SimpleJsonParser parser(payload);
+  if (!parser.Parse(&root, &error)) {
+    EmitError(std::string("Failed to parse handshake: ") + error);
+    return false;
+  }
+  auto type = GetStringMember(root, "type");
+  if (!type || *type != "handshake") {
+    EmitError("Invalid handshake payload: missing type");
+    return false;
+  }
+  if (!options_.protocol_version.empty()) {
+    auto version = GetStringMember(root, "version");
+    if (version && !version->empty() && *version != options_.protocol_version) {
+      EmitError("Protocol version mismatch");
+      return false;
+    }
+  }
+
+  HandshakeMetadata metadata = BuildHandshakeMetadata(root);
+  if (LooksNegantropicHandshake(root)) {
+    if (!VerifyNegantropicHandshake(root, &metadata, &error)) {
+      EmitError(std::string("Invalid handshake signature: ") + error);
+      return false;
+    }
+  }
+
+  conn->handshake_metadata = std::move(metadata);
+  return true;
+}
+
+bool LwsServerWrapper::ProcessBufferedFrames(
+    const std::shared_ptr<ClientConnection>& conn) {
+  if (!conn) {
+    return false;
+  }
+  while (conn->rx_buffer.size() >= conn->rx_offset + kFrameHeaderBytes) {
+    const uint8_t* base = conn->rx_buffer.data() + conn->rx_offset;
+    uint32_t frame_length = (static_cast<uint32_t>(base[0]) << 24) |
+                            (static_cast<uint32_t>(base[1]) << 16) |
+                            (static_cast<uint32_t>(base[2]) << 8) |
+                            static_cast<uint32_t>(base[3]);
+    if (frame_length > options_.max_frame_length) {
+      EmitError("Frame length exceeded native limit");
+      return false;
+    }
+    if (conn->rx_buffer.size() < conn->rx_offset + kFrameHeaderBytes + frame_length) {
+      break;
+    }
+    const uint8_t* payload_begin = base + kFrameHeaderBytes;
+    std::vector<uint8_t> frame(payload_begin, payload_begin + frame_length);
+    conn->rx_offset += kFrameHeaderBytes + frame_length;
+    TrimRxBuffer(conn.get());
+
+    if (conn->handshake_required && !conn->handshake_complete) {
+      if (!HandleHandshakeFrame(conn, frame)) {
+        return false;
+      }
+      conn->handshake_complete = true;
+      if (!conn->connection_announced) {
+        conn->connection_announced = true;
+        EmitConnection(conn->id);
+      }
+      continue;
+    }
+
+    EmitMessage(conn->id, frame);
+  }
+  return true;
+}
+
+bool LwsServerWrapper::ProcessIncomingData(
+    const std::shared_ptr<ClientConnection>& conn,
+    const uint8_t* data,
+    size_t len) {
+  if (!conn || !data || !len) {
+    return true;
+  }
+  conn->rx_buffer.insert(conn->rx_buffer.end(), data, data + len);
+  return ProcessBufferedFrames(conn);
+}
+
+std::vector<uint8_t> LwsServerWrapper::BuildFramedPayload(
+    const std::vector<uint8_t>& data) {
+  if (!options_.length_prefixed) {
+    return data;
+  }
+  std::vector<uint8_t> framed(kFrameHeaderBytes + data.size());
+  uint32_t len = static_cast<uint32_t>(data.size());
+  framed[0] = static_cast<uint8_t>((len >> 24) & 0xff);
+  framed[1] = static_cast<uint8_t>((len >> 16) & 0xff);
+  framed[2] = static_cast<uint8_t>((len >> 8) & 0xff);
+  framed[3] = static_cast<uint8_t>(len & 0xff);
+  if (!data.empty()) {
+    std::memcpy(framed.data() + kFrameHeaderBytes, data.data(), data.size());
+  }
+  return framed;
 }
 
 int LwsServerWrapper::ServerCallback(struct lws* wsi,
@@ -1106,6 +2089,10 @@ int LwsServerWrapper::ServerCallback(struct lws* wsi,
       conn->remote_port = static_cast<uint16_t>(peer_port);
       conn->queued_bytes = 0;
       conn->backpressured = false;
+      conn->closing = false;
+      conn->handshake_required = !self->options_.protocol_version.empty();
+      conn->handshake_complete = !conn->handshake_required;
+      conn->connection_announced = !conn->handshake_required;
 
       {
         std::lock_guard<std::mutex> lock(self->mutex_);
@@ -1113,25 +2100,38 @@ int LwsServerWrapper::ServerCallback(struct lws* wsi,
         self->connections_by_id_[id] = conn;
       }
 
-      self->EmitConnection(id);
+      if (!conn->handshake_required) {
+        self->EmitConnection(id);
+      }
       break;
     }
 
     case LWS_CALLBACK_RAW_RX: {
-      if (in && len > 0) {
-        std::string client_id;
-        {
-          std::lock_guard<std::mutex> lock(self->mutex_);
-          auto it = self->connections_.find(wsi);
-          if (it != self->connections_.end()) {
-            client_id = it->second->id;
-          }
+      if (!in || len == 0) {
+        break;
+      }
+      std::shared_ptr<ClientConnection> conn;
+      {
+        std::lock_guard<std::mutex> lock(self->mutex_);
+        auto it = self->connections_.find(wsi);
+        if (it != self->connections_.end()) {
+          conn = it->second;
         }
-        if (!client_id.empty()) {
-          std::vector<uint8_t> data(static_cast<uint8_t*>(in),
-                                    static_cast<uint8_t*>(in) + len);
-          self->EmitMessage(client_id, data);
-        }
+      }
+      if (!conn) {
+        break;
+      }
+      if (conn->closing) {
+        return -1;
+      }
+      if (!self->options_.length_prefixed) {
+        std::vector<uint8_t> data(static_cast<uint8_t*>(in),
+                                  static_cast<uint8_t*>(in) + len);
+        self->EmitMessage(conn->id, data);
+        break;
+      }
+      if (!self->ProcessIncomingData(conn, static_cast<uint8_t*>(in), len)) {
+        return -1;
       }
       break;
     }
@@ -1146,7 +2146,14 @@ int LwsServerWrapper::ServerCallback(struct lws* wsi,
         }
       }
 
-      if (conn && !conn->send_queue.empty()) {
+      if (!conn) {
+        break;
+      }
+      if (conn->closing) {
+        return -1;
+      }
+
+      if (!conn->send_queue.empty()) {
         auto data = conn->send_queue.front();
         conn->send_queue.pop_front();
         conn->queued_bytes -= data.size();

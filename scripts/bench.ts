@@ -7,6 +7,7 @@ import {
 } from "../src/index";
 import { isNativeServerAvailable } from "../src/native-server";
 import type {
+  FramingMode,
   Payload,
   QWormholeServerOptions,
   Serializer,
@@ -27,6 +28,19 @@ function parseModeArg(): Mode[] {
 const PAYLOAD = Buffer.alloc(1024, 1);
 const TOTAL_MESSAGES = 10_000;
 const TIMEOUT_MS = 5000;
+const BENCH_FRAMING: FramingMode =
+  process.env.QWORMHOLE_BENCH_FRAMING === "none" ? "none" : "length-prefixed";
+const FRAME_HEADER_BYTES = 4;
+
+const encodeLengthPrefixed = (payload: Buffer): Buffer => {
+  const framed = Buffer.allocUnsafe(FRAME_HEADER_BYTES + payload.length);
+  framed.writeUInt32BE(payload.length, 0);
+  payload.copy(framed, FRAME_HEADER_BYTES);
+  return framed;
+};
+
+const NATIVE_CLIENT_PAYLOAD =
+  BENCH_FRAMING === "length-prefixed" ? encodeLengthPrefixed(PAYLOAD) : PAYLOAD;
 
 const detectNativeBackend = (backend: "lws" | "libsocket") => {
   try {
@@ -90,8 +104,11 @@ type ScenarioResult = {
   durationMs: number;
   messagesReceived: number;
   bytesReceived: number;
+  framing: FramingMode;
   skipped?: boolean;
   reason?: string;
+  msgsPerSec?: number;
+  mbPerSec?: number;
 };
 
 async function waitForCompletion(
@@ -119,6 +136,7 @@ async function runScenario({
       durationMs: 0,
       messagesReceived: 0,
       bytesReceived: 0,
+      framing: BENCH_FRAMING,
       skipped: true,
       reason: "Native client backend unavailable",
     };
@@ -132,6 +150,7 @@ async function runScenario({
       durationMs: 0,
       messagesReceived: 0,
       bytesReceived: 0,
+      framing: BENCH_FRAMING,
       skipped: true,
       reason: "Native server backend unavailable",
     };
@@ -143,7 +162,7 @@ async function runScenario({
   const serverResult = createQWormholeServer({
     host: "127.0.0.1",
     port: 0,
-    framing: "none",
+    framing: BENCH_FRAMING,
     serializer: toBytes,
     deserializer: (data: Buffer) => data as Buffer,
     preferNative: preferNativeServer,
@@ -160,7 +179,7 @@ async function runScenario({
     tsClient = new QWormholeClient<Buffer>({
       host: "127.0.0.1",
       port,
-      framing: "none",
+      framing: BENCH_FRAMING,
       serializer: toBytes,
       deserializer: (data: Buffer) => data,
     });
@@ -185,7 +204,7 @@ async function runScenario({
     if (tsClient) {
       tsClient.send(PAYLOAD);
     } else if (nativeClient) {
-      nativeClient.send(PAYLOAD);
+      nativeClient.send(NATIVE_CLIENT_PAYLOAD);
     }
   }
 
@@ -202,6 +221,16 @@ async function runScenario({
   }
   await serverInstance.close();
 
+  const seconds = duration / 1000;
+  const msgsPerSec =
+    seconds > 0 && messagesReceived > 0
+      ? messagesReceived / seconds
+      : undefined;
+  const mbPerSec =
+    seconds > 0 && bytesReceived > 0
+      ? bytesReceived / seconds / (1024 * 1024)
+      : undefined;
+
   return {
     id,
     serverMode: serverMode as Mode,
@@ -209,6 +238,9 @@ async function runScenario({
     durationMs: duration,
     messagesReceived,
     bytesReceived,
+    framing: BENCH_FRAMING,
+    msgsPerSec,
+    mbPerSec,
   };
 }
 
@@ -229,7 +261,10 @@ async function main() {
   const header = `${pad("Scenario", 28)}${pad("Server", 15)}${pad("Client", 15)}${pad(
     "Duration (ms)",
     16,
-  )}${pad("Messages", 12)}${pad("Bytes", 12)}${pad("Status", 10)}`;
+  )}${pad("Messages", 12)}${pad("Bytes", 12)}${pad("Msg/s", 12)}${pad(
+    "MB/s",
+    12,
+  )}${pad("Framing", 12)}${pad("Status", 10)}`;
   console.log("\n" + header);
   console.log("-".repeat(header.length));
   for (const res of results) {
@@ -240,7 +275,17 @@ async function main() {
       )}${pad(`${res.messagesReceived ?? "-"}`, 12)}${pad(
         `${res.bytesReceived ?? "-"}`,
         12,
-      )}${pad(res.skipped ? "skipped" : "ok", 10)}`,
+      )}${pad(
+        res.msgsPerSec && Number.isFinite(res.msgsPerSec)
+          ? res.msgsPerSec.toFixed(0)
+          : "-",
+        12,
+      )}${pad(
+        res.mbPerSec && Number.isFinite(res.mbPerSec)
+          ? res.mbPerSec.toFixed(2)
+          : "-",
+        12,
+      )}${pad(res.framing, 12)}${pad(res.skipped ? "skipped" : "ok", 10)}`,
     );
   }
 }

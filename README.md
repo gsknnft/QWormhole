@@ -373,6 +373,16 @@ QWormhole provides all of this in a small, modern, TypeScript-native API.
 Benchmarks:
 - `pnpm --filter @gsknnft/qwormhole bench` runs a simple localhost throughput test comparing TS vs native (if available).
   - Or run `node scripts/bench.ts` to benchmark TS, native-lws, and native-libsocket (when present).
+- **Latest snapshot (2025-12-03, Windows 11, Node 24.10.0):**
+
+  | Scenario | Old throughput (msg/s) <br />*(pre-native-fix: 276–8.8k msgs landed)* | New duration (ms) | New throughput (msg/s) | Approx Δ |
+  | --- | --- | --- | --- | --- |
+  | `ts-server + ts` | 46 msg/s | 815 | 12,300 msg/s | **+265×** |
+  | `ts-server + native-lws` | 1,580 msg/s | 291 | 34,000 msg/s | **+21×** |
+  | `native-server + ts` | 1,690 msg/s | 219 | 45,700 msg/s | **+27×** |
+  | `native-server + native-lws` | 940 msg/s | 209 | 47,900 msg/s | **+51×** |
+
+  The earlier runs never reached the configured 10,000 messages because handshake stalls dropped the socket; the native routing fix now delivers the full payload before the 1-second mark, so per-socket throughput jumped by one to two orders of magnitude. `native-libsocket` rows remain skipped on Windows until that backend is built.
 Tests:
 - `pnpm --filter @gsknnft/qwormhole test` (TS), `pnpm --filter @gsknnft/qwormhole test:native` (gated by native availability).
 
@@ -398,6 +408,7 @@ Install attempts a native build automatically; if native fails, TS remains avail
 
 ## Handshake & security
 - **Default handshake** – `{ type: "handshake", version, tags? }` automatically queues when `protocolVersion` is set.
+- **Native parity** – the libwebsockets server binding now enforces the same handshake pipeline as the TS server, surfaces TLS fingerprints/negentropic metadata on `connection.handshake`, and only emits `connection` after your optional `verifyHandshake` hook approves the snapshot.
 - **Negantropic signer** – pass `handshakeSigner` or use `createNegantropicHandshake` to emit signed payloads with `negHash` + coherence metadata for downstream policy engines.
 - **TLS-aware metadata** – when `tls` options are provided, the client captures peer fingerprints, ALPN, and exported keying material, then merges them into `handshake.tags`. The server pins those fingerprints via `verifyTlsFingerprint`, derives a session-bound key, and attaches the TLS snapshot to `connection.handshake.tls` for your app.
 - **Policy hooks** – `verifyHandshake` and `createHandshakeVerifier` make it easy to reject unwanted versions, tags, or signatures; failures immediately drop the socket and emit `clientClosed(hadError: true)`.
