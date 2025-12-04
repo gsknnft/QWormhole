@@ -164,6 +164,11 @@ describe("BatchFramer", () => {
 
       smallBatchFramer.attachSocket(mockSocket);
 
+      // Use flush event for deterministic synchronization
+      const flushPromise = new Promise<void>(resolve => {
+        smallBatchFramer.once("flush", () => resolve());
+      });
+
       // Add frames - should not flush yet
       smallBatchFramer.encodeToBatch(Buffer.from("one"));
       expect(smallBatchFramer.pendingBatchSize).toBe(1);
@@ -171,8 +176,8 @@ describe("BatchFramer", () => {
       // Adding second frame should trigger flush at batchSize=2
       smallBatchFramer.encodeToBatch(Buffer.from("two"));
 
-      // Give the async flush time to complete
-      await new Promise(resolve => setTimeout(resolve, 10));
+      // Wait for the flush event instead of arbitrary timeout
+      await flushPromise;
 
       expect(mockSocket.write).toHaveBeenCalled();
     });

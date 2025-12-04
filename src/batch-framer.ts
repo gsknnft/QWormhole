@@ -66,6 +66,8 @@ export class BatchFramer extends TypedEventEmitter<BatchFramerEvents> {
   // Outgoing batch queue
   private outBatch: Buffer[] = [];
   private outBatchBytes = 0;
+  // Track which ring slots are used by current batch
+  private outBatchSlotIndices: number[] = [];
   private flushTimer?: NodeJS.Timeout;
   private socket?: net.Socket;
   private draining = false;
@@ -110,10 +112,15 @@ export class BatchFramer extends TypedEventEmitter<BatchFramerEvents> {
    * Encode a payload with length prefix (zero-copy when possible)
    */
   encode(payload: Buffer): Buffer {
-    const slot = this.acquireSlot(HEADER_LENGTH + payload.length);
+    const { slot, index } = this.acquireSlot(HEADER_LENGTH + payload.length);
     slot.buffer.writeUInt32BE(payload.length, 0);
     payload.copy(slot.buffer, HEADER_LENGTH);
     slot.length = HEADER_LENGTH + payload.length;
+
+    // Track the slot index for later release
+    if (index >= 0) {
+      this.outBatchSlotIndices.push(index);
+    }
 
     // Return a view of the slot buffer
     return slot.buffer.subarray(0, slot.length);
@@ -149,8 +156,10 @@ export class BatchFramer extends TypedEventEmitter<BatchFramerEvents> {
 
     const buffers = this.outBatch;
     const totalBytes = this.outBatchBytes;
+    const slotIndices = this.outBatchSlotIndices;
     this.outBatch = [];
     this.outBatchBytes = 0;
+    this.outBatchSlotIndices = [];
 
     this.emit("flush", { bufferCount: buffers.length, totalBytes });
 
@@ -163,9 +172,11 @@ export class BatchFramer extends TypedEventEmitter<BatchFramerEvents> {
       await this.writeBuffer(combined);
     }
 
-    // Release slots back to the ring
-    for (let i = 0; i < this.ring.length; i++) {
-      this.ring[i].inUse = false;
+    // Release only the slots that were used by this batch
+    for (const idx of slotIndices) {
+      if (idx >= 0 && idx < this.ring.length) {
+        this.ring[idx].inUse = false;
+      }
     }
   }
 
@@ -259,6 +270,7 @@ export class BatchFramer extends TypedEventEmitter<BatchFramerEvents> {
     this.inBuffer = Buffer.alloc(0);
     this.outBatch = [];
     this.outBatchBytes = 0;
+    this.outBatchSlotIndices = [];
     this.clearFlushTimer();
     for (const slot of this.ring) {
       slot.inUse = false;
@@ -281,9 +293,9 @@ export class BatchFramer extends TypedEventEmitter<BatchFramerEvents> {
   }
 
   /**
-   * Acquire a slot from the ring buffer
+   * Acquire a slot from the ring buffer, returns slot and its index
    */
-  private acquireSlot(requiredSize: number): RingSlot {
+  private acquireSlot(requiredSize: number): { slot: RingSlot; index: number } {
     // Find an available slot
     for (let i = 0; i < this.ring.length; i++) {
       const idx = (this.ringHead + i) % this.ring.length;
@@ -296,15 +308,19 @@ export class BatchFramer extends TypedEventEmitter<BatchFramerEvents> {
         }
         slot.inUse = true;
         this.ringHead = (idx + 1) % this.ring.length;
-        return slot;
+        return { slot, index: idx };
       }
     }
 
     // All slots in use, allocate a new buffer (fallback)
+    // Return -1 as index to indicate it's not from the ring
     return {
-      buffer: Buffer.allocUnsafe(requiredSize),
-      length: 0,
-      inUse: true,
+      slot: {
+        buffer: Buffer.allocUnsafe(requiredSize),
+        length: 0,
+        inUse: true,
+      },
+      index: -1,
     };
   }
 

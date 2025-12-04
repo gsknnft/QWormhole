@@ -38,6 +38,7 @@ export {
   mergeEntropyPolicies,
   ENTROPY_THRESHOLDS,
   BATCH_SIZES,
+  MAX_BYTE_ENTROPY,
   type EntropyPolicy,
   type EntropyMetrics,
   type HandshakeMode,

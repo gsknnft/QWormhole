@@ -199,7 +199,15 @@ export interface QWormholeServerConnection {
     /** Derived transport policy from entropy (0.3.2) */
     policy?: {
       mode: "trust-zero" | "trust-light" | "immune" | "paranoia";
+      framing:
+        | "zero-copy-writev"
+        | "length-prefix"
+        | "length-ack"
+        | "length-ack-checksum";
       batchSize: number;
+      codec: "flatbuffers" | "cbor" | "messagepack" | "json-compressed";
+      requireAck: boolean;
+      requireChecksum: boolean;
       trustLevel: number;
     };
     tls?: {

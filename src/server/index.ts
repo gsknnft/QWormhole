@@ -579,7 +579,11 @@ export class QWormholeServer<TMessage = Buffer> extends TypedEventEmitter<
       },
       policy: {
         mode: policy.mode,
+        framing: policy.framing,
         batchSize: policy.batchSize,
+        codec: policy.codec,
+        requireAck: policy.requireAck,
+        requireChecksum: policy.requireChecksum,
         trustLevel: policy.trustLevel,
       },
       tls: tlsInfo,

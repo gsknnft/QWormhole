@@ -99,6 +99,12 @@ export const BATCH_SIZES = {
 } as const;
 
 /**
+ * Maximum Shannon entropy for byte data (log2(256) = 8 bits)
+ * Used to convert N-index to entropy estimate
+ */
+export const MAX_BYTE_ENTROPY = 8;
+
+/**
  * Derive handshake mode from negentropic index
  */
 export function deriveHandshakeMode(negIndex: number): HandshakeMode {
@@ -223,7 +229,8 @@ export function computeEntropyMetrics(
       : "stable";
 
   // Entropy is inverse of N-index (high N = low entropy)
-  const entropy = 8 * (1 - Math.min(Math.max(nIndex, 0), 1));
+  // MAX_BYTE_ENTROPY (8 bits) represents maximum Shannon entropy for byte data
+  const entropy = MAX_BYTE_ENTROPY * (1 - Math.min(Math.max(nIndex, 0), 1));
 
   return {
     entropy,
