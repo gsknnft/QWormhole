@@ -4,6 +4,7 @@
 export { QWormholeClient } from "./client";
 export { QWormholeServer } from "./server/index.js";
 export { LengthPrefixedFramer } from "./framing";
+export { BatchFramer, createBatchFramer } from "./batch-framer";
 export {
   defaultSerializer,
   bufferDeserializer,
@@ -29,14 +30,37 @@ export {
   verifyNegantropicHandshake,
 } from "./handshake/negantropic-handshake";
 export {
+  deriveEntropyPolicy,
+  deriveHandshakeMode,
+  deriveCoherenceLevel,
+  deriveEntropyVelocity,
+  computeEntropyMetrics,
+  mergeEntropyPolicies,
+  ENTROPY_THRESHOLDS,
+  BATCH_SIZES,
+  MAX_BYTE_ENTROPY,
+  type EntropyPolicy,
+  type EntropyMetrics,
+  type HandshakeMode,
+  type FramingPolicy,
+  type CodecRecommendation,
+  type EntropyVelocity,
+  type CoherenceLevel,
+} from "./handshake/entropy-policy";
+export {
   type NegantropicHandshake,
   handshakePayloadSchema,
   scpCapabilitySetSchema,
   scpStatePayloadSchema,
   negantropicHandshakeSchema,
+  entropyMetricsSchema,
+  entropyVelocitySchema,
+  coherenceLevelSchema,
+  handshakeModeSchema,
   type HandshakePayload,
   type SCPCapabilitySet,
   type SCPStatePayload,
+  type EntropyMetricsPayload,
 } from "./schema/scp";
 export { createConsoleTelemetryLogger } from "./telemetry-logger";
 export { createHandshakeVerifier } from "./handshake/handshake-policy";

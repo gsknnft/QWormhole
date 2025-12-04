@@ -11,6 +11,10 @@ import {
   verifyNegantropicHandshake,
 } from "../handshake/negantropic-handshake";
 import { type HandshakePayload } from "../handshake/handshake-policy";
+import {
+  deriveEntropyPolicy,
+  computeEntropyMetrics,
+} from "../handshake/entropy-policy";
 import { handshakePayloadSchema } from "../schema/scp";
 import type {
   Payload,
@@ -556,11 +560,32 @@ export class QWormholeServer<TMessage = Buffer> extends TypedEventEmitter<
     parsed: HandshakePayload,
   ): void {
     const tlsInfo = this.collectTlsInfo(connection.socket, parsed.negHash);
+
+    // Derive entropy policy from handshake (0.3.2)
+    const nIndex = parsed.nIndex ?? parsed.entropyMetrics?.negIndex ?? 0.5;
+    const entropyMetrics = parsed.entropyMetrics ?? computeEntropyMetrics(nIndex);
+    const policy = deriveEntropyPolicy(entropyMetrics);
+
     connection.handshake = {
       version: parsed.version,
       tags: parsed.tags,
       nIndex: parsed.nIndex,
       negHash: parsed.negHash,
+      entropyMetrics: {
+        entropy: entropyMetrics.entropy,
+        entropyVelocity: entropyMetrics.entropyVelocity,
+        coherence: entropyMetrics.coherence,
+        negIndex: entropyMetrics.negIndex,
+      },
+      policy: {
+        mode: policy.mode,
+        framing: policy.framing,
+        batchSize: policy.batchSize,
+        codec: policy.codec,
+        requireAck: policy.requireAck,
+        requireChecksum: policy.requireChecksum,
+        trustLevel: policy.trustLevel,
+      },
       tls: tlsInfo,
     };
     connection.handshakePending = false;

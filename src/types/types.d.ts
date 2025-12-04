@@ -189,6 +189,27 @@ export interface QWormholeServerConnection {
     tags?: Record<string, unknown>;
     nIndex?: number;
     negHash?: string;
+    /** Entropy metrics from peer handshake (0.3.2) */
+    entropyMetrics?: {
+      entropy?: number;
+      entropyVelocity?: "low" | "stable" | "rising" | "spiking";
+      coherence?: "high" | "medium" | "low" | "chaos";
+      negIndex?: number;
+    };
+    /** Derived transport policy from entropy (0.3.2) */
+    policy?: {
+      mode: "trust-zero" | "trust-light" | "immune" | "paranoia";
+      framing:
+        | "zero-copy-writev"
+        | "length-prefix"
+        | "length-ack"
+        | "length-ack-checksum";
+      batchSize: number;
+      codec: "flatbuffers" | "cbor" | "messagepack" | "json-compressed";
+      requireAck: boolean;
+      requireChecksum: boolean;
+      trustLevel: number;
+    };
     tls?: {
       alpnProtocol?: string | false;
       authorized?: boolean;
