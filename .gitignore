@@ -5,6 +5,7 @@ libwebsockets/scripts/
 *.o
 yarn.lock
 .vscode/
+build-linux/
 build/
 .rollup.cache/
 
