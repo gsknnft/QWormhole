@@ -15,7 +15,11 @@
  */
 
 import type { BatchFramer } from "./batch-framer";
-import type { EntropyMetrics, EntropyVelocity, CoherenceLevel } from "./handshake/entropy-policy";
+import type {
+  EntropyMetrics,
+  EntropyVelocity,
+  CoherenceLevel,
+} from "./handshake/entropy-policy";
 import { deriveEntropyPolicy } from "./handshake/entropy-policy";
 import { TypedEventEmitter } from "./typedEmitter";
 
@@ -57,6 +61,8 @@ export const FLOW_DEFAULTS = {
   DRIFT_STEP: 2,
   /** TS peer max slice clamp (to reduce GC pressure) */
   TS_PEER_MAX_SLICE: 16,
+  /** Upper bound on token bucket induced delay */
+  MAX_RESERVE_DELAY_MS: 200,
 } as const;
 
 /**
@@ -138,6 +144,10 @@ export class FlowController extends TypedEventEmitter<FlowControllerEvents> {
   private sliceSize: number;
   private readonly bucket: TokenBucket;
   private readonly policy: SessionFlowPolicy;
+  private flushing = false;
+  private flushPromise: Promise<void> | null = null;
+  private forceFlushQueued = false;
+  private backpressureCount = 0;
 
   // Diagnostics
   private totalFlushes = 0;
@@ -156,9 +166,29 @@ export class FlowController extends TypedEventEmitter<FlowControllerEvents> {
     );
 
     // Initialize token bucket for rate limiting
-    this.bucket = new TokenBucket(policy.rateBytesPerSec, policy.burstBudgetBytes);
+    this.bucket = new TokenBucket(
+      policy.rateBytesPerSec,
+      policy.burstBudgetBytes,
+    );
 
     this.recordSliceChange("init");
+  }
+
+  async snapshot(
+    framer?: BatchFramer,
+    options?: { reset?: boolean },
+  ): Promise<FlowControllerDiagnostics> {
+    if (framer) {
+      await this.flushPending(framer);
+    }
+    if (this.flushPromise) {
+      await this.flushPromise;
+    }
+    const diagnostics = this.getDiagnostics();
+    if (options?.reset) {
+      this.resetDiagnostics();
+    }
+    return diagnostics;
   }
 
   /**
@@ -176,7 +206,11 @@ export class FlowController extends TypedEventEmitter<FlowControllerEvents> {
    */
   onBackpressure(queuedBytes: number): void {
     const previousSize = this.sliceSize;
-    this.sliceSize = Math.max(this.policy.minSlice, Math.floor(this.sliceSize / 2));
+    this.sliceSize = Math.max(
+      this.policy.minSlice,
+      Math.floor(this.sliceSize / 2),
+    );
+    this.backpressureCount += 1;
 
     if (previousSize !== this.sliceSize) {
       this.recordSliceChange("backpressure");
@@ -196,7 +230,10 @@ export class FlowController extends TypedEventEmitter<FlowControllerEvents> {
   onDrain(): void {
     const previousSize = this.sliceSize;
     const maxSlice = this.getEffectiveMaxSlice();
-    this.sliceSize = Math.min(maxSlice, this.sliceSize + FLOW_DEFAULTS.DRIFT_STEP);
+    this.sliceSize = Math.min(
+      maxSlice,
+      this.sliceSize + FLOW_DEFAULTS.DRIFT_STEP,
+    );
 
     if (previousSize !== this.sliceSize) {
       this.recordSliceChange("drain");
@@ -215,16 +252,55 @@ export class FlowController extends TypedEventEmitter<FlowControllerEvents> {
    */
   async enqueue(payload: Buffer, framer: BatchFramer): Promise<void> {
     framer.encodeToBatch(payload);
+    const pending = this.scheduleFlush(framer, false);
+    if (pending) await pending;
+  }
 
-    if (framer.pendingBatchSize >= this.sliceSize) {
-      await this.flush(framer);
-    }
+  async flushPending(framer: BatchFramer): Promise<void> {
+    if (framer.pendingBatchSize === 0) return;
+    const pending = this.scheduleFlush(framer, true);
+    if (pending) await pending;
   }
 
   /**
    * Flush the current batch with rate limiting
    */
   async flush(framer: BatchFramer): Promise<void> {
+    if (this.flushing) return;
+    this.flushing = true;
+
+    try {
+      const projectedBytes = framer.pendingBatchBytes;
+      const delayMs = this.bucket.reserve(projectedBytes);
+
+      if (delayMs > 0) {
+        await this.delay(delayMs);
+      }
+
+      await framer.flushBatch();
+
+      this.totalFlushes++;
+      this.totalBytes += projectedBytes;
+
+      this.emit("flush", {
+        sliceSize: this.sliceSize,
+        bytes: projectedBytes,
+        delayMs,
+      });
+    } finally {
+      this.flushing = false;
+    }
+  }
+
+  /* 
+  
+  private flushing = false;
+
+async flush(framer: BatchFramer): Promise<void> {
+  if (this.flushing) return;
+  this.flushing = true;
+
+  try {
     const projectedBytes = framer.pendingBatchBytes;
     const delayMs = this.bucket.reserve(projectedBytes);
 
@@ -242,7 +318,12 @@ export class FlowController extends TypedEventEmitter<FlowControllerEvents> {
       bytes: projectedBytes,
       delayMs,
     });
+  } finally {
+    this.flushing = false;
   }
+}
+
+  */
 
   /**
    * Get current slice size
@@ -259,6 +340,7 @@ export class FlowController extends TypedEventEmitter<FlowControllerEvents> {
       currentSliceSize: this.sliceSize,
       totalFlushes: this.totalFlushes,
       totalBytes: this.totalBytes,
+      backpressureEvents: this.backpressureCount,
       availableTokens: this.bucket.availableTokens,
       policy: {
         coherence: this.policy.coherence,
@@ -268,6 +350,18 @@ export class FlowController extends TypedEventEmitter<FlowControllerEvents> {
       },
       sliceHistory: this.sliceHistory.slice(-10), // Last 10 changes
     };
+  }
+
+  private resetDiagnostics(): void {
+    this.totalFlushes = 0;
+    this.totalBytes = 0;
+    this.backpressureCount = 0;
+    this.sliceHistory = [
+      {
+        timestamp: Date.now(),
+        size: this.sliceSize,
+      },
+    ];
   }
 
   /**
@@ -298,6 +392,39 @@ export class FlowController extends TypedEventEmitter<FlowControllerEvents> {
   private delay(ms: number): Promise<void> {
     return new Promise(resolve => setTimeout(resolve, ms));
   }
+
+  private scheduleFlush(
+    framer: BatchFramer,
+    force: boolean,
+  ): Promise<void> | void {
+    if (!force && framer.pendingBatchSize < this.sliceSize) {
+      return;
+    }
+
+    if (this.flushing) {
+      if (force) {
+        this.forceFlushQueued = true;
+      }
+      return this.flushPromise ?? Promise.resolve();
+    }
+
+    this.flushing = true;
+    this.flushPromise = (async () => {
+      try {
+        await this.flush(framer);
+      } finally {
+        this.flushing = false;
+        this.flushPromise = null;
+        const shouldForce = this.forceFlushQueued;
+        this.forceFlushQueued = false;
+        if (framer.pendingBatchSize >= this.sliceSize || shouldForce) {
+          await this.scheduleFlush(framer, shouldForce);
+        }
+      }
+    })();
+
+    return this.flushPromise;
+  }
 }
 
 /**
@@ -307,6 +434,7 @@ export interface FlowControllerDiagnostics {
   currentSliceSize: number;
   totalFlushes: number;
   totalBytes: number;
+  backpressureEvents: number;
   availableTokens: number;
   policy: {
     coherence: number;
@@ -366,7 +494,7 @@ export function deriveSessionFlowPolicy(
   // Compute numeric coherence from metrics
   const coherence = metrics.coherence
     ? coherenceLevelToNumeric(metrics.coherence)
-    : metrics.negIndex ?? 0.5;
+    : (metrics.negIndex ?? 0.5);
 
   // Compute numeric entropy velocity
   const entropyVelocity = metrics.entropyVelocity
@@ -374,11 +502,13 @@ export function deriveSessionFlowPolicy(
     : 0.3;
 
   // Derive rate based on trust level
-  const baseRate = options?.rateBytesPerSec ?? FLOW_DEFAULTS.DEFAULT_RATE_BYTES_PER_SEC;
+  const baseRate =
+    options?.rateBytesPerSec ?? FLOW_DEFAULTS.DEFAULT_RATE_BYTES_PER_SEC;
   const rateBytesPerSec = Math.round(baseRate * policy.trustLevel);
 
   // Derive burst budget based on trust level
-  const baseBurst = options?.burstBudgetBytes ?? FLOW_DEFAULTS.DEFAULT_BURST_BYTES;
+  const baseBurst =
+    options?.burstBudgetBytes ?? FLOW_DEFAULTS.DEFAULT_BURST_BYTES;
   const burstBudgetBytes = Math.round(baseBurst * policy.trustLevel);
 
   // Determine max slice - clamp for TS peers

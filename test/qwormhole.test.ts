@@ -131,6 +131,7 @@ describe("QWormhole client/server", () => {
         protocolVersion: "1.0.0",
         framing: "length-prefixed",
         deserializer: jsonDeserializer,
+        emitHandshakeMessages: true,
       });
       hsServer.on("listening", info => {
         console.log(`[SERVER] Listening on ${info.host}:${info.port}`);

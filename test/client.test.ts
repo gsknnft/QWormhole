@@ -63,15 +63,31 @@ describe("QWormholeClient", () => {
         protocolVersion: "1.0.0",
         deserializer: jsonDeserializer, // <-- use jsonDeserializer here
       });
+      server.on("connection", () =>
+        console.log("[client.test] server connection"),
+      );
+      server.on("clientClosed", evt =>
+        console.log("[client.test] server clientClosed", evt),
+      );
       await client.connect();
+      console.log("[client.test] connected");
 
       const testMessage = { type: "test", value: "Hello, QWormhole!" };
+      const logMessage = ({ data }: { data: unknown }) => {
+        console.log("[client.test] server message", data);
+      };
+      server.on("message", logMessage);
       const received = new Promise<any>(resolve => {
         server.once("message", ({ data }) => resolve(data));
       });
 
+      await new Promise(resolve => setTimeout(resolve, 10));
+      console.log("[client.test] sending payload");
       await client.send(testMessage);
+      console.log("[client.test] send returned");
       const message = await received;
+      console.log("[client.test] received", message);
+      server.off("message", logMessage);
       expect(message).toEqual(testMessage);
       client.disconnect();
     },

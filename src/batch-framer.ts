@@ -23,6 +23,19 @@ interface BatchFramerEvents {
   error: Error;
   flush: { bufferCount: number; totalBytes: number };
   drain: void;
+  backpressure: { queuedBytes: number };
+}
+
+export interface BatchFramerStats {
+  totalFrames: number;
+  totalFlushes: number;
+  totalBytes: number;
+  pendingFrames: number;
+  pendingBytes: number;
+  lastFlushTimestamp?: number;
+  backpressureEvents: number;
+  lastBackpressureBytes?: number;
+  lastBackpressureTimestamp?: number;
 }
 
 export interface BatchFramerOptions {
@@ -71,13 +84,22 @@ export class BatchFramer extends TypedEventEmitter<BatchFramerEvents> {
   private flushTimer?: NodeJS.Timeout;
   private socket?: net.Socket;
   private draining = false;
+  private drainListener?: () => void;
+  private totalFrames = 0;
+  private totalFlushes = 0;
+  private totalBytes = 0;
+  private lastFlushTimestamp?: number;
+  private backpressureEvents = 0;
+  private lastBackpressureBytes?: number;
+  private lastBackpressureTimestamp?: number;
 
   constructor(options?: BatchFramerOptions) {
     super();
     this.maxFrameLength = options?.maxFrameLength ?? DEFAULT_MAX_FRAME_LENGTH;
     this.batchSize = options?.batchSize ?? DEFAULT_BATCH_SIZE;
     this.enableWritev = options?.enableWritev ?? true;
-    this.flushIntervalMs = options?.flushIntervalMs ?? DEFAULT_FLUSH_INTERVAL_MS;
+    this.flushIntervalMs =
+      options?.flushIntervalMs ?? DEFAULT_FLUSH_INTERVAL_MS;
 
     // Initialize ring buffer
     const ringSize = options?.ringSize ?? DEFAULT_RING_SIZE;
@@ -92,12 +114,16 @@ export class BatchFramer extends TypedEventEmitter<BatchFramerEvents> {
    * Attach a socket for writev operations
    */
   attachSocket(socket: net.Socket): void {
+    if (this.socket && this.drainListener) {
+      this.socket.off("drain", this.drainListener);
+    }
     this.socket = socket;
-    socket.on("drain", () => {
+    this.drainListener = () => {
       this.draining = false;
       this.emit("drain", undefined as never);
       void this.flushBatch();
-    });
+    };
+    socket.on("drain", this.drainListener);
   }
 
   /**
@@ -105,6 +131,11 @@ export class BatchFramer extends TypedEventEmitter<BatchFramerEvents> {
    */
   detachSocket(): void {
     this.clearFlushTimer();
+    if (this.socket && this.drainListener) {
+      this.socket.off("drain", this.drainListener);
+    }
+    this.drainListener = undefined;
+    this.draining = false;
     this.socket = undefined;
   }
 
@@ -133,6 +164,7 @@ export class BatchFramer extends TypedEventEmitter<BatchFramerEvents> {
     const framed = this.encode(payload);
     this.outBatch.push(framed);
     this.outBatchBytes += framed.length;
+    this.totalFrames += 1;
 
     if (this.outBatch.length >= this.batchSize) {
       void this.flushBatch();
@@ -150,7 +182,7 @@ export class BatchFramer extends TypedEventEmitter<BatchFramerEvents> {
   async flushBatch(): Promise<void> {
     this.clearFlushTimer();
 
-    if (this.outBatch.length === 0 || !this.socket || this.draining) {
+    if (this.outBatch.length === 0 || this.draining) {
       return;
     }
 
@@ -162,21 +194,24 @@ export class BatchFramer extends TypedEventEmitter<BatchFramerEvents> {
     this.outBatchSlotIndices = [];
 
     this.emit("flush", { bufferCount: buffers.length, totalBytes });
+    this.totalFlushes += 1;
+    this.totalBytes += totalBytes;
+    this.lastFlushTimestamp = Date.now();
 
-    if (this.enableWritev && buffers.length > 1) {
-      // Use writev for batched writes
-      await this.writevBatch(buffers);
-    } else {
-      // Fall back to single write with concatenated buffer
-      const combined = Buffer.concat(buffers);
-      await this.writeBuffer(combined);
+    if (!this.socket || this.socket.destroyed) {
+      this.releaseSlots(slotIndices);
+      return;
     }
 
-    // Release only the slots that were used by this batch
-    for (const idx of slotIndices) {
-      if (idx >= 0 && idx < this.ring.length) {
-        this.ring[idx].inUse = false;
+    try {
+      if (this.enableWritev && buffers.length > 1) {
+        await this.writevBatch(buffers);
+      } else {
+        const combined = Buffer.concat(buffers);
+        await this.writeBuffer(combined);
       }
+    } finally {
+      this.releaseSlots(slotIndices);
     }
   }
 
@@ -194,7 +229,7 @@ export class BatchFramer extends TypedEventEmitter<BatchFramerEvents> {
       for (const buf of buffers) {
         const canWrite = socket.write(buf);
         if (!canWrite) {
-          this.draining = true;
+          this.handleBackpressure(socket.writableLength);
         }
       }
       // Use queueMicrotask to ensure uncork happens after all writes are queued
@@ -223,7 +258,7 @@ export class BatchFramer extends TypedEventEmitter<BatchFramerEvents> {
       const canWrite = socket.write(buffer);
 
       if (!canWrite) {
-        this.draining = true;
+        this.handleBackpressure(socket.writableLength);
         socket.once("drain", () => {
           this.draining = false;
           resolve();
@@ -233,6 +268,17 @@ export class BatchFramer extends TypedEventEmitter<BatchFramerEvents> {
         resolve();
       }
     });
+  }
+
+  private handleBackpressure(queuedBytes: number): void {
+    const entering = !this.draining;
+    if (entering) {
+      this.backpressureEvents += 1;
+      this.lastBackpressureTimestamp = Date.now();
+      this.lastBackpressureBytes = queuedBytes;
+      this.draining = true;
+    }
+    this.emit("backpressure", { queuedBytes });
   }
 
   /**
@@ -248,7 +294,9 @@ export class BatchFramer extends TypedEventEmitter<BatchFramerEvents> {
         this.inBuffer = Buffer.alloc(0);
         this.emit(
           "error",
-          new Error(`Frame length ${frameLength} exceeds limit ${this.maxFrameLength}`),
+          new Error(
+            `Frame length ${frameLength} exceeds limit ${this.maxFrameLength}`,
+          ),
         );
         return;
       }
@@ -276,6 +324,39 @@ export class BatchFramer extends TypedEventEmitter<BatchFramerEvents> {
       slot.inUse = false;
       slot.length = 0;
     }
+  }
+
+  getStats(): BatchFramerStats {
+    return {
+      totalFrames: this.totalFrames,
+      totalFlushes: this.totalFlushes,
+      totalBytes: this.totalBytes,
+      pendingFrames: this.outBatch.length,
+      pendingBytes: this.outBatchBytes,
+      lastFlushTimestamp: this.lastFlushTimestamp,
+      backpressureEvents: this.backpressureEvents,
+      lastBackpressureBytes: this.lastBackpressureBytes,
+      lastBackpressureTimestamp: this.lastBackpressureTimestamp,
+    };
+  }
+
+  private resetStats(): void {
+    this.totalFrames = 0;
+    this.totalFlushes = 0;
+    this.totalBytes = 0;
+    this.lastFlushTimestamp = undefined;
+    this.backpressureEvents = 0;
+    this.lastBackpressureBytes = undefined;
+    this.lastBackpressureTimestamp = undefined;
+  }
+
+  async snapshot(options?: { reset?: boolean }): Promise<BatchFramerStats> {
+    await this.flushBatch();
+    const stats = this.getStats();
+    if (options?.reset) {
+      this.resetStats();
+    }
+    return stats;
   }
 
   /**
@@ -328,6 +409,14 @@ export class BatchFramer extends TypedEventEmitter<BatchFramerEvents> {
     if (this.flushTimer) {
       clearTimeout(this.flushTimer);
       this.flushTimer = undefined;
+    }
+  }
+
+  private releaseSlots(indices: number[]): void {
+    for (const idx of indices) {
+      if (idx >= 0 && idx < this.ring.length) {
+        this.ring[idx].inUse = false;
+      }
     }
   }
 }

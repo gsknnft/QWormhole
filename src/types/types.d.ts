@@ -1,5 +1,8 @@
 //@preserve
 import type net from "node:net";
+import type { EntropyMetrics } from "../handshake/entropy-policy";
+import type { FlowControllerDiagnostics } from "../flow-controller";
+import type { BatchFramerStats } from "../batch-framer";
 
 export type Payload = string | Buffer | Uint8Array | Record<string, unknown>;
 
@@ -134,6 +137,10 @@ export interface QWormholeCommonOptions<TMessage = unknown> {
    * Called with telemetry snapshots (bytes in/out, connections, backpressure toggles).
    */
   onTelemetry?: (metrics: QWormholeTelemetry) => void;
+  /**
+   * Called when a connection closes so downstream systems can persist flow diagnostics for trust weighting.
+   */
+  onTrustSnapshot?: (snapshot: FlowTrustSnapshot) => void | Promise<void>;
 }
 
 export interface QWormholeClientOptions<
@@ -143,12 +150,18 @@ export interface QWormholeClientOptions<
    * When true, socket writes will throw if not connected instead of being ignored.
    */
   requireConnectedForSend?: boolean;
+  /** Optional entropy metrics used to derive adaptive flow control policy */
+  entropyMetrics?: EntropyMetrics;
+  /** Hint indicating whether the peer transport is native (enables macro batches) */
+  peerIsNative?: boolean;
 }
 
 export interface QWormholeServerOptions<
   TMessage = unknown,
 > extends QWormholeCommonOptions<TMessage> {
   allowHalfOpen?: boolean;
+  /** When true, handshake payloads are emitted through the normal message event stream. */
+  emitHandshakeMessages?: boolean;
   /**
    * Maximum concurrent clients. Extra connections are rejected immediately.
    */
@@ -249,6 +262,20 @@ export interface QWormholeTelemetry {
   connections: number;
   backpressureEvents: number;
   drainEvents: number;
+}
+
+export interface FlowTrustSnapshot {
+  direction: "client" | "server";
+  reason: "close" | "error" | "disconnect";
+  timestamp: number;
+  remoteAddress?: string;
+  remotePort?: number;
+  peerId?: string;
+  handshakeTags?: Record<string, unknown>;
+  entropyMetrics?: EntropyMetrics;
+  policyTrustLevel?: number;
+  flowDiagnostics?: FlowControllerDiagnostics;
+  batchStats?: BatchFramerStats;
 }
 
 export interface SendOptions {

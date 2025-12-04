@@ -39,7 +39,7 @@ const negentropyVectorSchema: z.ZodType<NegentropyVector> = z.union([
       entropy: z.number().nonnegative().optional(),
       vector: z.array(z.number()).optional(),
     })
-    .passthrough(),
+    .catchall(z.unknown()),
 ]);
 
 export const handshakeTagsSchema = z.record(
@@ -86,7 +86,7 @@ export const entropyMetricsSchema = z
     /** Negentropic index (0-1, derived from coherence/entropy) */
     negIndex: z.number().min(0).max(1).optional(),
   })
-  .passthrough();
+  .catchall(z.unknown());
 
 export const handshakePayloadSchema = z
   .object({
@@ -103,7 +103,7 @@ export const handshakePayloadSchema = z
     /** Entropy metrics for adaptive transport (0.3.2) */
     entropyMetrics: entropyMetricsSchema.optional(),
   })
-  .passthrough();
+  .catchall(z.unknown());
 
 export const negantropicHandshakeSchema = handshakePayloadSchema
   .extend({
@@ -114,7 +114,7 @@ export const negantropicHandshakeSchema = handshakePayloadSchema
     nIndex: z.number(),
     signature: z.string().min(1),
   })
-  .passthrough();
+  .catchall(z.unknown());
 
 export const scpStatePayloadSchema = z
   .object({
@@ -125,7 +125,7 @@ export const scpStatePayloadSchema = z
         stateHash: z.string().min(1),
         summary: z.string().optional(),
       })
-      .passthrough()
+      .catchall(z.unknown())
       .optional(),
     delta: z
       .object({
@@ -133,7 +133,7 @@ export const scpStatePayloadSchema = z
           z.union([z.string(), z.record(z.string(), z.unknown())]),
         ),
       })
-      .passthrough()
+      .catchall(z.unknown())
       .optional(),
     merge: z
       .object({
@@ -143,12 +143,12 @@ export const scpStatePayloadSchema = z
           .or(z.string())
           .optional(),
       })
-      .passthrough()
+      .catchall(z.unknown())
       .optional(),
     ts: z.number().int().nonnegative(),
     sig: z.string().min(1),
   })
-  .passthrough();
+  .catchall(z.unknown());
 
 export type HandshakePayload = z.infer<typeof handshakePayloadSchema>;
 export type NegantropicHandshake = z.infer<typeof negantropicHandshakeSchema>;
