@@ -10,6 +10,23 @@ import {
 import { BatchFramer } from "../src/batch-framer";
 import type { EntropyMetrics } from "../src/handshake/entropy-policy";
 
+/**
+ * Helper function to create test policies with optional overrides
+ */
+const createTestPolicy = (
+  overrides?: Partial<SessionFlowPolicy>,
+): SessionFlowPolicy => ({
+  coherence: 0.8,
+  entropyVelocity: 0.3,
+  preferredBatchSize: 64,
+  minSlice: 4,
+  maxSlice: 64,
+  burstBudgetBytes: 256 * 1024,
+  rateBytesPerSec: 10 * 1024 * 1024,
+  peerIsNative: true,
+  ...overrides,
+});
+
 describe("TokenBucket", () => {
   it("allows immediate send when tokens available", () => {
     const bucket = new TokenBucket(1000, 500);
@@ -48,19 +65,6 @@ describe("TokenBucket", () => {
 });
 
 describe("FlowController", () => {
-  const createTestPolicy = (
-    overrides?: Partial<SessionFlowPolicy>,
-  ): SessionFlowPolicy => ({
-    coherence: 0.8,
-    entropyVelocity: 0.3,
-    preferredBatchSize: 64,
-    minSlice: 4,
-    maxSlice: 64,
-    burstBudgetBytes: 256 * 1024,
-    rateBytesPerSec: 10 * 1024 * 1024,
-    peerIsNative: true,
-    ...overrides,
-  });
 
   it("initializes with half of preferred batch size", () => {
     const policy = createTestPolicy({ preferredBatchSize: 64 });
@@ -294,20 +298,6 @@ describe("FlowController integration with BatchFramer", () => {
       batchSize: 64,
       flushIntervalMs: 0, // Disable auto-flush for testing
     });
-  });
-
-  const createTestPolicy = (
-    overrides?: Partial<SessionFlowPolicy>,
-  ): SessionFlowPolicy => ({
-    coherence: 0.8,
-    entropyVelocity: 0.3,
-    preferredBatchSize: 64,
-    minSlice: 4,
-    maxSlice: 64,
-    burstBudgetBytes: 256 * 1024,
-    rateBytesPerSec: 10 * 1024 * 1024,
-    peerIsNative: true,
-    ...overrides,
   });
 
   it("enqueues payloads without immediate flush when below slice threshold", async () => {

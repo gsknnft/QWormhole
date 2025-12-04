@@ -15,7 +15,7 @@
  */
 
 import type { BatchFramer } from "./batch-framer";
-import type { EntropyMetrics, EntropyVelocity } from "./handshake/entropy-policy";
+import type { EntropyMetrics, EntropyVelocity, CoherenceLevel } from "./handshake/entropy-policy";
 import { deriveEntropyPolicy } from "./handshake/entropy-policy";
 import { TypedEventEmitter } from "./typedEmitter";
 
@@ -330,17 +330,13 @@ function entropyVelocityToNumeric(velocity: EntropyVelocity): number {
       return 0.6;
     case "spiking":
       return 1.0;
-    default:
-      return 0.3;
   }
 }
 
 /**
  * Map coherence level to numeric value (0..1)
  */
-function coherenceLevelToNumeric(
-  coherence: "high" | "medium" | "low" | "chaos",
-): number {
+function coherenceLevelToNumeric(coherence: CoherenceLevel): number {
   switch (coherence) {
     case "high":
       return 0.9;
@@ -350,8 +346,6 @@ function coherenceLevelToNumeric(
       return 0.4;
     case "chaos":
       return 0.1;
-    default:
-      return 0.5;
   }
 }
 
