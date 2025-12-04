@@ -64,6 +64,15 @@ export {
 } from "./schema/scp";
 export { createConsoleTelemetryLogger } from "./telemetry-logger";
 export { createHandshakeVerifier } from "./handshake/handshake-policy";
+export {
+  FlowController,
+  TokenBucket,
+  createFlowController,
+  deriveSessionFlowPolicy,
+  FLOW_DEFAULTS,
+  type SessionFlowPolicy,
+  type FlowControllerDiagnostics,
+} from "./flow-controller";
 export type {
   Payload,
   QWormholeClientEvents,
