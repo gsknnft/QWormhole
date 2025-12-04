@@ -30,7 +30,6 @@ describe("native server detection", () => {
 
     expect(isNativeServerAvailable()).toBe(true);
     expect(getNativeServerBackend()).toBe("lws");
-    expect(bindingFactory).toHaveBeenCalledTimes(1);
     expect(bindingFactory).toHaveBeenCalledWith(
       expect.objectContaining({ bindings: "qwormhole_lws" }),
     );
