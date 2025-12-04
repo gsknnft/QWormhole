@@ -13,17 +13,19 @@ This document outlines near-term enhancements for @gsknnft/qwormhole. Items are 
 - **Mesh network tutorial**: Added `docs/mesh-network-tutorial.md` with WireGuard integration examples
 - **Deployment patterns**: Added `docs/deployment-patterns.md` covering Docker, Kubernetes, Systemd, PM2
 - **Security policy**: Added `SECURITY.md` for vulnerability reporting
-- **Entropy-adaptive handshake (0.3.2 preview)**: Implemented entropy policy system with:
+- **Entropy-adaptive handshake (0.3.2 core, landed on dev)**: Implemented entropy policy system with:
   - `EntropyPolicy` types for trust-zero, trust-light, immune, paranoia modes
   - `deriveEntropyPolicy()` function that maps N-index to transport policy
   - New handshake fields: `entropy`, `entropyVelocity`, `coherence`, `negIndex`
   - Policy-aware handshake attachment in server
   - `entropyMetrics` and `policy` fields in connection handshake result
-- **BatchFramer for zero-copy framing (0.3.0 preview)**: Added high-performance batching:
+- **BatchFramer for zero-copy framing (0.3.0 core, landed on dev)**: Added high-performance batching that now powers the default TS/native write paths:
   - Preallocated buffer ring for zero-copy framing
   - writev() batching support via cork/uncork
   - Configurable batch sizes per entropy policy
   - Automatic flush timers for partial batches
+
+_Note: the full 0.3.0 feature set is merged into the dev branch, but the published package version remains 0.1.x until we cut an official release._
 
 ## Native & Transport
 
@@ -72,6 +74,7 @@ This document outlines near-term enhancements for @gsknnft/qwormhole. Items are 
 - **v0.1.x (current)**: Native server wrapper implemented, TLS/mesh/deployment docs added
 - **v0.2.0**: Native server to 80%+ coverage, publish prebuilt `.node` binaries
 - **v0.2.1**: Native server parity (production-ready), session key rotation, replay protection
+- **v0.3.0-dev (merged, pending version bump)**: Entropy-adaptive handshake payloads + BatchFramer zero-copy pipeline + entropy-aware benches/tests
 
 ---
 
@@ -129,10 +132,13 @@ This turns QWormhole from “fast pipe” into **the first transport that litera
 2. Policy table implementation in `deriveEntropyPolicy()` - maps N-index to transport configuration
 3. Server-side policy derivation - connections now have `handshake.policy` and `handshake.entropyMetrics`
 4. BatchFramer class with writev() batching and preallocated buffer rings
+5. BatchFramer wired into client/server write paths (TS + native) with cork/uncork flushing and slot tracking
+6. Entropy-aware benches & tests (21 policy tests, 13 BatchFramer tests, 3 integration suites) running in CI
 
 🔄 **In Progress:**
-1. Integration of BatchFramer into client/server write paths
-2. Benchmark suite updates for entropy-aware scenarios
+1. Backpressure-aware batch flush (0.3.1) that adapts BatchFramer policy to live traffic
+2. io_uring backend (0.3.3) + libsocket parity for Linux/WSL builds
+3. Version bump + changelog for the merged 0.3.0 work so dev ≠ published gap closes
 
 📋 **Next:**
 1. Backpressure-aware batch flush (0.3.1)
@@ -140,10 +146,10 @@ This turns QWormhole from “fast pipe” into **the first transport that litera
 
 ### Immediate next actions (next 2–3 weeks)
 
-1. ~~Merge zero-copy + writev batching → 0.3.0~~ ✅ BatchFramer implemented
-2. ~~Add entropy fields to handshake payload~~ ✅ Implemented in schema and server
-3. ~~Implement the policy table above in `Runtime.handshakeHandler`~~ ✅ deriveEntropyPolicy() implemented
-4. Ship 0.3.0 with a new benchmark suite that includes mixed topologies + entropy injection
+1. Publish a `0.3.0-dev` (or beta) tag + changelog so npm consumers can opt in
+2. Land backpressure-aware batch flush (0.3.1) across TS/native implementations
+3. Continue io_uring backend prototyping on WSL/Linux and document libsocket fallback expectations
+4. Expand the benchmark suite to include entropy-injection + regression gating for BatchFramer configs
 
 Do that and 0.3.0 alone will be the biggest single leap in Node-to-node performance anyone has published in years.
 
@@ -184,21 +190,22 @@ Latency target:
 
 *"Make it fast enough to disappear."*
 
-## **0.3.0 — Zero-Copy Framing + writev() Pipeline**
+## ~~0.3.0 — Zero-Copy Framing + writev() Pipeline~~
 
-**Target:** ≤ 150 ms (TS ↔ TS)
-**Goal:** Remove per-message syscall cost and memory churn.
+**Target:** ~~≤ 150 ms (TS ↔ TS)~~
+**Goal:** ~~Remove per-message syscall cost and memory churn.~~
+**Completed:** Yup
 
 ### What ships:
 
-* Zero-copy outbound frame buffers
-* **writev() batching** (Node 20+ native)
-* Preallocated buffer rings
-* Configurable batch size (adaptive in 0.3.1)
+* ~~Zero-copy outbound frame buffers~~
+* ~~**writev() batching** (Node 20+ native)~~
+* ~~Preallocated buffer rings~~
+* ~~Configurable batch size (adaptive in 0.3.1)~~
 
 ### Why it matters:
 
-This is the jump that makes TS mode competitive with native, and gives you deterministic frame time regardless of payload velocity.
+This is the jump that makes TS mode competitive with native, and gives deterministic frame time regardless of payload velocity.
 
 ---
 
