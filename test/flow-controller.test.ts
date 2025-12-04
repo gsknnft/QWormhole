@@ -300,6 +300,11 @@ describe("FlowController integration with BatchFramer", () => {
     });
   });
 
+  afterEach(() => {
+    // Clean up to prevent hanging timers
+    framer.reset();
+  });
+
   it("enqueues payloads without immediate flush when below slice threshold", async () => {
     const flushHandler = vi.fn();
     controller.on("flush", flushHandler);
