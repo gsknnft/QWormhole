@@ -47,6 +47,47 @@ export const handshakeTagsSchema = z.record(
   z.union([z.string(), z.number()]),
 );
 
+/**
+ * Entropy velocity indicator for adaptive transport policy
+ */
+export const entropyVelocitySchema = z.enum([
+  "low",
+  "stable",
+  "rising",
+  "spiking",
+]);
+
+/**
+ * Coherence level indicator for adaptive transport policy
+ */
+export const coherenceLevelSchema = z.enum(["high", "medium", "low", "chaos"]);
+
+/**
+ * Handshake mode derived from negentropic index
+ */
+export const handshakeModeSchema = z.enum([
+  "trust-zero",
+  "trust-light",
+  "immune",
+  "paranoia",
+]);
+
+/**
+ * Entropy metrics for adaptive handshake (0.3.2 roadmap)
+ */
+export const entropyMetricsSchema = z
+  .object({
+    /** Shannon entropy of the session (0-8 for byte data) */
+    entropy: z.number().nonnegative().optional(),
+    /** Rate of change of entropy over time */
+    entropyVelocity: entropyVelocitySchema.optional(),
+    /** Coherence level of the peer */
+    coherence: coherenceLevelSchema.optional(),
+    /** Negentropic index (0-1, derived from coherence/entropy) */
+    negIndex: z.number().min(0).max(1).optional(),
+  })
+  .passthrough();
+
 export const handshakePayloadSchema = z
   .object({
     type: z.literal("handshake"),
@@ -59,6 +100,8 @@ export const handshakePayloadSchema = z
     tags: handshakeTagsSchema.optional(),
     nIndex: z.number().optional(),
     negHash: z.string().min(1).optional(),
+    /** Entropy metrics for adaptive transport (0.3.2) */
+    entropyMetrics: entropyMetricsSchema.optional(),
   })
   .passthrough();
 
@@ -111,3 +154,7 @@ export type HandshakePayload = z.infer<typeof handshakePayloadSchema>;
 export type NegantropicHandshake = z.infer<typeof negantropicHandshakeSchema>;
 export type SCPStatePayload = z.infer<typeof scpStatePayloadSchema>;
 export type SCPCapabilitySet = z.infer<typeof scpCapabilitySetSchema>;
+export type EntropyMetricsPayload = z.infer<typeof entropyMetricsSchema>;
+export type EntropyVelocity = z.infer<typeof entropyVelocitySchema>;
+export type CoherenceLevel = z.infer<typeof coherenceLevelSchema>;
+export type HandshakeMode = z.infer<typeof handshakeModeSchema>;

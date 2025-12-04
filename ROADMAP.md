@@ -13,6 +13,17 @@ This document outlines near-term enhancements for @gsknnft/qwormhole. Items are 
 - **Mesh network tutorial**: Added `docs/mesh-network-tutorial.md` with WireGuard integration examples
 - **Deployment patterns**: Added `docs/deployment-patterns.md` covering Docker, Kubernetes, Systemd, PM2
 - **Security policy**: Added `SECURITY.md` for vulnerability reporting
+- **Entropy-adaptive handshake (0.3.2 preview)**: Implemented entropy policy system with:
+  - `EntropyPolicy` types for trust-zero, trust-light, immune, paranoia modes
+  - `deriveEntropyPolicy()` function that maps N-index to transport policy
+  - New handshake fields: `entropy`, `entropyVelocity`, `coherence`, `negIndex`
+  - Policy-aware handshake attachment in server
+  - `entropyMetrics` and `policy` fields in connection handshake result
+- **BatchFramer for zero-copy framing (0.3.0 preview)**: Added high-performance batching:
+  - Preallocated buffer ring for zero-copy framing
+  - writev() batching support via cork/uncork
+  - Configurable batch sizes per entropy policy
+  - Automatic flush timers for partial batches
 
 ## Native & Transport
 
@@ -111,11 +122,27 @@ These measurements replace the earlier pre-native figures and set the new "curre
 
 This turns QWormhole from “fast pipe” into **the first transport that literally listens to SigilNet’s own physics engine** and rewires itself in real time.
 
+### Implementation Status (as of 2025-12-04)
+
+✅ **Completed:**
+1. Entropy-adaptive handshake payload with `entropy`, `entropyVelocity`, `coherence`, `negIndex` fields
+2. Policy table implementation in `deriveEntropyPolicy()` - maps N-index to transport configuration
+3. Server-side policy derivation - connections now have `handshake.policy` and `handshake.entropyMetrics`
+4. BatchFramer class with writev() batching and preallocated buffer rings
+
+🔄 **In Progress:**
+1. Integration of BatchFramer into client/server write paths
+2. Benchmark suite updates for entropy-aware scenarios
+
+📋 **Next:**
+1. Backpressure-aware batch flush (0.3.1)
+2. io_uring backend (0.3.3)
+
 ### Immediate next actions (next 2–3 weeks)
 
-1. Merge zero-copy + writev batching → 0.3.0 (already half-done in dev)
-2. Add entropy fields to handshake payload (one interface change)
-3. Implement the policy table above in `Runtime.handshakeHandler`
+1. ~~Merge zero-copy + writev batching → 0.3.0~~ ✅ BatchFramer implemented
+2. ~~Add entropy fields to handshake payload~~ ✅ Implemented in schema and server
+3. ~~Implement the policy table above in `Runtime.handshakeHandler`~~ ✅ deriveEntropyPolicy() implemented
 4. Ship 0.3.0 with a new benchmark suite that includes mixed topologies + entropy injection
 
 Do that and 0.3.0 alone will be the biggest single leap in Node-to-node performance anyone has published in years.
