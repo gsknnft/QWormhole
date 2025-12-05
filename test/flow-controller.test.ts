@@ -290,6 +290,7 @@ describe("createFlowController", () => {
 describe("FlowController integration with BatchFramer", () => {
   let controller: FlowController;
   let framer: BatchFramer;
+  let canFlushSpy: ReturnType<typeof vi.spyOn> | undefined;
 
   beforeEach(() => {
     const policy = createTestPolicy();
@@ -298,10 +299,13 @@ describe("FlowController integration with BatchFramer", () => {
       batchSize: 64,
       flushIntervalMs: 0, // Disable auto-flush for testing
     });
+    canFlushSpy = vi.spyOn(framer, "canFlush", "get").mockReturnValue(true);
   });
 
   afterEach(() => {
     // Clean up to prevent hanging timers
+    canFlushSpy?.mockRestore();
+    canFlushSpy = undefined;
     framer.reset();
   });
 

@@ -8,13 +8,8 @@ export default defineConfig({
     testTimeout: 30000,
     hookTimeout: 10000,
     teardownTimeout: 5000,
-    // Use threads pool with single thread for consistent test ordering
-    pool: "threads",
-    poolOptions: {
-      threads: {
-        singleThread: true,
-      },
-    },
+    // Use forks pool so every worker runs in an isolated process (helps Windows socket teardown)
+    pool: "forks",
     // Disable file parallelism to reduce memory usage and ensure clean teardown
     fileParallelism: false,
     coverage: {

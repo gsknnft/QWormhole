@@ -141,16 +141,44 @@ export class QWormholeServer<TMessage = Buffer> extends TypedEventEmitter<
     });
   }
 
-  async close(): Promise<void> {
-    return new Promise(resolve => {
-      for (const client of this.clients.values()) {
-        client.destroy();
+  async close(_gracefulMs = 250): Promise<void> {
+    const clients = Array.from(this.clients.values());
+
+    for (const connection of clients) {
+      try {
+        connection.end();
+      } catch (err) {
+        this.emit("error", err as Error);
       }
-      this.clients.clear();
-      this.server.close(() => {
+    }
+
+    for (const connection of clients) {
+      try {
+        connection.destroy();
+      } catch (err) {
+        this.emit("error", err as Error);
+      }
+    }
+
+    this.clients.clear();
+
+    await new Promise<void>((resolve, reject) => {
+      const onClose = () => {
+        cleanup();
         this.emit("close", undefined as never);
         resolve();
-      });
+      };
+      const onError = (err: Error) => {
+        cleanup();
+        reject(err);
+      };
+      const cleanup = () => {
+        this.server.off("close", onClose);
+        this.server.off("error", onError);
+      };
+      this.server.once("close", onClose);
+      this.server.once("error", onError);
+      this.server.close();
     });
   }
 
@@ -161,19 +189,7 @@ export class QWormholeServer<TMessage = Buffer> extends TypedEventEmitter<
   }
 
   async shutdown(gracefulMs = 1000): Promise<void> {
-    this.server.close();
-    const endPromises = Array.from(this.clients.values()).map(client =>
-      client.end(),
-    );
-    await Promise.race([
-      Promise.allSettled(endPromises),
-      new Promise(resolve => setTimeout(resolve, gracefulMs)),
-    ]);
-    for (const client of this.clients.values()) {
-      client.destroy();
-    }
-    this.clients.clear();
-    this.emit("close", undefined as never);
+    await this.close(gracefulMs);
   }
 
   getConnection(id: string): QWormholeServerConnection | undefined {
