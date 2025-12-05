@@ -487,7 +487,10 @@ export class QWormholeClient<TMessage = Buffer> extends TypedEventEmitter<
   /**
    * Async version of enqueueSend that waits for the drain to complete
    */
-  private async enqueueSendAsync(payload: Payload, options?: SendOptions): Promise<void> {
+  private async enqueueSendAsync(
+    payload: Payload,
+    options?: SendOptions,
+  ): Promise<void> {
     if (!this.socket || this.socket.destroyed) {
       if (this.options.requireConnectedForSend) {
         throw new Error("QWormholeClient is not connected");

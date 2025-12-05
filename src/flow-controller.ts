@@ -14,6 +14,11 @@
  * This enables the "stack of boxes vs stack of paper" behavior automatically.
  */
 
+import {
+  performance,
+  monitorEventLoopDelay,
+  PerformanceObserver,
+} from "node:perf_hooks";
 import type { BatchFramer } from "./batch-framer";
 import type {
   EntropyMetrics,
@@ -37,12 +42,65 @@ export interface SessionFlowPolicy {
   minSlice: number;
   /** Maximum slice size (frames) */
   maxSlice: number;
+  /** Negentropic index from handshake */
+  nIndex?: number;
   /** Burst budget in bytes (from entropy/token bucket policy) */
   burstBudgetBytes: number;
   /** Rate limit in bytes per second */
   rateBytesPerSec: number;
   /** Whether peer is native (allows larger batches) */
   peerIsNative: boolean;
+}
+
+export type AdaptiveMode = "off" | "guarded" | "aggressive";
+
+export interface PolicyBounds {
+  minSlice: number;
+  maxSlice: number;
+}
+
+export interface PeerProfile {
+  isNative: boolean;
+  nIndex: number;
+  coherence: number;
+}
+
+interface AdaptiveState {
+  sliceSize: number;
+  mode: AdaptiveMode;
+  bounds: PolicyBounds;
+  flushIntervalAvgMs: number;
+  bytesPerFlushAvg: number;
+  eluIdleRatioAvg: number;
+  gcPauseMaxMs: number;
+  backpressureCount: number;
+  lastFlushAt: number;
+}
+
+interface AdaptiveInternals {
+  state: AdaptiveState;
+  peer: PeerProfile;
+  config: AdaptiveConfig;
+  flushCounter: number;
+  cooldownRemaining: number;
+}
+
+interface AdaptiveConfig {
+  mode: AdaptiveMode;
+  idleTarget: number;
+  gcBudgetMs: number;
+  sampleEvery: number;
+  adaptEvery: number;
+  driftStep: number;
+  lerpFactor: number;
+  backpressureCooldown: number;
+}
+
+interface FlowControllerInitOptions {
+  adaptiveMode?: AdaptiveMode;
+  peerProfile?: PeerProfile;
+  bounds?: PolicyBounds;
+  adaptiveConfig?: Partial<AdaptiveConfig>;
 }
 
 /**
@@ -64,6 +122,78 @@ export const FLOW_DEFAULTS = {
   /** Upper bound on token bucket induced delay */
   MAX_RESERVE_DELAY_MS: 200,
 } as const;
+
+const ADAPTIVE_DEFAULTS: AdaptiveConfig = {
+  mode: "off",
+  idleTarget: 0.2,
+  gcBudgetMs: 4,
+  sampleEvery: 64,
+  adaptEvery: 64,
+  driftStep: FLOW_DEFAULTS.DRIFT_STEP,
+  lerpFactor: 0.25,
+  backpressureCooldown: 64,
+};
+
+const loopDelayMonitor =
+  typeof monitorEventLoopDelay === "function"
+    ? monitorEventLoopDelay({ resolution: 20 })
+    : undefined;
+if (loopDelayMonitor) {
+  loopDelayMonitor.enable();
+}
+
+let recentGcPauseMs = 0;
+if (typeof PerformanceObserver !== "undefined") {
+  try {
+    const gcObserver = new PerformanceObserver(list => {
+      for (const entry of list.getEntries()) {
+        recentGcPauseMs = Math.max(recentGcPauseMs, entry.duration);
+      }
+    });
+    gcObserver.observe({ entryTypes: ["gc"], buffered: false });
+  } catch {
+    // No-op if GC observer is unavailable
+  }
+}
+
+function readEventLoopIdleRatio(): number {
+  if (!loopDelayMonitor) return 0;
+  const max = loopDelayMonitor.max || 0;
+  if (max <= 0) return 0;
+  const mean = loopDelayMonitor.mean || 0;
+  const normalized = Math.min(mean / max, 1);
+  return Math.max(0, 1 - normalized);
+}
+
+function readRecentGcPause(): number {
+  const value = recentGcPauseMs;
+  recentGcPauseMs *= 0.5;
+  return value;
+}
+
+function ewma(prev: number, sample: number, alpha = 0.2): number {
+  if (!Number.isFinite(prev) || prev === 0) {
+    return sample;
+  }
+  return prev * (1 - alpha) + sample * alpha;
+}
+
+function lerpInt(a: number, b: number, t: number): number {
+  return Math.round(a + (b - a) * t);
+}
+
+function resolveAdaptiveMode(preferred?: AdaptiveMode | string): AdaptiveMode {
+  if (!preferred) return "off";
+  const value = `${preferred}`.toLowerCase();
+  if (value === "guarded" || value === "aggressive" || value === "off") {
+    return value;
+  }
+  return "off";
+}
+
+function envAdaptiveMode(): AdaptiveMode {
+  return resolveAdaptiveMode(process.env.QWORMHOLE_ADAPTIVE_SLICES);
+}
 
 /**
  * Events emitted by FlowController
@@ -148,13 +278,17 @@ export class FlowController extends TypedEventEmitter<FlowControllerEvents> {
   private flushPromise: Promise<void> | null = null;
   private forceFlushQueued = false;
   private backpressureCount = 0;
+  private adaptive?: AdaptiveInternals;
 
   // Diagnostics
   private totalFlushes = 0;
   private totalBytes = 0;
   private sliceHistory: Array<{ timestamp: number; size: number }> = [];
 
-  constructor(policy: SessionFlowPolicy) {
+  constructor(
+    policy: SessionFlowPolicy,
+    initOptions?: FlowControllerInitOptions,
+  ) {
     super();
     this.policy = policy;
 
@@ -170,6 +304,43 @@ export class FlowController extends TypedEventEmitter<FlowControllerEvents> {
       policy.rateBytesPerSec,
       policy.burstBudgetBytes,
     );
+
+    const adaptiveMode = resolveAdaptiveMode(
+      initOptions?.adaptiveMode ?? envAdaptiveMode(),
+    );
+    if (adaptiveMode !== "off") {
+      const bounds: PolicyBounds = initOptions?.bounds ?? {
+        minSlice: policy.minSlice,
+        maxSlice: this.getEffectiveMaxSlice(),
+      };
+      const peerProfile: PeerProfile = initOptions?.peerProfile ?? {
+        isNative: policy.peerIsNative,
+        nIndex: policy.nIndex ?? policy.coherence ?? 0.5,
+        coherence: policy.coherence,
+      };
+      const config: AdaptiveConfig = {
+        ...ADAPTIVE_DEFAULTS,
+        ...initOptions?.adaptiveConfig,
+        mode: adaptiveMode,
+      };
+      this.adaptive = {
+        state: {
+          sliceSize: this.sliceSize,
+          mode: adaptiveMode,
+          bounds,
+          flushIntervalAvgMs: 0,
+          bytesPerFlushAvg: 0,
+          eluIdleRatioAvg: 0,
+          gcPauseMaxMs: 0,
+          backpressureCount: 0,
+          lastFlushAt: performance.now(),
+        },
+        peer: peerProfile,
+        config,
+        flushCounter: 0,
+        cooldownRemaining: 0,
+      };
+    }
 
     this.recordSliceChange("init");
   }
@@ -211,6 +382,13 @@ export class FlowController extends TypedEventEmitter<FlowControllerEvents> {
       Math.floor(this.sliceSize / 2),
     );
     this.backpressureCount += 1;
+    if (this.adaptive) {
+      this.adaptive.state.backpressureCount += 1;
+      this.adaptive.cooldownRemaining = Math.max(
+        this.adaptive.cooldownRemaining,
+        this.adaptive.config.backpressureCooldown,
+      );
+    }
 
     if (previousSize !== this.sliceSize) {
       this.recordSliceChange("backpressure");
@@ -234,6 +412,12 @@ export class FlowController extends TypedEventEmitter<FlowControllerEvents> {
       maxSlice,
       this.sliceSize + FLOW_DEFAULTS.DRIFT_STEP,
     );
+    if (this.adaptive && this.adaptive.state.backpressureCount > 0) {
+      this.adaptive.state.backpressureCount = Math.max(
+        0,
+        this.adaptive.state.backpressureCount - 1,
+      );
+    }
 
     if (previousSize !== this.sliceSize) {
       this.recordSliceChange("drain");
@@ -267,6 +451,7 @@ export class FlowController extends TypedEventEmitter<FlowControllerEvents> {
    */
   async flush(framer: BatchFramer): Promise<void> {
     // Note: flushing state is managed by scheduleFlush, not here
+    const frameCount = framer.pendingBatchSize;
     const projectedBytes = framer.pendingBatchBytes;
     const delayMs = this.bucket.reserve(projectedBytes);
 
@@ -275,6 +460,8 @@ export class FlowController extends TypedEventEmitter<FlowControllerEvents> {
     }
 
     await framer.flushBatch();
+
+    this.handlePostFlushTelemetry(frameCount, projectedBytes, delayMs);
 
     this.totalFlushes++;
     this.totalBytes += projectedBytes;
@@ -310,6 +497,16 @@ export class FlowController extends TypedEventEmitter<FlowControllerEvents> {
         peerIsNative: this.policy.peerIsNative,
       },
       sliceHistory: this.sliceHistory.slice(-10), // Last 10 changes
+      adaptive: this.adaptive
+        ? {
+            mode: this.adaptive.state.mode,
+            sliceSize: this.adaptive.state.sliceSize,
+            flushIntervalAvgMs: this.adaptive.state.flushIntervalAvgMs,
+            bytesPerFlushAvg: this.adaptive.state.bytesPerFlushAvg,
+            eluIdleRatioAvg: this.adaptive.state.eluIdleRatioAvg,
+            gcPauseMaxMs: this.adaptive.state.gcPauseMaxMs,
+          }
+        : undefined,
     };
   }
 
@@ -354,6 +551,94 @@ export class FlowController extends TypedEventEmitter<FlowControllerEvents> {
     return new Promise(resolve => setTimeout(resolve, ms));
   }
 
+  private handlePostFlushTelemetry(
+    frameCount: number,
+    bytes: number,
+    _reserveDelayMs: number,
+  ): void {
+    if (!this.adaptive || frameCount <= 0 || bytes <= 0) return;
+    const { state, config } = this.adaptive;
+    const now = performance.now();
+    const dt = state.lastFlushAt ? now - state.lastFlushAt : 0;
+    state.lastFlushAt = now;
+    if (dt > 0) {
+      state.flushIntervalAvgMs = ewma(state.flushIntervalAvgMs, dt);
+    }
+    state.bytesPerFlushAvg = ewma(state.bytesPerFlushAvg, bytes);
+    state.sliceSize = this.sliceSize;
+    this.adaptive.flushCounter += 1;
+
+    if (this.adaptive.flushCounter % config.sampleEvery === 0) {
+      state.eluIdleRatioAvg = ewma(
+        state.eluIdleRatioAvg,
+        readEventLoopIdleRatio(),
+      );
+      state.gcPauseMaxMs = Math.max(
+        state.gcPauseMaxMs * 0.9,
+        readRecentGcPause(),
+      );
+      if (state.backpressureCount > 0) {
+        state.backpressureCount = Math.max(0, state.backpressureCount - 1);
+      }
+    }
+
+    if (this.adaptive.flushCounter % config.adaptEvery === 0) {
+      this.applyAdaptiveSlice();
+    }
+  }
+
+  private applyAdaptiveSlice(): void {
+    if (!this.adaptive) return;
+    const { state, config, peer } = this.adaptive;
+    const bounds = state.bounds;
+    const peerMax =
+      peer.isNative || peer.nIndex >= 0.85
+        ? bounds.maxSlice
+        : Math.min(bounds.maxSlice, FLOW_DEFAULTS.TS_PEER_MAX_SLICE);
+
+    const idleOK = state.eluIdleRatioAvg >= config.idleTarget;
+    const gcOK = state.gcPauseMaxMs <= config.gcBudgetMs;
+    const cooldownActive = this.adaptive.cooldownRemaining > 0;
+    const bpOK = state.backpressureCount === 0 && !cooldownActive;
+
+    let desired = this.sliceSize;
+    if (idleOK && gcOK && bpOK) {
+      desired = this.sliceSize + config.driftStep;
+    } else {
+      desired = Math.max(this.sliceSize - config.driftStep, bounds.minSlice);
+    }
+
+    if (cooldownActive) {
+      desired = bounds.minSlice;
+      this.adaptive.cooldownRemaining = Math.max(
+        0,
+        this.adaptive.cooldownRemaining - config.adaptEvery,
+      );
+    }
+
+    desired = this.clamp(desired, bounds.minSlice, peerMax);
+
+    let nextSlice = desired;
+    if (state.mode === "guarded") {
+      nextSlice = lerpInt(this.sliceSize, desired, config.lerpFactor);
+    }
+
+    if (nextSlice !== this.sliceSize) {
+      const previousSize = this.sliceSize;
+      this.sliceSize = nextSlice;
+      state.sliceSize = nextSlice;
+      this.recordSliceChange("adaptive");
+      this.emit("sliceDrift", {
+        previousSize,
+        newSize: nextSlice,
+        reason: "adaptive",
+      });
+    }
+
+    state.backpressureCount = 0;
+    state.gcPauseMaxMs *= 0.9;
+  }
+
   private scheduleFlush(
     framer: BatchFramer,
     force: boolean,
@@ -384,7 +669,10 @@ export class FlowController extends TypedEventEmitter<FlowControllerEvents> {
         const shouldForce = this.forceFlushQueued;
         this.forceFlushQueued = false;
         // Only continue flushing if framer still has a connected socket
-        if (framer.canFlush && (framer.pendingBatchSize >= this.sliceSize || shouldForce)) {
+        if (
+          framer.canFlush &&
+          (framer.pendingBatchSize >= this.sliceSize || shouldForce)
+        ) {
           await this.scheduleFlush(framer, shouldForce);
         }
       }
@@ -410,6 +698,14 @@ export interface FlowControllerDiagnostics {
     peerIsNative: boolean;
   };
   sliceHistory: Array<{ timestamp: number; size: number }>;
+  adaptive?: {
+    mode: AdaptiveMode;
+    sliceSize: number;
+    flushIntervalAvgMs: number;
+    bytesPerFlushAvg: number;
+    eluIdleRatioAvg: number;
+    gcPauseMaxMs: number;
+  };
 }
 
 /**
@@ -468,6 +764,8 @@ export function deriveSessionFlowPolicy(
     ? entropyVelocityToNumeric(metrics.entropyVelocity)
     : 0.3;
 
+  const nIndex = metrics.negIndex ?? coherence;
+
   // Derive rate based on trust level
   const baseRate =
     options?.rateBytesPerSec ?? FLOW_DEFAULTS.DEFAULT_RATE_BYTES_PER_SEC;
@@ -493,6 +791,7 @@ export function deriveSessionFlowPolicy(
     burstBudgetBytes,
     rateBytesPerSec,
     peerIsNative,
+    nIndex,
   };
 }
 
@@ -505,8 +804,17 @@ export function createFlowController(
     peerIsNative?: boolean;
     rateBytesPerSec?: number;
     burstBudgetBytes?: number;
+    adaptiveMode?: AdaptiveMode;
   },
 ): FlowController {
   const policy = deriveSessionFlowPolicy(metrics, options);
-  return new FlowController(policy);
+  const peerProfile: PeerProfile = {
+    isNative: policy.peerIsNative,
+    nIndex: policy.nIndex ?? metrics.negIndex ?? 0.5,
+    coherence: policy.coherence,
+  };
+  return new FlowController(policy, {
+    adaptiveMode: options?.adaptiveMode ?? envAdaptiveMode(),
+    peerProfile,
+  });
 }

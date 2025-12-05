@@ -20,7 +20,10 @@ const EVENT_TIMEOUT_MS = 2_000;
 type EventEmitterLike = {
   once(event: string, handler: (...args: any[]) => void): unknown;
   off?: (event: string, handler: (...args: any[]) => void) => unknown;
-  removeListener?: (event: string, handler: (...args: any[]) => void) => unknown;
+  removeListener?: (
+    event: string,
+    handler: (...args: any[]) => void,
+  ) => unknown;
 };
 
 const waitForEvent = <T = unknown>(
@@ -45,9 +48,7 @@ const waitForEvent = <T = unknown>(
     timer = setTimeout(() => {
       cleanup();
       reject(
-        new Error(
-          `Timed out waiting ${timeoutMs}ms for '${event}' event`,
-        ),
+        new Error(`Timed out waiting ${timeoutMs}ms for '${event}' event`),
       );
     }, timeoutMs);
     emitter.once(event, handler);
@@ -104,9 +105,7 @@ describe("QWormholeClient", () => {
     );
     await server?.close();
     if (server.getConnectionCount() === 0) {
-      console.log(
-        "[client.test] all server connections closed successfully",
-      );
+      console.log("[client.test] all server connections closed successfully");
     } else {
       console.error(
         "[client.test] server connections remaining after close:",
@@ -262,7 +261,10 @@ describe("QWormholeClient", () => {
       throw err;
     };
     client.on("error", ignoreReset);
-    const reconnecting = waitForEvent(client as EventEmitterLike, "reconnecting");
+    const reconnecting = waitForEvent(
+      client as EventEmitterLike,
+      "reconnecting",
+    );
     // Also guard 'close' events
     client.on("close", () => {
       // ensure reconnect logic or silent teardown
@@ -373,22 +375,20 @@ describe("QWormholeClient", () => {
     expect(() => client.disconnect()).not.toThrow();
   });
 
-  
   it("should respect keepAlive and not disconnect prematurely", async () => {
-  const client = new QWormholeClient<string>({
-    host,
-    port,
-    deserializer: jsonDeserializer,
-    keepAlive: true,
-    keepAliveDelayMs: 50,
+    const client = new QWormholeClient<string>({
+      host,
+      port,
+      deserializer: jsonDeserializer,
+      keepAlive: true,
+      keepAliveDelayMs: 50,
+    });
+    await client.connect();
+    // Wait a bit longer than keepAliveDelayMs
+    await new Promise(res => setTimeout(res, 100));
+    expect(client.isConnected()).toBe(true);
+    await client.disconnect();
   });
-  await client.connect();
-  // Wait a bit longer than keepAliveDelayMs
-  await new Promise(res => setTimeout(res, 100));
-  expect(client.isConnected()).toBe(true);
-  await client.disconnect();
-})
-;
 
   // it("should enqueue handshake and drain queue", async () => {
   //   const client = new QWormholeClient<any>({
@@ -413,8 +413,7 @@ describe("QWormholeClient", () => {
   //   }
   // });
 
-
-/*
+  /*
 
 it("should emit error if serializer throws", async () => {
   const client = new QWormholeClient<string>({

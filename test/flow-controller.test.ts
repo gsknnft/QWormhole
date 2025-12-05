@@ -21,6 +21,7 @@ const createTestPolicy = (
   preferredBatchSize: 64,
   minSlice: 4,
   maxSlice: 64,
+  nIndex: 0.8,
   burstBudgetBytes: 256 * 1024,
   rateBytesPerSec: 10 * 1024 * 1024,
   peerIsNative: true,
@@ -65,7 +66,6 @@ describe("TokenBucket", () => {
 });
 
 describe("FlowController", () => {
-
   it("initializes with half of preferred batch size", () => {
     const policy = createTestPolicy({ preferredBatchSize: 64 });
     const controller = new FlowController(policy);
@@ -224,7 +224,9 @@ describe("deriveSessionFlowPolicy", () => {
 
     const policy = deriveSessionFlowPolicy(metrics, { peerIsNative: false });
 
-    expect(policy.maxSlice).toBeLessThanOrEqual(FLOW_DEFAULTS.TS_PEER_MAX_SLICE);
+    expect(policy.maxSlice).toBeLessThanOrEqual(
+      FLOW_DEFAULTS.TS_PEER_MAX_SLICE,
+    );
   });
 
   it("scales rate limit by trust level", () => {
@@ -351,5 +353,14 @@ describe("FlowController integration with BatchFramer", () => {
 
     const afterFlush = controller.getDiagnostics();
     expect(afterFlush.totalFlushes).toBe(1);
+  });
+
+  it("includes adaptive diagnostics when enabled", () => {
+    const policy = createTestPolicy();
+    const adaptiveController = new FlowController(policy, {
+      adaptiveMode: "guarded",
+    });
+    const diag = adaptiveController.getDiagnostics();
+    expect(diag.adaptive?.mode).toBe("guarded");
   });
 });

@@ -69,7 +69,10 @@ export class QWormholeServer<TMessage = Buffer> extends TypedEventEmitter<
   QWormholeServerEvents<TMessage>
 > {
   // Track failed handshakes with timestamp for TTL-based cleanup
-  private failedHandshakes = new Map<string, { count: number; lastFailed: number }>();
+  private failedHandshakes = new Map<
+    string,
+    { count: number; lastFailed: number }
+  >();
   private failedHandshakesTTLMs = 60 * 60 * 1000; // 1 hour TTL
   private failedHandshakesMaxSize = 10000; // Maximum entries to prevent unbounded growth
   private readonly server: net.Server;
@@ -205,28 +208,29 @@ export class QWormholeServer<TMessage = Buffer> extends TypedEventEmitter<
    */
   private recordFailedHandshake(key: string): void {
     const now = Date.now();
-    
+
     // Prune expired entries if map is getting large
     if (this.failedHandshakes.size >= this.failedHandshakesMaxSize) {
       this.pruneExpiredHandshakeFailures();
     }
-    
+
     // Still too large after pruning? Remove oldest entries
     if (this.failedHandshakes.size >= this.failedHandshakesMaxSize) {
-      const sortedEntries = Array.from(this.failedHandshakes.entries())
-        .sort((a, b) => a[1].lastFailed - b[1].lastFailed);
+      const sortedEntries = Array.from(this.failedHandshakes.entries()).sort(
+        (a, b) => a[1].lastFailed - b[1].lastFailed,
+      );
       // Remove oldest 10%
       const toRemove = Math.ceil(sortedEntries.length * 0.1);
       for (let i = 0; i < toRemove; i++) {
         this.failedHandshakes.delete(sortedEntries[i][0]);
       }
     }
-    
+
     const existing = this.failedHandshakes.get(key);
     if (existing) {
-      this.failedHandshakes.set(key, { 
-        count: existing.count + 1, 
-        lastFailed: now 
+      this.failedHandshakes.set(key, {
+        count: existing.count + 1,
+        lastFailed: now,
       });
     } else {
       this.failedHandshakes.set(key, { count: 1, lastFailed: now });
