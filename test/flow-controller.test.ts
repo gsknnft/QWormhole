@@ -284,6 +284,21 @@ describe("deriveSessionFlowPolicy", () => {
 
     const policy = deriveSessionFlowPolicy(metrics, { peerIsNative: false });
 
+    // High-trust TS peers (negIndex >= 0.85) use the higher cap
+    expect(policy.maxSlice).toBeLessThanOrEqual(
+      FLOW_DEFAULTS.TS_PEER_HIGH_TRUST_MAX_SLICE,
+    );
+  });
+
+  it("clamps maxSlice for low-trust TS peers", () => {
+    const metrics: EntropyMetrics = {
+      negIndex: 0.5,
+      coherence: "medium",
+    };
+
+    const policy = deriveSessionFlowPolicy(metrics, { peerIsNative: false });
+
+    // Low-trust TS peers use the standard cap
     expect(policy.maxSlice).toBeLessThanOrEqual(
       FLOW_DEFAULTS.TS_PEER_MAX_SLICE,
     );

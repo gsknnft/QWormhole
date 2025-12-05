@@ -119,8 +119,10 @@ export const FLOW_DEFAULTS = {
   DEFAULT_RATE_BYTES_PER_SEC: 10 * 1024 * 1024,
   /** Drift step when adjusting slice size */
   DRIFT_STEP: 2,
-  /** TS peer max slice clamp (to reduce GC pressure) */
+  /** TS peer max slice clamp (to reduce GC pressure) - low trust */
   TS_PEER_MAX_SLICE: 16,
+  /** TS peer max slice for high-trust peers (negIndex >= 0.85) */
+  TS_PEER_HIGH_TRUST_MAX_SLICE: 32,
   /** Upper bound on token bucket induced delay */
   MAX_RESERVE_DELAY_MS: 200,
 } as const;
@@ -430,10 +432,15 @@ export class FlowController extends TypedEventEmitter<FlowControllerEvents> {
   }
 
   /**
-   * Get effective max slice (clamped for TS peers)
+   * Get effective max slice (clamped for TS peers, relaxed for high-trust)
    */
   private getEffectiveMaxSlice(): number {
     if (!this.policy.peerIsNative) {
+      // High-trust TS peers (negIndex >= 0.85) get higher slice cap
+      const nIndex = this.policy.nIndex ?? this.policy.coherence ?? 0.5;
+      if (nIndex >= 0.85) {
+        return Math.min(this.policy.maxSlice, FLOW_DEFAULTS.TS_PEER_HIGH_TRUST_MAX_SLICE);
+      }
       return Math.min(this.policy.maxSlice, FLOW_DEFAULTS.TS_PEER_MAX_SLICE);
     }
     return this.policy.maxSlice;
@@ -866,10 +873,15 @@ export function deriveSessionFlowPolicy(
     options?.burstBudgetBytes ?? FLOW_DEFAULTS.DEFAULT_BURST_BYTES;
   const burstBudgetBytes = Math.round(baseBurst * policy.trustLevel);
 
-  // Determine max slice - clamp for TS peers
+  // Determine max slice - clamp for TS peers, relaxed for high-trust
   let maxSlice = policy.batchSize;
   if (!peerIsNative) {
-    maxSlice = Math.min(maxSlice, FLOW_DEFAULTS.TS_PEER_MAX_SLICE);
+    // High-trust TS peers (negIndex >= 0.85) get higher slice cap
+    if (nIndex >= 0.85) {
+      maxSlice = Math.min(maxSlice, FLOW_DEFAULTS.TS_PEER_HIGH_TRUST_MAX_SLICE);
+    } else {
+      maxSlice = Math.min(maxSlice, FLOW_DEFAULTS.TS_PEER_MAX_SLICE);
+    }
   }
 
   return {
