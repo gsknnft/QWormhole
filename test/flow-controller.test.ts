@@ -10,6 +10,21 @@ import {
 import { BatchFramer } from "../src/batch-framer";
 import type { EntropyMetrics } from "../src/handshake/entropy-policy";
 
+let adaptiveEnvOriginal: string | undefined;
+
+beforeEach(() => {
+  adaptiveEnvOriginal = process.env.QWORMHOLE_ADAPTIVE_SLICES;
+  process.env.QWORMHOLE_ADAPTIVE_SLICES = "off";
+});
+
+afterEach(() => {
+  if (adaptiveEnvOriginal === undefined) {
+    delete process.env.QWORMHOLE_ADAPTIVE_SLICES;
+  } else {
+    process.env.QWORMHOLE_ADAPTIVE_SLICES = adaptiveEnvOriginal;
+  }
+});
+
 /**
  * Helper function to create test policies with optional overrides
  */
@@ -359,6 +374,32 @@ describe("createFlowController", () => {
     expect(nativeController.currentSliceSize).toBeGreaterThan(
       tsController.currentSliceSize,
     );
+  });
+
+  it("defaults to guarded adaptive mode for TS peers when env unset", () => {
+    const prev = process.env.QWORMHOLE_ADAPTIVE_SLICES;
+    delete process.env.QWORMHOLE_ADAPTIVE_SLICES;
+    const metrics: EntropyMetrics = { negIndex: 0.9, coherence: "high" };
+    const controller = createFlowController(metrics, { peerIsNative: false });
+    expect(controller.getDiagnostics().adaptive?.mode).toBe("guarded");
+    if (prev === undefined) {
+      delete process.env.QWORMHOLE_ADAPTIVE_SLICES;
+    } else {
+      process.env.QWORMHOLE_ADAPTIVE_SLICES = prev;
+    }
+  });
+
+  it("defaults to aggressive adaptive mode for native peers when env unset", () => {
+    const prev = process.env.QWORMHOLE_ADAPTIVE_SLICES;
+    delete process.env.QWORMHOLE_ADAPTIVE_SLICES;
+    const metrics: EntropyMetrics = { negIndex: 0.95 };
+    const controller = createFlowController(metrics, { peerIsNative: true });
+    expect(controller.getDiagnostics().adaptive?.mode).toBe("aggressive");
+    if (prev === undefined) {
+      delete process.env.QWORMHOLE_ADAPTIVE_SLICES;
+    } else {
+      process.env.QWORMHOLE_ADAPTIVE_SLICES = prev;
+    }
   });
 });
 

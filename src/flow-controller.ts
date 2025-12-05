@@ -175,6 +175,24 @@ function readRecentGcPause(): number {
   return value;
 }
 
+function tuneAdaptiveConfig(config: AdaptiveConfig, peer: PeerProfile): void {
+  if (peer.isNative) {
+    config.sampleEvery = Math.min(config.sampleEvery, 16);
+    config.adaptEvery = Math.min(config.adaptEvery, 16);
+    config.driftStep = Math.max(config.driftStep, 8);
+    config.idleTarget = Math.min(config.idleTarget, 0.15);
+    return;
+  }
+  if (peer.nIndex >= 0.85) {
+    config.sampleEvery = Math.min(config.sampleEvery, 24);
+    config.adaptEvery = Math.min(config.adaptEvery, 24);
+    config.driftStep = Math.max(config.driftStep, 4);
+    return;
+  }
+  config.sampleEvery = Math.min(config.sampleEvery, 48);
+  config.adaptEvery = Math.min(config.adaptEvery, 48);
+}
+
 function ewma(prev: number, sample: number, alpha = 0.2): number {
   if (!Number.isFinite(prev) || prev === 0) {
     return sample;
@@ -189,14 +207,23 @@ function lerpInt(a: number, b: number, t: number): number {
 function resolveAdaptiveMode(preferred?: AdaptiveMode | string): AdaptiveMode {
   if (!preferred) return "off";
   const value = `${preferred}`.toLowerCase();
+  if (value === "auto") return "guarded";
   if (value === "guarded" || value === "aggressive" || value === "off") {
-    return value;
+    return value as AdaptiveMode;
   }
   return "off";
 }
 
-function envAdaptiveMode(): AdaptiveMode {
-  return resolveAdaptiveMode(process.env.QWORMHOLE_ADAPTIVE_SLICES);
+function envAdaptiveMode(): string | undefined {
+  const value = process.env.QWORMHOLE_ADAPTIVE_SLICES;
+  if (!value) return undefined;
+  return value;
+}
+
+function defaultAdaptiveModeForPeer(peer: PeerProfile): AdaptiveMode {
+  if (peer.isNative) return "aggressive";
+  if (peer.nIndex >= 0.8 || peer.coherence >= 0.75) return "guarded";
+  return "guarded";
 }
 
 function parseForceSliceValue(
@@ -343,6 +370,13 @@ export class FlowController extends TypedEventEmitter<FlowControllerEvents> {
     super();
     this.policy = policy;
 
+    const peerProfile: PeerProfile =
+      initOptions?.peerProfile ?? {
+        isNative: policy.peerIsNative,
+        nIndex: policy.nIndex ?? policy.coherence ?? 0.5,
+        coherence: policy.coherence,
+      };
+
     const forcedRateBytes = parseForceRateValue(
       initOptions?.forceRateBytesPerSec ?? envForceRateBytes(),
     );
@@ -374,24 +408,22 @@ export class FlowController extends TypedEventEmitter<FlowControllerEvents> {
       policy.burstBudgetBytes,
     );
 
-    const adaptiveMode = resolveAdaptiveMode(
-      initOptions?.adaptiveMode ?? envAdaptiveMode(),
-    );
+    const adaptivePreference =
+      initOptions?.adaptiveMode ??
+      envAdaptiveMode() ??
+      defaultAdaptiveModeForPeer(peerProfile);
+    const adaptiveMode = resolveAdaptiveMode(adaptivePreference);
     if (adaptiveMode !== "off") {
       const bounds: PolicyBounds = initOptions?.bounds ?? {
         minSlice: policy.minSlice,
         maxSlice: this.getEffectiveMaxSlice(),
-      };
-      const peerProfile: PeerProfile = initOptions?.peerProfile ?? {
-        isNative: policy.peerIsNative,
-        nIndex: policy.nIndex ?? policy.coherence ?? 0.5,
-        coherence: policy.coherence,
       };
       const config: AdaptiveConfig = {
         ...ADAPTIVE_DEFAULTS,
         ...initOptions?.adaptiveConfig,
         mode: adaptiveMode,
       };
+      tuneAdaptiveConfig(config, peerProfile);
       this.adaptive = {
         state: {
           sliceSize: this.sliceSize,
@@ -399,7 +431,7 @@ export class FlowController extends TypedEventEmitter<FlowControllerEvents> {
           bounds,
           flushIntervalAvgMs: 0,
           bytesPerFlushAvg: 0,
-          eluIdleRatioAvg: 0,
+          eluIdleRatioAvg: 1,
           gcPauseMaxMs: 0,
           backpressureCount: 0,
           lastFlushAt: performance.now(),
@@ -696,11 +728,30 @@ export class FlowController extends TypedEventEmitter<FlowControllerEvents> {
     const cooldownActive = this.adaptive.cooldownRemaining > 0;
     const bpOK = state.backpressureCount === 0 && !cooldownActive;
 
+    const expansionBase =
+      peer.isNative || peer.nIndex >= 0.9
+        ? config.driftStep * 2
+        : config.driftStep;
+    let expansionStep = expansionBase;
+    if (peer.nIndex >= 0.9 || peer.coherence >= 0.85) {
+      expansionStep = Math.max(expansionStep, Math.ceil(peerMax / 3));
+    } else if (peer.nIndex >= 0.8) {
+      expansionStep = Math.max(expansionStep, Math.ceil(peerMax / 4));
+    }
+    if (peer.isNative) {
+      expansionStep = Math.max(expansionStep, Math.ceil(peerMax / 4));
+    }
+
+    const contractionBase =
+      !gcOK && state.gcPauseMaxMs > config.gcBudgetMs * 1.5
+        ? config.driftStep * 2
+        : config.driftStep;
+
     let desired = this.sliceSize;
     if (idleOK && gcOK && bpOK) {
-      desired = this.sliceSize + config.driftStep;
+      desired = Math.min(peerMax, this.sliceSize + expansionStep);
     } else {
-      desired = Math.max(this.sliceSize - config.driftStep, bounds.minSlice);
+      desired = Math.max(bounds.minSlice, this.sliceSize - contractionBase);
     }
 
     if (cooldownActive) {
@@ -917,8 +968,12 @@ export function createFlowController(
     nIndex: policy.nIndex ?? metrics.negIndex ?? 0.5,
     coherence: policy.coherence,
   };
+  const envMode = envAdaptiveMode();
+  const adaptiveOverride =
+    options?.adaptiveMode ??
+    (envMode ? resolveAdaptiveMode(envMode) : undefined);
   return new FlowController(policy, {
-    adaptiveMode: options?.adaptiveMode ?? envAdaptiveMode(),
+    adaptiveMode: adaptiveOverride,
     peerProfile,
     forceSliceSize: options?.forceSliceSize,
     forceRateBytesPerSec: options?.forceRateBytesPerSec,

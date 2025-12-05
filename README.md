@@ -80,6 +80,7 @@ QWormhole isn’t just a socket wrapper — it’s a transport ritual.
 - 💧 **Backpressure protection** (server-side safety)
 - 📉 **Rate limiting** with burst control
 - 🌐 **Bind to interfaces** (`wg0`, `eth0`, WireGuard, VLANs, etc.)
+- 📈 **Adaptive slicing** (auto tunes TS/native batch sizes via ELU/GC telemetry; override with `QWORMHOLE_ADAPTIVE_SLICES`)
 - 🧩 **Pluggable codecs** (JSON, text, buffer, CBOR, custom binary)
 - 🔐 **Protocol versioning + handshake tags**
 - 🛡️ **TLS wrapping + fingerprint pinning (TS + native-lws)**
@@ -434,6 +435,11 @@ Install attempts a native build automatically; if native fails, TS remains avail
 - Backpressure protection: server drops connections when `maxBackpressureBytes` is exceeded; emits `backpressure` and `clientClosed`.
 - Rate limiting: per-connection token bucket (bytes/sec + burst) and optional client-side rate limits.
 - Errors bubble via the `error` event; telemetry snapshots are delivered via `onTelemetry` (bytesIn/out, connections, backpressure and drain counts).
+
+## Adaptive flow control
+- The flow controller now defaults to an adaptive mode (`guarded` for TS, `aggressive` for native) that automatically expands/contract slice sizes based on event-loop idle time, GC pauses, and backpressure.
+- Override with `QWORMHOLE_ADAPTIVE_SLICES=off|guarded|aggressive|auto` if you need deterministic behavior (e.g., for perf triage).
+- Forced knobs (`QWORMHOLE_FORCE_SLICE`, `QWORMHOLE_FORCE_RATE_BYTES`) still take precedence for reproducing historical regressions.
 
 ## ML adapters
 
