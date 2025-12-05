@@ -101,6 +101,8 @@ interface FlowControllerInitOptions {
   peerProfile?: PeerProfile;
   bounds?: PolicyBounds;
   adaptiveConfig?: Partial<AdaptiveConfig>;
+  forceSliceSize?: number;
+  forceRateBytesPerSec?: number;
 }
 
 /**
@@ -195,6 +197,51 @@ function envAdaptiveMode(): AdaptiveMode {
   return resolveAdaptiveMode(process.env.QWORMHOLE_ADAPTIVE_SLICES);
 }
 
+function parseForceSliceValue(
+  value?: string | number | null,
+): number | undefined {
+  if (value === undefined || value === null) {
+    return undefined;
+  }
+  const numeric =
+    typeof value === "string"
+      ? Number.parseInt(value, 10)
+      : typeof value === "number"
+        ? value
+        : undefined;
+  if (numeric === undefined || Number.isNaN(numeric)) {
+    return undefined;
+  }
+  const normalized = Math.floor(numeric);
+  return normalized > 0 ? normalized : undefined;
+}
+
+function envForceSlice(): number | undefined {
+  return parseForceSliceValue(process.env.QWORMHOLE_FORCE_SLICE);
+}
+
+function parseForceRateValue(
+  value?: string | number | null,
+): number | undefined {
+  if (value === undefined || value === null) {
+    return undefined;
+  }
+  const numeric =
+    typeof value === "string"
+      ? Number.parseFloat(value)
+      : typeof value === "number"
+        ? value
+        : undefined;
+  if (numeric === undefined || !Number.isFinite(numeric)) {
+    return undefined;
+  }
+  return numeric > 0 ? numeric : undefined;
+}
+
+function envForceRateBytes(): number | undefined {
+  return parseForceRateValue(process.env.QWORMHOLE_FORCE_RATE_BYTES);
+}
+
 /**
  * Events emitted by FlowController
  */
@@ -274,6 +321,8 @@ export class FlowController extends TypedEventEmitter<FlowControllerEvents> {
   private sliceSize: number;
   private readonly bucket: TokenBucket;
   private readonly policy: SessionFlowPolicy;
+  private readonly forceSliceSize?: number;
+  private readonly effectiveRateBytesPerSec: number;
   private flushing = false;
   private flushPromise: Promise<void> | null = null;
   private forceFlushQueued = false;
@@ -292,16 +341,34 @@ export class FlowController extends TypedEventEmitter<FlowControllerEvents> {
     super();
     this.policy = policy;
 
+    const forcedRateBytes = parseForceRateValue(
+      initOptions?.forceRateBytesPerSec ?? envForceRateBytes(),
+    );
+    this.effectiveRateBytesPerSec = forcedRateBytes ?? policy.rateBytesPerSec;
+
     // Initialize slice size as half of preferred, clamped to bounds
-    this.sliceSize = this.clamp(
+    const preferredSlice = this.clamp(
       Math.round(policy.preferredBatchSize / 2),
       policy.minSlice,
       this.getEffectiveMaxSlice(),
     );
+    const forcedSliceResolved = parseForceSliceValue(
+      initOptions?.forceSliceSize ?? envForceSlice(),
+    );
+    if (forcedSliceResolved !== undefined) {
+      this.forceSliceSize = this.clamp(
+        forcedSliceResolved,
+        policy.minSlice,
+        this.getEffectiveMaxSlice(),
+      );
+      this.sliceSize = this.forceSliceSize;
+    } else {
+      this.sliceSize = preferredSlice;
+    }
 
     // Initialize token bucket for rate limiting
     this.bucket = new TokenBucket(
-      policy.rateBytesPerSec,
+      this.effectiveRateBytesPerSec,
       policy.burstBudgetBytes,
     );
 
@@ -376,11 +443,6 @@ export class FlowController extends TypedEventEmitter<FlowControllerEvents> {
    * Handle backpressure event - contract slice size
    */
   onBackpressure(queuedBytes: number): void {
-    const previousSize = this.sliceSize;
-    this.sliceSize = Math.max(
-      this.policy.minSlice,
-      Math.floor(this.sliceSize / 2),
-    );
     this.backpressureCount += 1;
     if (this.adaptive) {
       this.adaptive.state.backpressureCount += 1;
@@ -389,6 +451,18 @@ export class FlowController extends TypedEventEmitter<FlowControllerEvents> {
         this.adaptive.config.backpressureCooldown,
       );
     }
+
+    if (this.forceSliceSize !== undefined) {
+      this.sliceSize = this.forceSliceSize;
+      this.emit("backpressure", { queuedBytes, sliceSize: this.sliceSize });
+      return;
+    }
+
+    const previousSize = this.sliceSize;
+    this.sliceSize = Math.max(
+      this.policy.minSlice,
+      Math.floor(this.sliceSize / 2),
+    );
 
     if (previousSize !== this.sliceSize) {
       this.recordSliceChange("backpressure");
@@ -406,18 +480,25 @@ export class FlowController extends TypedEventEmitter<FlowControllerEvents> {
    * Handle drain event - expand slice size
    */
   onDrain(): void {
-    const previousSize = this.sliceSize;
     const maxSlice = this.getEffectiveMaxSlice();
-    this.sliceSize = Math.min(
-      maxSlice,
-      this.sliceSize + FLOW_DEFAULTS.DRIFT_STEP,
-    );
     if (this.adaptive && this.adaptive.state.backpressureCount > 0) {
       this.adaptive.state.backpressureCount = Math.max(
         0,
         this.adaptive.state.backpressureCount - 1,
       );
     }
+
+    if (this.forceSliceSize !== undefined) {
+      this.sliceSize = this.forceSliceSize;
+      this.emit("drain", { sliceSize: this.sliceSize });
+      return;
+    }
+
+    const previousSize = this.sliceSize;
+    this.sliceSize = Math.min(
+      maxSlice,
+      this.sliceSize + FLOW_DEFAULTS.DRIFT_STEP,
+    );
 
     if (previousSize !== this.sliceSize) {
       this.recordSliceChange("drain");
@@ -486,6 +567,8 @@ export class FlowController extends TypedEventEmitter<FlowControllerEvents> {
   getDiagnostics(): FlowControllerDiagnostics {
     return {
       currentSliceSize: this.sliceSize,
+      forceSliceSize: this.forceSliceSize,
+      effectiveRateBytesPerSec: this.effectiveRateBytesPerSec,
       totalFlushes: this.totalFlushes,
       totalBytes: this.totalBytes,
       backpressureEvents: this.backpressureCount,
@@ -589,6 +672,11 @@ export class FlowController extends TypedEventEmitter<FlowControllerEvents> {
 
   private applyAdaptiveSlice(): void {
     if (!this.adaptive) return;
+    if (this.forceSliceSize !== undefined) {
+      this.sliceSize = this.forceSliceSize;
+      this.adaptive.state.sliceSize = this.forceSliceSize;
+      return;
+    }
     const { state, config, peer } = this.adaptive;
     const bounds = state.bounds;
     const peerMax =
@@ -687,6 +775,8 @@ export class FlowController extends TypedEventEmitter<FlowControllerEvents> {
  */
 export interface FlowControllerDiagnostics {
   currentSliceSize: number;
+  forceSliceSize?: number;
+  effectiveRateBytesPerSec: number;
   totalFlushes: number;
   totalBytes: number;
   backpressureEvents: number;
@@ -805,6 +895,8 @@ export function createFlowController(
     rateBytesPerSec?: number;
     burstBudgetBytes?: number;
     adaptiveMode?: AdaptiveMode;
+    forceSliceSize?: number;
+    forceRateBytesPerSec?: number;
   },
 ): FlowController {
   const policy = deriveSessionFlowPolicy(metrics, options);
@@ -816,5 +908,7 @@ export function createFlowController(
   return new FlowController(policy, {
     adaptiveMode: options?.adaptiveMode ?? envAdaptiveMode(),
     peerProfile,
+    forceSliceSize: options?.forceSliceSize,
+    forceRateBytesPerSec: options?.forceRateBytesPerSec,
   });
 }

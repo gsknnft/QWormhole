@@ -38,6 +38,13 @@ const TOTAL_MESSAGES = 10_000;
 const TIMEOUT_MS = 5000;
 const BENCH_FRAMING: FramingMode =
   process.env.QWORMHOLE_BENCH_FRAMING === "none" ? "none" : "length-prefixed";
+const BENCH_NEG_INDEX = (() => {
+  const raw = process.env.QWORMHOLE_BENCH_NEG_INDEX;
+  if (!raw) return 0.9;
+  const parsed = Number.parseFloat(raw);
+  if (Number.isNaN(parsed)) return 0.9;
+  return Math.min(Math.max(parsed, 0), 1);
+})();
 const FRAME_HEADER_BYTES = 4;
 const ENABLE_DIAGNOSTICS =
   process.argv.includes("--diagnostics") ||
@@ -132,6 +139,13 @@ const serverModeAvailable = (
 ): boolean => {
   if (!preferNative) return true;
   return isNativeServerAvailable(backend);
+};
+
+const deriveBenchCoherence = (): "high" | "medium" | "low" | "chaos" => {
+  if (BENCH_NEG_INDEX >= 0.85) return "high";
+  if (BENCH_NEG_INDEX >= 0.65) return "medium";
+  if (BENCH_NEG_INDEX >= 0.4) return "low";
+  return "chaos";
 };
 
 type ScenarioResult = {
@@ -450,6 +464,11 @@ if (preferNativeServer && serverResult.mode !== "native-lws") {
       framing: BENCH_FRAMING,
       serializer: toBytes,
       deserializer: (data: Buffer) => data,
+      entropyMetrics: {
+        negIndex: BENCH_NEG_INDEX,
+        coherence: deriveBenchCoherence(),
+        entropyVelocity: "low",
+      },
     });
     await tsClient.connect();
   } else {

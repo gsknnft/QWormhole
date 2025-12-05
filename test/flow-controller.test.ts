@@ -146,6 +146,65 @@ describe("FlowController", () => {
     expect(controller.currentSliceSize).toBe(FLOW_DEFAULTS.TS_PEER_MAX_SLICE);
   });
 
+  it("honors force slice override from options", () => {
+    const policy = createTestPolicy({
+      minSlice: 4,
+      maxSlice: 64,
+    });
+    const controller = new FlowController(policy, { forceSliceSize: 24 });
+
+    expect(controller.currentSliceSize).toBe(24);
+    controller.onBackpressure(1024);
+    expect(controller.currentSliceSize).toBe(24);
+    controller.onDrain();
+    expect(controller.currentSliceSize).toBe(24);
+  });
+
+  it("clamps env force slice override and surfaces in diagnostics", () => {
+    const original = process.env.QWORMHOLE_FORCE_SLICE;
+    process.env.QWORMHOLE_FORCE_SLICE = "128";
+    try {
+      const policy = createTestPolicy({
+        maxSlice: 64,
+        peerIsNative: false,
+      });
+      const controller = new FlowController(policy);
+
+      expect(controller.currentSliceSize).toBe(
+        FLOW_DEFAULTS.TS_PEER_MAX_SLICE,
+      );
+      expect(controller.getDiagnostics().forceSliceSize).toBe(
+        FLOW_DEFAULTS.TS_PEER_MAX_SLICE,
+      );
+    } finally {
+      if (original === undefined) {
+        delete process.env.QWORMHOLE_FORCE_SLICE;
+      } else {
+        process.env.QWORMHOLE_FORCE_SLICE = original;
+      }
+    }
+  });
+
+  it("allows force rate override via env", () => {
+    const original = process.env.QWORMHOLE_FORCE_RATE_BYTES;
+    process.env.QWORMHOLE_FORCE_RATE_BYTES = "20000000";
+    try {
+      const policy = createTestPolicy({
+        rateBytesPerSec: 1_000_000,
+      });
+      const controller = new FlowController(policy);
+      expect(controller.getDiagnostics().effectiveRateBytesPerSec).toBe(
+        20_000_000,
+      );
+    } finally {
+      if (original === undefined) {
+        delete process.env.QWORMHOLE_FORCE_RATE_BYTES;
+      } else {
+        process.env.QWORMHOLE_FORCE_RATE_BYTES = original;
+      }
+    }
+  });
+
   it("emits sliceDrift events", () => {
     const policy = createTestPolicy();
     const controller = new FlowController(policy);
@@ -173,6 +232,7 @@ describe("FlowController", () => {
     expect(diagnostics.totalBytes).toBe(0);
     expect(diagnostics.policy.coherence).toBe(0.8);
     expect(diagnostics.sliceHistory.length).toBeGreaterThan(0);
+    expect(diagnostics.effectiveRateBytesPerSec).toBe(policy.rateBytesPerSec);
   });
 
   it("records slice history", () => {
