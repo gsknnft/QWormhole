@@ -14,6 +14,11 @@
  * This enables the "stack of boxes vs stack of paper" behavior automatically.
  */
 
+import {
+  performance,
+  monitorEventLoopDelay,
+  PerformanceObserver,
+} from "node:perf_hooks";
 import type { BatchFramer } from "./batch-framer";
 import type {
   EntropyMetrics,
@@ -37,12 +42,67 @@ export interface SessionFlowPolicy {
   minSlice: number;
   /** Maximum slice size (frames) */
   maxSlice: number;
+  /** Negentropic index from handshake */
+  nIndex?: number;
   /** Burst budget in bytes (from entropy/token bucket policy) */
   burstBudgetBytes: number;
   /** Rate limit in bytes per second */
   rateBytesPerSec: number;
   /** Whether peer is native (allows larger batches) */
   peerIsNative: boolean;
+}
+
+export type AdaptiveMode = "off" | "guarded" | "aggressive";
+
+export interface PolicyBounds {
+  minSlice: number;
+  maxSlice: number;
+}
+
+export interface PeerProfile {
+  isNative: boolean;
+  nIndex: number;
+  coherence: number;
+}
+
+interface AdaptiveState {
+  sliceSize: number;
+  mode: AdaptiveMode;
+  bounds: PolicyBounds;
+  flushIntervalAvgMs: number;
+  bytesPerFlushAvg: number;
+  eluIdleRatioAvg: number;
+  gcPauseMaxMs: number;
+  backpressureCount: number;
+  lastFlushAt: number;
+}
+
+interface AdaptiveInternals {
+  state: AdaptiveState;
+  peer: PeerProfile;
+  config: AdaptiveConfig;
+  flushCounter: number;
+  cooldownRemaining: number;
+}
+
+interface AdaptiveConfig {
+  mode: AdaptiveMode;
+  idleTarget: number;
+  gcBudgetMs: number;
+  sampleEvery: number;
+  adaptEvery: number;
+  driftStep: number;
+  lerpFactor: number;
+  backpressureCooldown: number;
+}
+
+interface FlowControllerInitOptions {
+  adaptiveMode?: AdaptiveMode;
+  peerProfile?: PeerProfile;
+  bounds?: PolicyBounds;
+  adaptiveConfig?: Partial<AdaptiveConfig>;
+  forceSliceSize?: number;
+  forceRateBytesPerSec?: number;
 }
 
 /**
@@ -59,11 +119,130 @@ export const FLOW_DEFAULTS = {
   DEFAULT_RATE_BYTES_PER_SEC: 10 * 1024 * 1024,
   /** Drift step when adjusting slice size */
   DRIFT_STEP: 2,
-  /** TS peer max slice clamp (to reduce GC pressure) */
+  /** TS peer max slice clamp (to reduce GC pressure) - low trust */
   TS_PEER_MAX_SLICE: 16,
+  /** TS peer max slice for high-trust peers (negIndex >= 0.85) */
+  TS_PEER_HIGH_TRUST_MAX_SLICE: 32,
   /** Upper bound on token bucket induced delay */
   MAX_RESERVE_DELAY_MS: 200,
 } as const;
+
+const ADAPTIVE_DEFAULTS: AdaptiveConfig = {
+  mode: "off",
+  idleTarget: 0.2,
+  gcBudgetMs: 4,
+  sampleEvery: 64,
+  adaptEvery: 64,
+  driftStep: FLOW_DEFAULTS.DRIFT_STEP,
+  lerpFactor: 0.25,
+  backpressureCooldown: 64,
+};
+
+const loopDelayMonitor =
+  typeof monitorEventLoopDelay === "function"
+    ? monitorEventLoopDelay({ resolution: 20 })
+    : undefined;
+if (loopDelayMonitor) {
+  loopDelayMonitor.enable();
+}
+
+let recentGcPauseMs = 0;
+if (typeof PerformanceObserver !== "undefined") {
+  try {
+    const gcObserver = new PerformanceObserver(list => {
+      for (const entry of list.getEntries()) {
+        recentGcPauseMs = Math.max(recentGcPauseMs, entry.duration);
+      }
+    });
+    gcObserver.observe({ entryTypes: ["gc"], buffered: false });
+  } catch {
+    // No-op if GC observer is unavailable
+  }
+}
+
+function readEventLoopIdleRatio(): number {
+  if (!loopDelayMonitor) return 0;
+  const max = loopDelayMonitor.max || 0;
+  if (max <= 0) return 0;
+  const mean = loopDelayMonitor.mean || 0;
+  const normalized = Math.min(mean / max, 1);
+  return Math.max(0, 1 - normalized);
+}
+
+function readRecentGcPause(): number {
+  const value = recentGcPauseMs;
+  recentGcPauseMs *= 0.5;
+  return value;
+}
+
+function ewma(prev: number, sample: number, alpha = 0.2): number {
+  if (!Number.isFinite(prev) || prev === 0) {
+    return sample;
+  }
+  return prev * (1 - alpha) + sample * alpha;
+}
+
+function lerpInt(a: number, b: number, t: number): number {
+  return Math.round(a + (b - a) * t);
+}
+
+function resolveAdaptiveMode(preferred?: AdaptiveMode | string): AdaptiveMode {
+  if (!preferred) return "off";
+  const value = `${preferred}`.toLowerCase();
+  if (value === "guarded" || value === "aggressive" || value === "off") {
+    return value;
+  }
+  return "off";
+}
+
+function envAdaptiveMode(): AdaptiveMode {
+  return resolveAdaptiveMode(process.env.QWORMHOLE_ADAPTIVE_SLICES);
+}
+
+function parseForceSliceValue(
+  value?: string | number | null,
+): number | undefined {
+  if (value === undefined || value === null) {
+    return undefined;
+  }
+  const numeric =
+    typeof value === "string"
+      ? Number.parseInt(value, 10)
+      : typeof value === "number"
+        ? value
+        : undefined;
+  if (numeric === undefined || Number.isNaN(numeric)) {
+    return undefined;
+  }
+  const normalized = Math.floor(numeric);
+  return normalized > 0 ? normalized : undefined;
+}
+
+function envForceSlice(): number | undefined {
+  return parseForceSliceValue(process.env.QWORMHOLE_FORCE_SLICE);
+}
+
+function parseForceRateValue(
+  value?: string | number | null,
+): number | undefined {
+  if (value === undefined || value === null) {
+    return undefined;
+  }
+  const numeric =
+    typeof value === "string"
+      ? Number.parseFloat(value)
+      : typeof value === "number"
+        ? value
+        : undefined;
+  if (numeric === undefined || !Number.isFinite(numeric)) {
+    return undefined;
+  }
+  return numeric > 0 ? numeric : undefined;
+}
+
+function envForceRateBytes(): number | undefined {
+  return parseForceRateValue(process.env.QWORMHOLE_FORCE_RATE_BYTES);
+}
 
 /**
  * Events emitted by FlowController
@@ -144,32 +323,93 @@ export class FlowController extends TypedEventEmitter<FlowControllerEvents> {
   private sliceSize: number;
   private readonly bucket: TokenBucket;
   private readonly policy: SessionFlowPolicy;
+  private readonly forceSliceSize?: number;
+  private readonly effectiveRateBytesPerSec: number;
   private flushing = false;
   private flushPromise: Promise<void> | null = null;
   private forceFlushQueued = false;
   private backpressureCount = 0;
+  private adaptive?: AdaptiveInternals;
 
   // Diagnostics
   private totalFlushes = 0;
   private totalBytes = 0;
   private sliceHistory: Array<{ timestamp: number; size: number }> = [];
 
-  constructor(policy: SessionFlowPolicy) {
+  constructor(
+    policy: SessionFlowPolicy,
+    initOptions?: FlowControllerInitOptions,
+  ) {
     super();
     this.policy = policy;
 
+    const forcedRateBytes = parseForceRateValue(
+      initOptions?.forceRateBytesPerSec ?? envForceRateBytes(),
+    );
+    this.effectiveRateBytesPerSec = forcedRateBytes ?? policy.rateBytesPerSec;
+
     // Initialize slice size as half of preferred, clamped to bounds
-    this.sliceSize = this.clamp(
+    const preferredSlice = this.clamp(
       Math.round(policy.preferredBatchSize / 2),
       policy.minSlice,
       this.getEffectiveMaxSlice(),
     );
+    const forcedSliceResolved = parseForceSliceValue(
+      initOptions?.forceSliceSize ?? envForceSlice(),
+    );
+    if (forcedSliceResolved !== undefined) {
+      this.forceSliceSize = this.clamp(
+        forcedSliceResolved,
+        policy.minSlice,
+        this.getEffectiveMaxSlice(),
+      );
+      this.sliceSize = this.forceSliceSize;
+    } else {
+      this.sliceSize = preferredSlice;
+    }
 
     // Initialize token bucket for rate limiting
     this.bucket = new TokenBucket(
-      policy.rateBytesPerSec,
+      this.effectiveRateBytesPerSec,
       policy.burstBudgetBytes,
     );
+
+    const adaptiveMode = resolveAdaptiveMode(
+      initOptions?.adaptiveMode ?? envAdaptiveMode(),
+    );
+    if (adaptiveMode !== "off") {
+      const bounds: PolicyBounds = initOptions?.bounds ?? {
+        minSlice: policy.minSlice,
+        maxSlice: this.getEffectiveMaxSlice(),
+      };
+      const peerProfile: PeerProfile = initOptions?.peerProfile ?? {
+        isNative: policy.peerIsNative,
+        nIndex: policy.nIndex ?? policy.coherence ?? 0.5,
+        coherence: policy.coherence,
+      };
+      const config: AdaptiveConfig = {
+        ...ADAPTIVE_DEFAULTS,
+        ...initOptions?.adaptiveConfig,
+        mode: adaptiveMode,
+      };
+      this.adaptive = {
+        state: {
+          sliceSize: this.sliceSize,
+          mode: adaptiveMode,
+          bounds,
+          flushIntervalAvgMs: 0,
+          bytesPerFlushAvg: 0,
+          eluIdleRatioAvg: 0,
+          gcPauseMaxMs: 0,
+          backpressureCount: 0,
+          lastFlushAt: performance.now(),
+        },
+        peer: peerProfile,
+        config,
+        flushCounter: 0,
+        cooldownRemaining: 0,
+      };
+    }
 
     this.recordSliceChange("init");
   }
@@ -192,10 +432,15 @@ export class FlowController extends TypedEventEmitter<FlowControllerEvents> {
   }
 
   /**
-   * Get effective max slice (clamped for TS peers)
+   * Get effective max slice (clamped for TS peers, relaxed for high-trust)
    */
   private getEffectiveMaxSlice(): number {
     if (!this.policy.peerIsNative) {
+      // High-trust TS peers (negIndex >= 0.85) get higher slice cap
+      const nIndex = this.policy.nIndex ?? this.policy.coherence ?? 0.5;
+      if (nIndex >= 0.85) {
+        return Math.min(this.policy.maxSlice, FLOW_DEFAULTS.TS_PEER_HIGH_TRUST_MAX_SLICE);
+      }
       return Math.min(this.policy.maxSlice, FLOW_DEFAULTS.TS_PEER_MAX_SLICE);
     }
     return this.policy.maxSlice;
@@ -205,12 +450,26 @@ export class FlowController extends TypedEventEmitter<FlowControllerEvents> {
    * Handle backpressure event - contract slice size
    */
   onBackpressure(queuedBytes: number): void {
+    this.backpressureCount += 1;
+    if (this.adaptive) {
+      this.adaptive.state.backpressureCount += 1;
+      this.adaptive.cooldownRemaining = Math.max(
+        this.adaptive.cooldownRemaining,
+        this.adaptive.config.backpressureCooldown,
+      );
+    }
+
+    if (this.forceSliceSize !== undefined) {
+      this.sliceSize = this.forceSliceSize;
+      this.emit("backpressure", { queuedBytes, sliceSize: this.sliceSize });
+      return;
+    }
+
     const previousSize = this.sliceSize;
     this.sliceSize = Math.max(
       this.policy.minSlice,
       Math.floor(this.sliceSize / 2),
     );
-    this.backpressureCount += 1;
 
     if (previousSize !== this.sliceSize) {
       this.recordSliceChange("backpressure");
@@ -228,8 +487,21 @@ export class FlowController extends TypedEventEmitter<FlowControllerEvents> {
    * Handle drain event - expand slice size
    */
   onDrain(): void {
-    const previousSize = this.sliceSize;
     const maxSlice = this.getEffectiveMaxSlice();
+    if (this.adaptive && this.adaptive.state.backpressureCount > 0) {
+      this.adaptive.state.backpressureCount = Math.max(
+        0,
+        this.adaptive.state.backpressureCount - 1,
+      );
+    }
+
+    if (this.forceSliceSize !== undefined) {
+      this.sliceSize = this.forceSliceSize;
+      this.emit("drain", { sliceSize: this.sliceSize });
+      return;
+    }
+
+    const previousSize = this.sliceSize;
     this.sliceSize = Math.min(
       maxSlice,
       this.sliceSize + FLOW_DEFAULTS.DRIFT_STEP,
@@ -257,7 +529,7 @@ export class FlowController extends TypedEventEmitter<FlowControllerEvents> {
   }
 
   async flushPending(framer: BatchFramer): Promise<void> {
-    if (framer.pendingBatchSize === 0) return;
+    if (framer.pendingBatchSize === 0 || !framer.canFlush) return;
     const pending = this.scheduleFlush(framer, true);
     if (pending) await pending;
   }
@@ -266,41 +538,8 @@ export class FlowController extends TypedEventEmitter<FlowControllerEvents> {
    * Flush the current batch with rate limiting
    */
   async flush(framer: BatchFramer): Promise<void> {
-    if (this.flushing) return;
-    this.flushing = true;
-
-    try {
-      const projectedBytes = framer.pendingBatchBytes;
-      const delayMs = this.bucket.reserve(projectedBytes);
-
-      if (delayMs > 0) {
-        await this.delay(delayMs);
-      }
-
-      await framer.flushBatch();
-
-      this.totalFlushes++;
-      this.totalBytes += projectedBytes;
-
-      this.emit("flush", {
-        sliceSize: this.sliceSize,
-        bytes: projectedBytes,
-        delayMs,
-      });
-    } finally {
-      this.flushing = false;
-    }
-  }
-
-  /* 
-  
-  private flushing = false;
-
-async flush(framer: BatchFramer): Promise<void> {
-  if (this.flushing) return;
-  this.flushing = true;
-
-  try {
+    // Note: flushing state is managed by scheduleFlush, not here
+    const frameCount = framer.pendingBatchSize;
     const projectedBytes = framer.pendingBatchBytes;
     const delayMs = this.bucket.reserve(projectedBytes);
 
@@ -310,6 +549,8 @@ async flush(framer: BatchFramer): Promise<void> {
 
     await framer.flushBatch();
 
+    this.handlePostFlushTelemetry(frameCount, projectedBytes, delayMs);
+
     this.totalFlushes++;
     this.totalBytes += projectedBytes;
 
@@ -318,12 +559,7 @@ async flush(framer: BatchFramer): Promise<void> {
       bytes: projectedBytes,
       delayMs,
     });
-  } finally {
-    this.flushing = false;
   }
-}
-
-  */
 
   /**
    * Get current slice size
@@ -338,6 +574,8 @@ async flush(framer: BatchFramer): Promise<void> {
   getDiagnostics(): FlowControllerDiagnostics {
     return {
       currentSliceSize: this.sliceSize,
+      forceSliceSize: this.forceSliceSize,
+      effectiveRateBytesPerSec: this.effectiveRateBytesPerSec,
       totalFlushes: this.totalFlushes,
       totalBytes: this.totalBytes,
       backpressureEvents: this.backpressureCount,
@@ -349,6 +587,16 @@ async flush(framer: BatchFramer): Promise<void> {
         peerIsNative: this.policy.peerIsNative,
       },
       sliceHistory: this.sliceHistory.slice(-10), // Last 10 changes
+      adaptive: this.adaptive
+        ? {
+            mode: this.adaptive.state.mode,
+            sliceSize: this.adaptive.state.sliceSize,
+            flushIntervalAvgMs: this.adaptive.state.flushIntervalAvgMs,
+            bytesPerFlushAvg: this.adaptive.state.bytesPerFlushAvg,
+            eluIdleRatioAvg: this.adaptive.state.eluIdleRatioAvg,
+            gcPauseMaxMs: this.adaptive.state.gcPauseMaxMs,
+          }
+        : undefined,
     };
   }
 
@@ -393,10 +641,108 @@ async flush(framer: BatchFramer): Promise<void> {
     return new Promise(resolve => setTimeout(resolve, ms));
   }
 
+  private handlePostFlushTelemetry(
+    frameCount: number,
+    bytes: number,
+    _reserveDelayMs: number,
+  ): void {
+    if (!this.adaptive || frameCount <= 0 || bytes <= 0) return;
+    const { state, config } = this.adaptive;
+    const now = performance.now();
+    const dt = state.lastFlushAt ? now - state.lastFlushAt : 0;
+    state.lastFlushAt = now;
+    if (dt > 0) {
+      state.flushIntervalAvgMs = ewma(state.flushIntervalAvgMs, dt);
+    }
+    state.bytesPerFlushAvg = ewma(state.bytesPerFlushAvg, bytes);
+    state.sliceSize = this.sliceSize;
+    this.adaptive.flushCounter += 1;
+
+    if (this.adaptive.flushCounter % config.sampleEvery === 0) {
+      state.eluIdleRatioAvg = ewma(
+        state.eluIdleRatioAvg,
+        readEventLoopIdleRatio(),
+      );
+      state.gcPauseMaxMs = Math.max(
+        state.gcPauseMaxMs * 0.9,
+        readRecentGcPause(),
+      );
+      if (state.backpressureCount > 0) {
+        state.backpressureCount = Math.max(0, state.backpressureCount - 1);
+      }
+    }
+
+    if (this.adaptive.flushCounter % config.adaptEvery === 0) {
+      this.applyAdaptiveSlice();
+    }
+  }
+
+  private applyAdaptiveSlice(): void {
+    if (!this.adaptive) return;
+    if (this.forceSliceSize !== undefined) {
+      this.sliceSize = this.forceSliceSize;
+      this.adaptive.state.sliceSize = this.forceSliceSize;
+      return;
+    }
+    const { state, config, peer } = this.adaptive;
+    const bounds = state.bounds;
+    const peerMax =
+      peer.isNative || peer.nIndex >= 0.85
+        ? bounds.maxSlice
+        : Math.min(bounds.maxSlice, FLOW_DEFAULTS.TS_PEER_MAX_SLICE);
+
+    const idleOK = state.eluIdleRatioAvg >= config.idleTarget;
+    const gcOK = state.gcPauseMaxMs <= config.gcBudgetMs;
+    const cooldownActive = this.adaptive.cooldownRemaining > 0;
+    const bpOK = state.backpressureCount === 0 && !cooldownActive;
+
+    let desired = this.sliceSize;
+    if (idleOK && gcOK && bpOK) {
+      desired = this.sliceSize + config.driftStep;
+    } else {
+      desired = Math.max(this.sliceSize - config.driftStep, bounds.minSlice);
+    }
+
+    if (cooldownActive) {
+      desired = bounds.minSlice;
+      this.adaptive.cooldownRemaining = Math.max(
+        0,
+        this.adaptive.cooldownRemaining - config.adaptEvery,
+      );
+    }
+
+    desired = this.clamp(desired, bounds.minSlice, peerMax);
+
+    let nextSlice = desired;
+    if (state.mode === "guarded") {
+      nextSlice = lerpInt(this.sliceSize, desired, config.lerpFactor);
+    }
+
+    if (nextSlice !== this.sliceSize) {
+      const previousSize = this.sliceSize;
+      this.sliceSize = nextSlice;
+      state.sliceSize = nextSlice;
+      this.recordSliceChange("adaptive");
+      this.emit("sliceDrift", {
+        previousSize,
+        newSize: nextSlice,
+        reason: "adaptive",
+      });
+    }
+
+    state.backpressureCount = 0;
+    state.gcPauseMaxMs *= 0.9;
+  }
+
   private scheduleFlush(
     framer: BatchFramer,
     force: boolean,
   ): Promise<void> | void {
+    // If framer can't flush (no socket), don't schedule
+    if (!framer.canFlush) {
+      return;
+    }
+
     if (!force && framer.pendingBatchSize < this.sliceSize) {
       return;
     }
@@ -417,7 +763,11 @@ async flush(framer: BatchFramer): Promise<void> {
         this.flushPromise = null;
         const shouldForce = this.forceFlushQueued;
         this.forceFlushQueued = false;
-        if (framer.pendingBatchSize >= this.sliceSize || shouldForce) {
+        // Only continue flushing if framer still has a connected socket
+        if (
+          framer.canFlush &&
+          (framer.pendingBatchSize >= this.sliceSize || shouldForce)
+        ) {
           await this.scheduleFlush(framer, shouldForce);
         }
       }
@@ -432,6 +782,8 @@ async flush(framer: BatchFramer): Promise<void> {
  */
 export interface FlowControllerDiagnostics {
   currentSliceSize: number;
+  forceSliceSize?: number;
+  effectiveRateBytesPerSec: number;
   totalFlushes: number;
   totalBytes: number;
   backpressureEvents: number;
@@ -443,6 +795,14 @@ export interface FlowControllerDiagnostics {
     peerIsNative: boolean;
   };
   sliceHistory: Array<{ timestamp: number; size: number }>;
+  adaptive?: {
+    mode: AdaptiveMode;
+    sliceSize: number;
+    flushIntervalAvgMs: number;
+    bytesPerFlushAvg: number;
+    eluIdleRatioAvg: number;
+    gcPauseMaxMs: number;
+  };
 }
 
 /**
@@ -501,6 +861,8 @@ export function deriveSessionFlowPolicy(
     ? entropyVelocityToNumeric(metrics.entropyVelocity)
     : 0.3;
 
+  const nIndex = metrics.negIndex ?? coherence;
+
   // Derive rate based on trust level
   const baseRate =
     options?.rateBytesPerSec ?? FLOW_DEFAULTS.DEFAULT_RATE_BYTES_PER_SEC;
@@ -511,10 +873,15 @@ export function deriveSessionFlowPolicy(
     options?.burstBudgetBytes ?? FLOW_DEFAULTS.DEFAULT_BURST_BYTES;
   const burstBudgetBytes = Math.round(baseBurst * policy.trustLevel);
 
-  // Determine max slice - clamp for TS peers
+  // Determine max slice - clamp for TS peers, relaxed for high-trust
   let maxSlice = policy.batchSize;
   if (!peerIsNative) {
-    maxSlice = Math.min(maxSlice, FLOW_DEFAULTS.TS_PEER_MAX_SLICE);
+    // High-trust TS peers (negIndex >= 0.85) get higher slice cap
+    if (nIndex >= 0.85) {
+      maxSlice = Math.min(maxSlice, FLOW_DEFAULTS.TS_PEER_HIGH_TRUST_MAX_SLICE);
+    } else {
+      maxSlice = Math.min(maxSlice, FLOW_DEFAULTS.TS_PEER_MAX_SLICE);
+    }
   }
 
   return {
@@ -526,6 +893,7 @@ export function deriveSessionFlowPolicy(
     burstBudgetBytes,
     rateBytesPerSec,
     peerIsNative,
+    nIndex,
   };
 }
 
@@ -538,8 +906,21 @@ export function createFlowController(
     peerIsNative?: boolean;
     rateBytesPerSec?: number;
     burstBudgetBytes?: number;
+    adaptiveMode?: AdaptiveMode;
+    forceSliceSize?: number;
+    forceRateBytesPerSec?: number;
   },
 ): FlowController {
   const policy = deriveSessionFlowPolicy(metrics, options);
-  return new FlowController(policy);
+  const peerProfile: PeerProfile = {
+    isNative: policy.peerIsNative,
+    nIndex: policy.nIndex ?? metrics.negIndex ?? 0.5,
+    coherence: policy.coherence,
+  };
+  return new FlowController(policy, {
+    adaptiveMode: options?.adaptiveMode ?? envAdaptiveMode(),
+    peerProfile,
+    forceSliceSize: options?.forceSliceSize,
+    forceRateBytesPerSec: options?.forceRateBytesPerSec,
+  });
 }

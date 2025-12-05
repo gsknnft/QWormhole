@@ -2,6 +2,7 @@ import {
   performance,
   PerformanceObserver,
   constants as perfConstants,
+  monitorEventLoopDelay,
   type EventLoopUtilization,
 } from "node:perf_hooks";
 import type { EventEmitter } from "node:events";
@@ -38,6 +39,13 @@ const TOTAL_MESSAGES = 10_000;
 const TIMEOUT_MS = 5000;
 const BENCH_FRAMING: FramingMode =
   process.env.QWORMHOLE_BENCH_FRAMING === "none" ? "none" : "length-prefixed";
+const BENCH_NEG_INDEX = (() => {
+  const raw = process.env.QWORMHOLE_BENCH_NEG_INDEX;
+  if (!raw) return 0.9;
+  const parsed = Number.parseFloat(raw);
+  if (Number.isNaN(parsed)) return 0.9;
+  return Math.min(Math.max(parsed, 0), 1);
+})();
 const FRAME_HEADER_BYTES = 4;
 const ENABLE_DIAGNOSTICS =
   process.argv.includes("--diagnostics") ||
@@ -96,7 +104,7 @@ for (const preferNativeServer of [false, true]) {
           ? `native-server(${backend})`
           : "native-server"
         : "ts-server";
-        
+
       scenarios.push({
         id: `${serverLabel}+${mode}`,
         preferNativeServer,
@@ -134,6 +142,13 @@ const serverModeAvailable = (
   return isNativeServerAvailable(backend);
 };
 
+const deriveBenchCoherence = (): "high" | "medium" | "low" | "chaos" => {
+  if (BENCH_NEG_INDEX >= 0.85) return "high";
+  if (BENCH_NEG_INDEX >= 0.65) return "medium";
+  if (BENCH_NEG_INDEX >= 0.4) return "low";
+  return "chaos";
+};
+
 type ScenarioResult = {
   id: string;
   serverMode: Mode;
@@ -164,12 +179,28 @@ type GcTotals = {
   byKind: Record<string, number>;
 };
 
+type SendBlockStats = {
+  blockSize: number;
+  samples: number;
+  avgMs: number;
+  minMs: number;
+  maxMs: number;
+};
+
 type ScenarioDiagnostics = {
   gc: GcTotals;
   eventLoop: {
     utilization: number;
     activeMs: number;
     idleMs: number;
+  };
+  eventLoopDelay?: {
+    minMs: number;
+    maxMs: number;
+    meanMs: number;
+    stdMs: number;
+    p50Ms: number;
+    p99Ms: number;
   };
   backpressure: {
     events: number;
@@ -183,10 +214,15 @@ type ScenarioDiagnostics = {
     maxBuffers: number;
     maxBytes: number;
   };
+  sendBlocks?: SendBlockStats;
+};
+
+type DiagnosticsExtras = {
+  sendBlocks?: SendBlockStats;
 };
 
 type DiagnosticsScope = {
-  stop: () => ScenarioDiagnostics;
+  stop: (extras?: DiagnosticsExtras) => ScenarioDiagnostics;
 };
 
 const GC_KIND_LABELS: Record<number, string> = {
@@ -273,6 +309,7 @@ const ensureBatchFramerDiagnostics = () => {
 };
 
 const microsToMillis = (value: number): number => value / 1000;
+const nanosToMillis = (value: number): number => value / 1_000_000;
 
 const startDiagnostics = (
   serverInstance: Pick<EventEmitter, "on" | "off">,
@@ -283,6 +320,8 @@ const startDiagnostics = (
 
   const startGc = snapshotGcTotals();
   const startElu = performance.eventLoopUtilization();
+  const loopDelay = monitorEventLoopDelay({ resolution: 20 });
+  loopDelay.enable();
 
   let backpressureEvents = 0;
   let drainEvents = 0;
@@ -313,10 +352,11 @@ const startDiagnostics = (
   activeBatchCollector = batchStats;
 
   return {
-    stop: () => {
+    stop: (extras?: DiagnosticsExtras) => {
       serverInstance.off("backpressure", onBackpressure as never);
       serverInstance.off("drain", onDrain as never);
       activeBatchCollector = previousCollector;
+      loopDelay.disable();
 
       const gc = diffGcTotals(startGc);
       const eluDelta: EventLoopUtilization =
@@ -326,6 +366,7 @@ const startDiagnostics = (
         activeMs: microsToMillis(Number(eluDelta.active) || 0),
         idleMs: microsToMillis(Number(eluDelta.idle) || 0),
       };
+      const eventLoopDelay = buildLoopDelayStats(loopDelay);
 
       const batching = {
         flushes: batchStats.flushes,
@@ -341,17 +382,54 @@ const startDiagnostics = (
         maxBytes: batchStats.maxBytes,
       };
 
+      const backpressure = {
+        events: backpressureEvents,
+        drainEvents,
+        maxQueuedBytes,
+      };
+
       return {
         gc,
         eventLoop,
-        backpressure: {
-          events: backpressureEvents,
-          drainEvents,
-          maxQueuedBytes,
-        },
+        eventLoopDelay,
+        backpressure,
         batching,
+        sendBlocks: extras?.sendBlocks,
       };
     },
+  };
+};
+
+const buildLoopDelayStats = (
+  histogram: ReturnType<typeof monitorEventLoopDelay>,
+) => ({
+  minMs: nanosToMillis(histogram.min),
+  maxMs: nanosToMillis(histogram.max),
+  meanMs: nanosToMillis(histogram.mean),
+  stdMs: nanosToMillis(histogram.stddev),
+  p50Ms: nanosToMillis(histogram.percentile(50)),
+  p99Ms: nanosToMillis(histogram.percentile(99)),
+});
+
+const summarizeBlockDurations = (
+  durations: number[],
+  blockSize: number,
+): SendBlockStats | undefined => {
+  if (!durations.length) return undefined;
+  let sum = 0;
+  let min = Number.POSITIVE_INFINITY;
+  let max = 0;
+  for (const d of durations) {
+    sum += d;
+    if (d < min) min = d;
+    if (d > max) max = d;
+  }
+  return {
+    blockSize,
+    samples: durations.length,
+    avgMs: sum / durations.length,
+    minMs: min,
+    maxMs: max,
   };
 };
 
@@ -417,20 +495,20 @@ async function runScenario({
     preferNative: preferNativeServer,
     preferredNativeBackend: serverBackend,
   } as BenchServerOptions);
-if (preferNativeServer && serverResult.mode !== "native-lws") {
-  return {
-    id,
-    serverMode: serverResult.mode as Mode,
-    clientMode,
-    preferredServerBackend: serverBackend,
-    durationMs: 0,
-    messagesReceived: 0,
-    bytesReceived: 0,
-    framing: BENCH_FRAMING,
-    skipped: true,
-    reason: "Native backend unavailable",
-  };
-}
+  if (preferNativeServer && serverResult.mode !== "native-lws") {
+    return {
+      id,
+      serverMode: serverResult.mode as Mode,
+      clientMode,
+      preferredServerBackend: serverBackend,
+      durationMs: 0,
+      messagesReceived: 0,
+      bytesReceived: 0,
+      framing: BENCH_FRAMING,
+      skipped: true,
+      reason: "Native backend unavailable",
+    };
+  }
   const serverMode = serverResult.mode;
   const serverInstance = serverResult.server;
 
@@ -450,6 +528,11 @@ if (preferNativeServer && serverResult.mode !== "native-lws") {
       framing: BENCH_FRAMING,
       serializer: toBytes,
       deserializer: (data: Buffer) => data,
+      entropyMetrics: {
+        negIndex: BENCH_NEG_INDEX,
+        coherence: deriveBenchCoherence(),
+        entropyVelocity: "low",
+      },
     });
     await tsClient.connect();
   } else {
@@ -472,7 +555,6 @@ if (preferNativeServer && serverResult.mode !== "native-lws") {
     }
     nativeClient.connect("127.0.0.1", port);
   }
-  
 
   let messagesReceived = 0;
   let bytesReceived = 0;
@@ -485,6 +567,11 @@ if (preferNativeServer && serverResult.mode !== "native-lws") {
 
   let duration = 0;
   let diagnostics: ScenarioDiagnostics | undefined;
+  const sendBlockDurations: number[] = [];
+  const blockSampleSize =
+    Number(process.env.QWORMHOLE_BENCH_BLOCK_SIZE ?? "1000") || 1000;
+  let blockCount = 0;
+  let blockStart = ENABLE_DIAGNOSTICS ? performance.now() : 0;
 
   try {
     const start = performance.now();
@@ -493,6 +580,15 @@ if (preferNativeServer && serverResult.mode !== "native-lws") {
         tsClient.send(PAYLOAD);
       } else if (nativeClient) {
         nativeClient.send(NATIVE_CLIENT_PAYLOAD);
+      }
+      if (ENABLE_DIAGNOSTICS) {
+        blockCount += 1;
+        if (blockCount >= blockSampleSize || i === TOTAL_MESSAGES - 1) {
+          const now = performance.now();
+          sendBlockDurations.push(now - blockStart);
+          blockStart = now;
+          blockCount = 0;
+        }
       }
     }
 
@@ -510,7 +606,11 @@ if (preferNativeServer && serverResult.mode !== "native-lws") {
       nativeClient.close();
     }
     await serverInstance.close();
-    diagnostics = diagnosticsScope?.stop();
+    const blockStats =
+      ENABLE_DIAGNOSTICS && sendBlockDurations.length
+        ? summarizeBlockDurations(sendBlockDurations, blockSampleSize)
+        : undefined;
+    diagnostics = diagnosticsScope?.stop({ sendBlocks: blockStats });
   }
 
   const seconds = duration / 1000;

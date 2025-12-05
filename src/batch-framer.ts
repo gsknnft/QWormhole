@@ -236,11 +236,32 @@ export class BatchFramer extends TypedEventEmitter<BatchFramerEvents> {
       queueMicrotask(() => socket.uncork());
 
       if (this.draining) {
-        socket.once("drain", () => {
+        // Cleanup function to remove all listeners
+        const cleanup = () => {
+          socket.off("drain", onDrain);
+          socket.off("error", onError);
+          socket.off("close", onClose);
+        };
+
+        const onDrain = () => {
+          cleanup();
           this.draining = false;
           resolve();
-        });
-        socket.once("error", reject);
+        };
+
+        const onError = (err: Error) => {
+          cleanup();
+          reject(err);
+        };
+
+        const onClose = () => {
+          cleanup();
+          reject(new Error("Socket closed while waiting for drain"));
+        };
+
+        socket.once("drain", onDrain);
+        socket.once("error", onError);
+        socket.once("close", onClose);
       } else {
         resolve();
       }
@@ -259,11 +280,33 @@ export class BatchFramer extends TypedEventEmitter<BatchFramerEvents> {
 
       if (!canWrite) {
         this.handleBackpressure(socket.writableLength);
-        socket.once("drain", () => {
+
+        // Cleanup function to remove all listeners
+        const cleanup = () => {
+          socket.off("drain", onDrain);
+          socket.off("error", onError);
+          socket.off("close", onClose);
+        };
+
+        const onDrain = () => {
+          cleanup();
           this.draining = false;
           resolve();
-        });
-        socket.once("error", reject);
+        };
+
+        const onError = (err: Error) => {
+          cleanup();
+          reject(err);
+        };
+
+        const onClose = () => {
+          cleanup();
+          reject(new Error("Socket closed while waiting for drain"));
+        };
+
+        socket.once("drain", onDrain);
+        socket.once("error", onError);
+        socket.once("close", onClose);
       } else {
         resolve();
       }
@@ -371,6 +414,13 @@ export class BatchFramer extends TypedEventEmitter<BatchFramerEvents> {
    */
   get pendingBatchBytes(): number {
     return this.outBatchBytes;
+  }
+
+  /**
+   * Check if the framer has a connected socket for flushing
+   */
+  get canFlush(): boolean {
+    return Boolean(this.socket && !this.socket.destroyed);
   }
 
   /**

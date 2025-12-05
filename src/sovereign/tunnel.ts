@@ -40,16 +40,56 @@ export class SovereignTunnel implements Tunnel {
   public sessions: Map<string, Session> = new Map();
   private peerRegistry: PeerRegistry;
   private sessionTimeoutMs: number;
+  private cleanupIntervalMs: number;
+  private cleanupTimer?: ReturnType<typeof setInterval>;
 
-  constructor(peerRegistry: PeerRegistry, sessionTimeoutMs = 3600000) {
+  constructor(peerRegistry: PeerRegistry, sessionTimeoutMs = 3600000, cleanupIntervalMs = 300000) {
     this.peerRegistry = peerRegistry;
     this.sessionTimeoutMs = sessionTimeoutMs;
+    this.cleanupIntervalMs = cleanupIntervalMs;
+    // Start periodic cleanup to prevent session memory leaks
+    this.startCleanupTimer();
+  }
+
+  /**
+   * Start the periodic cleanup timer
+   */
+  private startCleanupTimer(): void {
+    if (this.cleanupTimer) return;
+    this.cleanupTimer = setInterval(() => {
+      this.cleanupExpiredSessions();
+    }, this.cleanupIntervalMs);
+    // Allow process to exit even if timer is running
+    if (this.cleanupTimer.unref) {
+      this.cleanupTimer.unref();
+    }
+  }
+
+  /**
+   * Stop the cleanup timer (call when shutting down)
+   */
+  stopCleanupTimer(): void {
+    if (this.cleanupTimer) {
+      clearInterval(this.cleanupTimer);
+      this.cleanupTimer = undefined;
+    }
+  }
+
+  /**
+   * Destroy the tunnel and clean up resources
+   */
+  destroy(): void {
+    this.stopCleanupTimer();
+    this.sessions.clear();
   }
 
   /**
    * Initiate a session handshake with a peer
    */
   async initiateSession(peer: Peer): Promise<void | SessionHandshakeEvent> {
+    // Clean up expired sessions on each new session initiation
+    this.cleanupExpiredSessions();
+    
     if (!peer || !peer.origin) {
       console.error(`Peer object is invalid or missing origin`);
       return;
@@ -282,6 +322,7 @@ export class SovereignTunnel implements Tunnel {
 export function createSovereignTunnel(
   peerRegistry: PeerRegistry,
   sessionTimeoutMs = 3600000,
+  cleanupIntervalMs = 300000,
 ): SovereignTunnel {
-  return new SovereignTunnel(peerRegistry, sessionTimeoutMs);
+  return new SovereignTunnel(peerRegistry, sessionTimeoutMs, cleanupIntervalMs);
 }

@@ -21,6 +21,7 @@ const createTestPolicy = (
   preferredBatchSize: 64,
   minSlice: 4,
   maxSlice: 64,
+  nIndex: 0.8,
   burstBudgetBytes: 256 * 1024,
   rateBytesPerSec: 10 * 1024 * 1024,
   peerIsNative: true,
@@ -65,7 +66,6 @@ describe("TokenBucket", () => {
 });
 
 describe("FlowController", () => {
-
   it("initializes with half of preferred batch size", () => {
     const policy = createTestPolicy({ preferredBatchSize: 64 });
     const controller = new FlowController(policy);
@@ -146,6 +146,63 @@ describe("FlowController", () => {
     expect(controller.currentSliceSize).toBe(FLOW_DEFAULTS.TS_PEER_MAX_SLICE);
   });
 
+  it("honors force slice override from options", () => {
+    const policy = createTestPolicy({
+      minSlice: 4,
+      maxSlice: 64,
+    });
+    const controller = new FlowController(policy, { forceSliceSize: 24 });
+
+    expect(controller.currentSliceSize).toBe(24);
+    controller.onBackpressure(1024);
+    expect(controller.currentSliceSize).toBe(24);
+    controller.onDrain();
+    expect(controller.currentSliceSize).toBe(24);
+  });
+
+  it("clamps env force slice override and surfaces in diagnostics", () => {
+    const original = process.env.QWORMHOLE_FORCE_SLICE;
+    process.env.QWORMHOLE_FORCE_SLICE = "128";
+    try {
+      const policy = createTestPolicy({
+        maxSlice: 64,
+        peerIsNative: false,
+      });
+      const controller = new FlowController(policy);
+
+      expect(controller.currentSliceSize).toBe(FLOW_DEFAULTS.TS_PEER_MAX_SLICE);
+      expect(controller.getDiagnostics().forceSliceSize).toBe(
+        FLOW_DEFAULTS.TS_PEER_MAX_SLICE,
+      );
+    } finally {
+      if (original === undefined) {
+        delete process.env.QWORMHOLE_FORCE_SLICE;
+      } else {
+        process.env.QWORMHOLE_FORCE_SLICE = original;
+      }
+    }
+  });
+
+  it("allows force rate override via env", () => {
+    const original = process.env.QWORMHOLE_FORCE_RATE_BYTES;
+    process.env.QWORMHOLE_FORCE_RATE_BYTES = "20000000";
+    try {
+      const policy = createTestPolicy({
+        rateBytesPerSec: 1_000_000,
+      });
+      const controller = new FlowController(policy);
+      expect(controller.getDiagnostics().effectiveRateBytesPerSec).toBe(
+        20_000_000,
+      );
+    } finally {
+      if (original === undefined) {
+        delete process.env.QWORMHOLE_FORCE_RATE_BYTES;
+      } else {
+        process.env.QWORMHOLE_FORCE_RATE_BYTES = original;
+      }
+    }
+  });
+
   it("emits sliceDrift events", () => {
     const policy = createTestPolicy();
     const controller = new FlowController(policy);
@@ -173,6 +230,7 @@ describe("FlowController", () => {
     expect(diagnostics.totalBytes).toBe(0);
     expect(diagnostics.policy.coherence).toBe(0.8);
     expect(diagnostics.sliceHistory.length).toBeGreaterThan(0);
+    expect(diagnostics.effectiveRateBytesPerSec).toBe(policy.rateBytesPerSec);
   });
 
   it("records slice history", () => {
@@ -224,7 +282,24 @@ describe("deriveSessionFlowPolicy", () => {
 
     const policy = deriveSessionFlowPolicy(metrics, { peerIsNative: false });
 
-    expect(policy.maxSlice).toBeLessThanOrEqual(FLOW_DEFAULTS.TS_PEER_MAX_SLICE);
+    // High-trust TS peers (negIndex >= 0.85) use the higher cap
+    expect(policy.maxSlice).toBeLessThanOrEqual(
+      FLOW_DEFAULTS.TS_PEER_HIGH_TRUST_MAX_SLICE,
+    );
+  });
+
+  it("clamps maxSlice for low-trust TS peers", () => {
+    const metrics: EntropyMetrics = {
+      negIndex: 0.5,
+      coherence: "medium",
+    };
+
+    const policy = deriveSessionFlowPolicy(metrics, { peerIsNative: false });
+
+    // Low-trust TS peers use the standard cap
+    expect(policy.maxSlice).toBeLessThanOrEqual(
+      FLOW_DEFAULTS.TS_PEER_MAX_SLICE,
+    );
   });
 
   it("scales rate limit by trust level", () => {
@@ -290,6 +365,7 @@ describe("createFlowController", () => {
 describe("FlowController integration with BatchFramer", () => {
   let controller: FlowController;
   let framer: BatchFramer;
+  let canFlushSpy: ReturnType<typeof vi.spyOn> | undefined;
 
   beforeEach(() => {
     const policy = createTestPolicy();
@@ -298,6 +374,14 @@ describe("FlowController integration with BatchFramer", () => {
       batchSize: 64,
       flushIntervalMs: 0, // Disable auto-flush for testing
     });
+    canFlushSpy = vi.spyOn(framer, "canFlush", "get").mockReturnValue(true);
+  });
+
+  afterEach(() => {
+    // Clean up to prevent hanging timers
+    canFlushSpy?.mockRestore();
+    canFlushSpy = undefined;
+    framer.reset();
   });
 
   it("enqueues payloads without immediate flush when below slice threshold", async () => {
@@ -342,5 +426,14 @@ describe("FlowController integration with BatchFramer", () => {
 
     const afterFlush = controller.getDiagnostics();
     expect(afterFlush.totalFlushes).toBe(1);
+  });
+
+  it("includes adaptive diagnostics when enabled", () => {
+    const policy = createTestPolicy();
+    const adaptiveController = new FlowController(policy, {
+      adaptiveMode: "guarded",
+    });
+    const diag = adaptiveController.getDiagnostics();
+    expect(diag.adaptive?.mode).toBe("guarded");
   });
 });

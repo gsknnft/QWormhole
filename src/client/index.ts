@@ -66,6 +66,9 @@ export class QWormholeClient<TMessage = Buffer> extends TypedEventEmitter<
   private heartbeatTimer?: NodeJS.Timeout;
   private pendingCloseReason: TrustSnapshotReason = "close";
   private trustSnapshotInFlight = false;
+  private socketTokenCounter = 0;
+  private settledCloseToken = 0;
+  private currentSocketToken = 0;
 
   constructor(options: QWormholeClientOptions<TMessage>) {
     super();
@@ -176,6 +179,8 @@ export class QWormholeClient<TMessage = Buffer> extends TypedEventEmitter<
           );
 
       this.socket = socket;
+      const closeToken = ++this.socketTokenCounter;
+      this.currentSocketToken = closeToken;
 
       if (this.options.keepAlive) {
         socket.setKeepAlive(true, this.options.keepAliveDelayMs);
@@ -185,7 +190,7 @@ export class QWormholeClient<TMessage = Buffer> extends TypedEventEmitter<
       }
 
       socket.on("data", chunk => this.handleData(chunk));
-      socket.on("close", hadError => this.handleClose(hadError));
+      socket.on("close", hadError => this.handleClose(hadError, closeToken));
       socket.on("timeout", () => {
         this.emit("timeout", undefined as never);
         socket.end();
@@ -194,7 +199,7 @@ export class QWormholeClient<TMessage = Buffer> extends TypedEventEmitter<
       socket.on("error", err => {
         this.hadSocketError = true;
         this.emit("error", err);
-        this.handleClose(true); // Ensure hadError is true on error
+        this.handleClose(true, closeToken); // Ensure hadError is true on error
         if (!settled) {
           settled = true;
           this.clearConnectTimer();
@@ -217,19 +222,30 @@ export class QWormholeClient<TMessage = Buffer> extends TypedEventEmitter<
     });
   }
 
-  public send(payload: Payload, options?: SendOptions): void {
+  public async send(payload: Payload, options?: SendOptions): Promise<void> {
     this.enqueueSend(payload, options);
   }
 
-  public disconnect(): void {
+  public async disconnect(): Promise<void> {
     this.pendingCloseReason = "disconnect";
     this.closedByUser = true;
     this.clearReconnectTimer();
     this.stopHeartbeat();
     this.detachOutboundFramer();
-    this.socket?.end();
-    this.socket?.destroy();
+    const socket = this.socket;
+    const closeToken = this.currentSocketToken;
+    if (!socket) {
+      this.handleClose(false, closeToken);
+      return;
+    }
+    socket.end();
+    socket.destroy();
     this.socket = undefined;
+    queueMicrotask(() => {
+      if (closeToken > this.settledCloseToken) {
+        this.handleClose(false, closeToken);
+      }
+    });
   }
 
   public isConnected(): boolean {
@@ -245,7 +261,9 @@ export class QWormholeClient<TMessage = Buffer> extends TypedEventEmitter<
     }
   }
 
-  private handleClose(hadError: boolean): void {
+  private handleClose(hadError: boolean, closeToken: number): void {
+    if (closeToken <= this.settledCloseToken) return;
+    this.settledCloseToken = closeToken;
     // If hadError is true, ensure hadSocketError is set
     if (hadError) this.hadSocketError = true;
     // If handshake is pending and connection closes, treat as error
@@ -463,7 +481,25 @@ export class QWormholeClient<TMessage = Buffer> extends TypedEventEmitter<
       version: signerPayload.version ?? this.options.protocolVersion,
       tags: finalTags,
     });
-    this.enqueueSend(payload, { priority: -100 });
+    await this.enqueueSendAsync(payload, { priority: -100 });
+  }
+
+  /**
+   * Async version of enqueueSend that waits for the drain to complete
+   */
+  private async enqueueSendAsync(
+    payload: Payload,
+    options?: SendOptions,
+  ): Promise<void> {
+    if (!this.socket || this.socket.destroyed) {
+      if (this.options.requireConnectedForSend) {
+        throw new Error("QWormholeClient is not connected");
+      }
+      return;
+    }
+    const serialized = this.options.serializer(payload);
+    this.queue.enqueue(serialized, options?.priority ?? 0);
+    await this.drainQueue();
   }
 
   private startHeartbeat(): void {
