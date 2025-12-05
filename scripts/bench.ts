@@ -103,7 +103,7 @@ for (const preferNativeServer of [false, true]) {
           ? `native-server(${backend})`
           : "native-server"
         : "ts-server";
-        
+
       scenarios.push({
         id: `${serverLabel}+${mode}`,
         preferNativeServer,
@@ -431,20 +431,20 @@ async function runScenario({
     preferNative: preferNativeServer,
     preferredNativeBackend: serverBackend,
   } as BenchServerOptions);
-if (preferNativeServer && serverResult.mode !== "native-lws") {
-  return {
-    id,
-    serverMode: serverResult.mode as Mode,
-    clientMode,
-    preferredServerBackend: serverBackend,
-    durationMs: 0,
-    messagesReceived: 0,
-    bytesReceived: 0,
-    framing: BENCH_FRAMING,
-    skipped: true,
-    reason: "Native backend unavailable",
-  };
-}
+  if (preferNativeServer && serverResult.mode !== "native-lws") {
+    return {
+      id,
+      serverMode: serverResult.mode as Mode,
+      clientMode,
+      preferredServerBackend: serverBackend,
+      durationMs: 0,
+      messagesReceived: 0,
+      bytesReceived: 0,
+      framing: BENCH_FRAMING,
+      skipped: true,
+      reason: "Native backend unavailable",
+    };
+  }
   const serverMode = serverResult.mode;
   const serverInstance = serverResult.server;
 
@@ -491,7 +491,6 @@ if (preferNativeServer && serverResult.mode !== "native-lws") {
     }
     nativeClient.connect("127.0.0.1", port);
   }
-  
 
   let messagesReceived = 0;
   let bytesReceived = 0;

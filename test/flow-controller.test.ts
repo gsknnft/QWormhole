@@ -170,9 +170,7 @@ describe("FlowController", () => {
       });
       const controller = new FlowController(policy);
 
-      expect(controller.currentSliceSize).toBe(
-        FLOW_DEFAULTS.TS_PEER_MAX_SLICE,
-      );
+      expect(controller.currentSliceSize).toBe(FLOW_DEFAULTS.TS_PEER_MAX_SLICE);
       expect(controller.getDiagnostics().forceSliceSize).toBe(
         FLOW_DEFAULTS.TS_PEER_MAX_SLICE,
       );
