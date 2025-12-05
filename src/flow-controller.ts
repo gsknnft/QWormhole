@@ -257,7 +257,7 @@ export class FlowController extends TypedEventEmitter<FlowControllerEvents> {
   }
 
   async flushPending(framer: BatchFramer): Promise<void> {
-    if (framer.pendingBatchSize === 0) return;
+    if (framer.pendingBatchSize === 0 || !framer.canFlush) return;
     const pending = this.scheduleFlush(framer, true);
     if (pending) await pending;
   }
@@ -266,41 +266,7 @@ export class FlowController extends TypedEventEmitter<FlowControllerEvents> {
    * Flush the current batch with rate limiting
    */
   async flush(framer: BatchFramer): Promise<void> {
-    if (this.flushing) return;
-    this.flushing = true;
-
-    try {
-      const projectedBytes = framer.pendingBatchBytes;
-      const delayMs = this.bucket.reserve(projectedBytes);
-
-      if (delayMs > 0) {
-        await this.delay(delayMs);
-      }
-
-      await framer.flushBatch();
-
-      this.totalFlushes++;
-      this.totalBytes += projectedBytes;
-
-      this.emit("flush", {
-        sliceSize: this.sliceSize,
-        bytes: projectedBytes,
-        delayMs,
-      });
-    } finally {
-      this.flushing = false;
-    }
-  }
-
-  /* 
-  
-  private flushing = false;
-
-async flush(framer: BatchFramer): Promise<void> {
-  if (this.flushing) return;
-  this.flushing = true;
-
-  try {
+    // Note: flushing state is managed by scheduleFlush, not here
     const projectedBytes = framer.pendingBatchBytes;
     const delayMs = this.bucket.reserve(projectedBytes);
 
@@ -318,12 +284,7 @@ async flush(framer: BatchFramer): Promise<void> {
       bytes: projectedBytes,
       delayMs,
     });
-  } finally {
-    this.flushing = false;
   }
-}
-
-  */
 
   /**
    * Get current slice size
@@ -397,6 +358,11 @@ async flush(framer: BatchFramer): Promise<void> {
     framer: BatchFramer,
     force: boolean,
   ): Promise<void> | void {
+    // If framer can't flush (no socket), don't schedule
+    if (!framer.canFlush) {
+      return;
+    }
+
     if (!force && framer.pendingBatchSize < this.sliceSize) {
       return;
     }
@@ -417,7 +383,8 @@ async flush(framer: BatchFramer): Promise<void> {
         this.flushPromise = null;
         const shouldForce = this.forceFlushQueued;
         this.forceFlushQueued = false;
-        if (framer.pendingBatchSize >= this.sliceSize || shouldForce) {
+        // Only continue flushing if framer still has a connected socket
+        if (framer.canFlush && (framer.pendingBatchSize >= this.sliceSize || shouldForce)) {
           await this.scheduleFlush(framer, shouldForce);
         }
       }

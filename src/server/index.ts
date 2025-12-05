@@ -68,7 +68,10 @@ type InternalServerOptions<TMessage> = Omit<
 export class QWormholeServer<TMessage = Buffer> extends TypedEventEmitter<
   QWormholeServerEvents<TMessage>
 > {
-  private failedHandshakes = new Map<string, number>();
+  // Track failed handshakes with timestamp for TTL-based cleanup
+  private failedHandshakes = new Map<string, { count: number; lastFailed: number }>();
+  private failedHandshakesTTLMs = 60 * 60 * 1000; // 1 hour TTL
+  private failedHandshakesMaxSize = 10000; // Maximum entries to prevent unbounded growth
   private readonly server: net.Server;
   private readonly clients = new Map<string, ManagedConnection>();
   private readonly options: InternalServerOptions<TMessage>;
@@ -179,6 +182,51 @@ export class QWormholeServer<TMessage = Buffer> extends TypedEventEmitter<
 
   getConnectionCount(): number {
     return this.clients.size;
+  }
+
+  /**
+   * Record a failed handshake attempt with TTL-based cleanup
+   */
+  private recordFailedHandshake(key: string): void {
+    const now = Date.now();
+    
+    // Prune expired entries if map is getting large
+    if (this.failedHandshakes.size >= this.failedHandshakesMaxSize) {
+      this.pruneExpiredHandshakeFailures();
+    }
+    
+    // Still too large after pruning? Remove oldest entries
+    if (this.failedHandshakes.size >= this.failedHandshakesMaxSize) {
+      const sortedEntries = Array.from(this.failedHandshakes.entries())
+        .sort((a, b) => a[1].lastFailed - b[1].lastFailed);
+      // Remove oldest 10%
+      const toRemove = Math.ceil(sortedEntries.length * 0.1);
+      for (let i = 0; i < toRemove; i++) {
+        this.failedHandshakes.delete(sortedEntries[i][0]);
+      }
+    }
+    
+    const existing = this.failedHandshakes.get(key);
+    if (existing) {
+      this.failedHandshakes.set(key, { 
+        count: existing.count + 1, 
+        lastFailed: now 
+      });
+    } else {
+      this.failedHandshakes.set(key, { count: 1, lastFailed: now });
+    }
+  }
+
+  /**
+   * Prune expired handshake failure entries
+   */
+  private pruneExpiredHandshakeFailures(): void {
+    const now = Date.now();
+    for (const [key, entry] of this.failedHandshakes.entries()) {
+      if (now - entry.lastFailed > this.failedHandshakesTTLMs) {
+        this.failedHandshakes.delete(key);
+      }
+    }
   }
 
   private async handleConnection(socket: net.Socket): Promise<void> {
@@ -612,8 +660,7 @@ export class QWormholeServer<TMessage = Buffer> extends TypedEventEmitter<
         }
         if (!result) {
           const key = connection.remoteAddress ?? connection.id;
-          const count = this.failedHandshakes.get(key) ?? 0;
-          this.failedHandshakes.set(key, count + 1);
+          this.recordFailedHandshake(key);
           this.clients.delete(connection.id);
           connection.socket.destroy(new Error("Handshake rejected"));
           this.emit("clientClosed", { client: connection, hadError: true });

@@ -463,7 +463,22 @@ export class QWormholeClient<TMessage = Buffer> extends TypedEventEmitter<
       version: signerPayload.version ?? this.options.protocolVersion,
       tags: finalTags,
     });
-    this.enqueueSend(payload, { priority: -100 });
+    await this.enqueueSendAsync(payload, { priority: -100 });
+  }
+
+  /**
+   * Async version of enqueueSend that waits for the drain to complete
+   */
+  private async enqueueSendAsync(payload: Payload, options?: SendOptions): Promise<void> {
+    if (!this.socket || this.socket.destroyed) {
+      if (this.options.requireConnectedForSend) {
+        throw new Error("QWormholeClient is not connected");
+      }
+      return;
+    }
+    const serialized = this.options.serializer(payload);
+    this.queue.enqueue(serialized, options?.priority ?? 0);
+    await this.drainQueue();
   }
 
   private startHeartbeat(): void {

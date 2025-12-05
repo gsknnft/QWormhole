@@ -8,19 +8,14 @@ export default defineConfig({
     testTimeout: 30000,
     hookTimeout: 10000,
     teardownTimeout: 5000,
-    // Use isolate mode to ensure complete process isolation
-    isolate: true,
-    // Pool isolation to prevent memory leaks between tests
-    pool: "forks",
+    // Use threads pool with single thread for consistent test ordering
+    pool: "threads",
     poolOptions: {
-      forks: {
-        singleFork: false,
-        // Limit max forks to reduce memory pressure
-        maxForks: 4,
-        minForks: 1,
+      threads: {
+        singleThread: true,
       },
     },
-    // Disable file parallelism to reduce memory usage
+    // Disable file parallelism to reduce memory usage and ensure clean teardown
     fileParallelism: false,
     coverage: {
       enabled: false, // Disabled by default to prevent memory issues; enable with --coverage
