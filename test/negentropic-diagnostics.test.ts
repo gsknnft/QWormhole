@@ -6,7 +6,8 @@ import {
   mapVelocity,
   Coherence,
   Velocity,
-} from "./negentropic-diagnostics";
+} from "../src/utils/negentropic-diagnostics";
+import { describe, it, expect } from "vitest";
 
 describe("Negentropic Diagnostics", () => {
   it("computes histogram and entropy", () => {
