@@ -1,7 +1,7 @@
 # Changelog
 
 ## Unreleased
-- Flow controller now auto-enables adaptive slicing (guarded for TS peers, aggressive for native) so high-trust TS paths recover top-line throughput without manual `QWORMHOLE_FORCE_SLICE` tweaks. Use `QWORMHOLE_ADAPTIVE_SLICES=off|guarded|aggressive|auto` to override or disable.
+- Flow controller now auto-enables adaptive slicing (guarded for TS peers, aggressive for native) with more responsive defaults (smaller sample windows, larger drift, lower idle target) so high-trust TS paths recover top-line throughput without manual `QWORMHOLE_FORCE_SLICE` tweaks. Use `QWORMHOLE_ADAPTIVE_SLICES=off|guarded|aggressive|auto` to override or disable.
 - Bench diagnostics emit event-loop delay percentiles and per-block send latency, making GC/EL regression hunts easier directly from `scripts/bench.ts`.
 
 ## 0.1.0 — Initial public kernel

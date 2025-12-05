@@ -14,11 +14,19 @@ export interface MLAdapter {
   run(metrics: JsonValue): Promise<JsonValue>;
 }
 
-export type MLAdapterName = "noop" | "qworm_torch" | "rpc" | "spawn" | "custom";
+export type MLAdapterName =
+  | "noop"
+  | "qworm_torch"
+  | "rpc"
+  | "spawn"
+  | "composite"
+  | "custom";
 
 export interface QwormTorchAdapterOptions {
   sampleLimit?: number;
   anomalyZThreshold?: number;
+  upperThreshold?: number;
+  lowerThreshold?: number;
 }
 
 export interface RpcAdapterOptions {
@@ -33,15 +41,37 @@ export interface SpawnAdapterOptions {
   env?: NodeJS.ProcessEnv;
 }
 
+export interface CompositeAdapterOptions {
+  adapters: Array<
+    | MLAdapter
+    | {
+        name: Exclude<MLAdapterName, "custom">;
+        options?:
+          | RpcAdapterOptions
+          | SpawnAdapterOptions
+          | QwormTorchAdapterOptions;
+      }
+  >;
+}
+
+export interface AdaptiveTelemetry {
+  negIndex: number;
+  coherenceBand: 'low' | 'medium' | 'high';
+  eluIdle: number;
+  gcPause: number;
+  backpressureEvents: number;
+}
+
 export type AdapterSelection =
   | MLAdapter
   | MLAdapterName
   | {
-      name: Extract<MLAdapterName, "rpc" | "spawn" | "qworm_torch" | "noop">;
+      name: Extract<MLAdapterName, "rpc" | "spawn" | "qworm_torch" | "noop" | "composite">;
       options?:
         | RpcAdapterOptions
         | SpawnAdapterOptions
-        | QwormTorchAdapterOptions;
+        | QwormTorchAdapterOptions
+        | CompositeAdapterOptions;
     };
 
 let resolvedFromEnv = false;
@@ -56,8 +86,10 @@ const adapterFactories: Record<
     createQwormTorchAdapter(options as QwormTorchAdapterOptions | undefined),
   rpc: options => createRpcAdapter(options as RpcAdapterOptions),
   spawn: options => createSpawnAdapter(options as SpawnAdapterOptions),
+  composite: options => createCompositeAdapter(options as CompositeAdapterOptions),
   custom: adapter => adapter as MLAdapter,
 };
+
 
 export function setMLAdapter(selection: AdapterSelection) {
   activeAdapter = resolveAdapter(selection) ?? activeAdapter;
@@ -85,6 +117,8 @@ export function createQwormTorchAdapter(
 ): MLAdapter {
   const sampleLimit = options.sampleLimit ?? 4096;
   const anomalyZ = options.anomalyZThreshold ?? 3;
+  const upper = options.upperThreshold ?? 0.9;
+  const lower = options.lowerThreshold ?? 0.4;
 
   return {
     name: "qworm_torch",
@@ -99,9 +133,15 @@ export function createQwormTorchAdapter(
       }
 
       const stats = summarizeSeries(series, anomalyZ);
+      const mode =
+        stats.nIndex >= upper
+          ? "high"
+          : stats.nIndex <= lower
+            ? "low"
+            : "medium";
       return {
         adapter: "qworm_torch",
-        stats,
+        stats: { ...stats, mode },
         echo: metrics,
       } as JsonValue;
     },
@@ -196,6 +236,58 @@ function resolveAdapter(selection: AdapterSelection): MLAdapter | null {
     return factory ? factory(selection.options) : null;
   }
   return null;
+}
+
+function createCompositeAdapter(options: CompositeAdapterOptions): MLAdapter {
+  if (!options || !Array.isArray(options.adapters) || options.adapters.length === 0) {
+    throw new Error("composite adapter requires at least one child adapter");
+  }
+
+  const children: MLAdapter[] = options.adapters.map(entry => {
+    if (typeof entry === "object" && "run" in entry) {
+      return entry as MLAdapter;
+    }
+    if (typeof entry === "object" && "name" in entry) {
+      const adapter = resolveAdapter(entry as AdapterSelection);
+      if (!adapter) {
+        throw new Error(`Failed to resolve composite adapter child ${entry.name}`);
+      }
+      return adapter;
+    }
+    if (typeof entry === "string") {
+      const adapter = resolveAdapter(entry);
+      if (!adapter) {
+        throw new Error(`Failed to resolve composite adapter child ${entry}`);
+      }
+      return adapter;
+    }
+    throw new Error("Invalid composite adapter child entry");
+  });
+
+  return {
+    name: "composite",
+    async run(metrics: JsonValue): Promise<JsonValue> {
+      const aggregate: JsonValue[] = [];
+      for (const adapter of children) {
+        try {
+          const result = await adapter.run(metrics);
+          aggregate.push({
+            name: adapter.name,
+            result,
+          });
+        } catch (err) {
+          aggregate.push({
+            name: adapter.name,
+            error: err instanceof Error ? err.message : String(err),
+          });
+        }
+      }
+      return {
+        adapter: "composite",
+        results: aggregate,
+      };
+    },
+  };
 }
 
 function resolveAdapterFromEnv(): MLAdapter | null {

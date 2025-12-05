@@ -129,11 +129,11 @@ export const FLOW_DEFAULTS = {
 
 const ADAPTIVE_DEFAULTS: AdaptiveConfig = {
   mode: "off",
-  idleTarget: 0.2,
+  idleTarget: 0.15,
   gcBudgetMs: 4,
-  sampleEvery: 64,
-  adaptEvery: 64,
-  driftStep: FLOW_DEFAULTS.DRIFT_STEP,
+  sampleEvery: 32,
+  adaptEvery: 32,
+  driftStep: 4,
   lerpFactor: 0.25,
   backpressureCooldown: 64,
 };
@@ -180,17 +180,20 @@ function tuneAdaptiveConfig(config: AdaptiveConfig, peer: PeerProfile): void {
     config.sampleEvery = Math.min(config.sampleEvery, 16);
     config.adaptEvery = Math.min(config.adaptEvery, 16);
     config.driftStep = Math.max(config.driftStep, 8);
-    config.idleTarget = Math.min(config.idleTarget, 0.15);
+    config.idleTarget = Math.min(config.idleTarget, 0.1);
     return;
   }
-  if (peer.nIndex >= 0.85) {
+  if (peer.nIndex >= 0.9) {
     config.sampleEvery = Math.min(config.sampleEvery, 24);
     config.adaptEvery = Math.min(config.adaptEvery, 24);
-    config.driftStep = Math.max(config.driftStep, 4);
+    config.driftStep = Math.max(config.driftStep, 6);
+    config.idleTarget = Math.min(config.idleTarget, 0.12);
     return;
   }
-  config.sampleEvery = Math.min(config.sampleEvery, 48);
-  config.adaptEvery = Math.min(config.adaptEvery, 48);
+  config.sampleEvery = Math.min(config.sampleEvery, 32);
+  config.adaptEvery = Math.min(config.adaptEvery, 32);
+  config.driftStep = Math.max(config.driftStep, 4);
+  config.idleTarget = Math.min(config.idleTarget, 0.18);
 }
 
 function ewma(prev: number, sample: number, alpha = 0.2): number {

@@ -450,6 +450,7 @@ QWormhole now ships with a real ML hook so telemetry can be scored without pulli
 - **Default (`qworm_torch`)** – derives entropy/coherence/anomaly scores from any numeric metrics using the same negentropic math the transport uses elsewhere. Installs get useful signals immediately, no RPC required.
 - **RPC adapter** – forward metrics to an HTTP endpoint. Configure with `QWORMHOLE_ML_ADAPTER=rpc` and `QWORMHOLE_ML_RPC_URL=https://...`. Optional `QWORMHOLE_ML_RPC_HEADERS` (JSON or `key:value,key:value`) and `QWORMHOLE_ML_RPC_TIMEOUT`.
 - **Spawn adapter** – shell out to any CLI (legacy Python, Rust CLI, etc.). Set `QWORMHOLE_ML_ADAPTER=spawn`, `QWORMHOLE_ML_SPAWN_CMD="python"`, and `QWORMHOLE_ML_SPAWN_ARGS="-m my.module"`.
+- **Composite adapter** – set `{ name: "composite", options: { adapters: [...] } }` to fan metrics into multiple adapters (e.g., run `qworm_torch` locally *and* RPC to a remote scorer) and aggregate their outputs.
 - **Custom adapters** – call `setMLAdapter(createNoopAdapter())` or pass any object matching `{ name, run() }`.
 
 Programmatic usage:
@@ -467,6 +468,14 @@ setMLAdapter(createQwormTorchAdapter({ sampleLimit: 2048 }));
 
 // Or switch to RPC dynamically
 setMLAdapter(createRpcAdapter({ url: "https://torch.example/ml" }));
+
+// Or run multiple adapters at once
+setMLAdapter({
+  name: "composite",
+  options: {
+    adapters: [{ name: "qworm_torch" }, { name: "rpc", options: { url: "https://torch.example/ml" } }],
+  },
+});
 
 const insight = await queryMLLayer({
   latencyMs: [12, 11, 40, 200, 9],
