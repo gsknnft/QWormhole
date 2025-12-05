@@ -2,14 +2,14 @@ import { describe, it, expect } from "vitest";
 import {
   QWormholeClient,
   QWormholeServer,
-  createNegantropicHandshake,
+  createNegentropicHandshake,
   jsonDeserializer,
 } from "../src/index";
 
 describe("Entropy-Adaptive Handshake Integration", () => {
   it("derives entropy policy from handshake nIndex", async () => {
     // Create handshake with known nIndex
-    const handshake = createNegantropicHandshake({ version: "1.0.0" });
+    const handshake = createNegentropicHandshake({ version: "1.0.0" });
 
     const server = new QWormholeServer<unknown>({
       host: "127.0.0.1",

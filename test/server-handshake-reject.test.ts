@@ -3,7 +3,7 @@ import net from "node:net";
 import {
   QWormholeServer,
   QWormholeClient,
-  createNegantropicHandshake,
+  createNegentropicHandshake,
 } from "../src/index.js";
 import { jsonDeserializer } from "../src/codecs.js";
 import { LengthPrefixedFramer } from "../src/framing.js";
@@ -167,7 +167,7 @@ describe("QWormholeServer handshake rejection", () => {
   });
 
   it(
-    "rejects invalid negantropic handshake signatures",
+    "rejects invalid negentropic handshake signatures",
     { timeout: 8000 },
     async () => {
       const server = new QWormholeServer<any>({
@@ -188,7 +188,7 @@ describe("QWormholeServer handshake rejection", () => {
 
       const framer = new LengthPrefixedFramer();
       const socket = net.createConnection(address.port, address.address);
-      const hs = createNegantropicHandshake({ version: "1.0.0" });
+      const hs = createNegentropicHandshake({ version: "1.0.0" });
       const tampered = { ...hs, negHash: "deadbeef" + hs.negHash.slice(8) };
       socket.write(framer.encode(Buffer.from(JSON.stringify(tampered))));
 

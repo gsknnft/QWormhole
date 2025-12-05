@@ -26,9 +26,9 @@ export type { QWormholeErrorCode } from "./errors";
 export { QWormholeRuntime } from "./runtime";
 export { QWormholeClient as TcpClient } from "./client";
 export {
-  createNegantropicHandshake,
-  verifyNegantropicHandshake,
-} from "./handshake/negantropic-handshake";
+  createNegentropicHandshake,
+  verifyNegentropicHandshake,
+} from "./handshake/negentropic-handshake";
 export {
   deriveEntropyPolicy,
   deriveHandshakeMode,
@@ -48,11 +48,11 @@ export {
   type CoherenceLevel,
 } from "./handshake/entropy-policy";
 export {
-  type NegantropicHandshake,
+  type NegentropicHandshake,
   handshakePayloadSchema,
   scpCapabilitySetSchema,
   scpStatePayloadSchema,
-  negantropicHandshakeSchema,
+  negentropicHandshakeSchema,
   entropyMetricsSchema,
   entropyVelocitySchema,
   coherenceLevelSchema,

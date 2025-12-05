@@ -73,7 +73,7 @@ QWormhole supports several authentication mechanisms:
 1. **Protocol versioning** - Reject clients with incompatible versions
 2. **Handshake tags** - Include identity metadata in handshakes
 3. **TLS fingerprint pinning** - Validate client certificates
-4. **Negantropic signatures** - Cryptographically signed handshakes
+4. **Negentropic signatures** - Cryptographically signed handshakes
 5. **Custom verification** - Implement `verifyHandshake` for custom logic
 
 ### Rate Limiting & DoS Protection

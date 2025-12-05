@@ -105,7 +105,7 @@ export const handshakePayloadSchema = z
   })
   .catchall(z.unknown());
 
-export const negantropicHandshakeSchema = handshakePayloadSchema
+export const negentropicHandshakeSchema = handshakePayloadSchema
   .extend({
     ts: z.number().int().nonnegative(),
     nonce: z.string().min(1),
@@ -151,7 +151,7 @@ export const scpStatePayloadSchema = z
   .catchall(z.unknown());
 
 export type HandshakePayload = z.infer<typeof handshakePayloadSchema>;
-export type NegantropicHandshake = z.infer<typeof negantropicHandshakeSchema>;
+export type NegentropicHandshake = z.infer<typeof negentropicHandshakeSchema>;
 export type SCPStatePayload = z.infer<typeof scpStatePayloadSchema>;
 export type SCPCapabilitySet = z.infer<typeof scpCapabilitySetSchema>;
 export type EntropyMetricsPayload = z.infer<typeof entropyMetricsSchema>;

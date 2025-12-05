@@ -8,11 +8,11 @@ import {
 } from "node:crypto";
 import { Buffer } from "node:buffer";
 import {
-  negantropicHandshakeSchema,
-  type NegantropicHandshake,
+  negentropicHandshakeSchema,
+  type NegentropicHandshake,
 } from "../schema/scp";
 
-export interface NegantropicHandshakeParams {
+export interface NegentropicHandshakeParams {
   version?: string;
   tags?: Record<string, string | number>;
   keyPair?: { publicKey: string; secretKey: string };
@@ -98,9 +98,9 @@ function canonicalizeRecord(value: Record<string, unknown>): string {
 /**
  * Build a signed handshake payload that includes negentropic hash and nonce.
  */
-export function createNegantropicHandshake(
-  params: NegantropicHandshakeParams = {},
-): NegantropicHandshake {
+export function createNegentropicHandshake(
+  params: NegentropicHandshakeParams = {},
+): NegentropicHandshake {
   const kp =
     params.keyPair ??
     (() => {
@@ -121,7 +121,7 @@ export function createNegantropicHandshake(
   const nonceBytes = rng.nextBytes(16);
   const ts = Date.now();
 
-  const unsigned: Omit<NegantropicHandshake, "signature"> = {
+  const unsigned: Omit<NegentropicHandshake, "signature"> = {
     type: "handshake",
     version: params.version,
     ts,
@@ -143,14 +143,14 @@ export function createNegantropicHandshake(
     }),
   ).toString("base64");
 
-  return negantropicHandshakeSchema.parse({ ...unsigned, signature });
+  return negentropicHandshakeSchema.parse({ ...unsigned, signature });
 }
 
 /**
- * Verify a negantropic handshake (signature and hash consistency).
+ * Verify a negentropic handshake (signature and hash consistency).
  */
-export function verifyNegantropicHandshake(hs: unknown): boolean {
-  const parsed = negantropicHandshakeSchema.safeParse(hs);
+export function verifyNegentropicHandshake(hs: unknown): boolean {
+  const parsed = negentropicHandshakeSchema.safeParse(hs);
   if (!parsed.success) {
     return false;
   }
@@ -173,8 +173,8 @@ export function verifyNegantropicHandshake(hs: unknown): boolean {
   );
 }
 
-export function isNegantropicHandshake(
+export function isNegentropicHandshake(
   payload: unknown,
-): payload is NegantropicHandshake {
-  return negantropicHandshakeSchema.safeParse(payload).success;
+): payload is NegentropicHandshake {
+  return negentropicHandshakeSchema.safeParse(payload).success;
 }

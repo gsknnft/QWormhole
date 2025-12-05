@@ -8,9 +8,9 @@ import { bufferDeserializer, defaultSerializer } from "../codecs";
 import { QWormholeError } from "../errors";
 import { TokenBucket, PriorityQueue, delay } from "../qos";
 import {
-  isNegantropicHandshake,
-  verifyNegantropicHandshake,
-} from "../handshake/negantropic-handshake";
+  isNegentropicHandshake,
+  verifyNegentropicHandshake,
+} from "../handshake/negentropic-handshake";
 import { type HandshakePayload } from "../handshake/handshake-policy";
 import {
   deriveEntropyPolicy,
@@ -690,19 +690,19 @@ export class QWormholeServer<TMessage = Buffer> extends TypedEventEmitter<
           return false;
         }
       } else if (
-        isNegantropicHandshake(parsed) &&
-        !verifyNegantropicHandshake(parsed)
+        isNegentropicHandshake(parsed) &&
+        !verifyNegentropicHandshake(parsed)
       ) {
         this.clients.delete(connection.id);
         this.emit(
           "error",
           new QWormholeError(
             "E_INVALID_HANDSHAKE_SIGNATURE",
-            "Invalid negantropic handshake signature",
+            "Invalid negentropic handshake signature",
           ),
         );
         connection.socket.destroy(
-          new Error("Invalid negantropic handshake signature"),
+          new Error("Invalid negentropic handshake signature"),
         );
         this.emit("clientClosed", { client: connection, hadError: true });
         this.telemetry.connections = this.clients.size;
@@ -719,7 +719,7 @@ export class QWormholeServer<TMessage = Buffer> extends TypedEventEmitter<
         "error",
         new QWormholeError(
           "E_INVALID_HANDSHAKE_SIGNATURE",
-          "Invalid negantropic handshake signature",
+          "Invalid negentropic handshake signature",
         ),
       );
       connection.socket.destroy(); // Prevent uncaught exception

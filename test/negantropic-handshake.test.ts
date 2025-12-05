@@ -4,10 +4,10 @@ import { jsonDeserializer } from "../src/codecs.js";
 import {
   QWormholeClient,
   QWormholeServer,
-  createNegantropicHandshake,
-  verifyNegantropicHandshake,
+  createNegentropicHandshake,
+  verifyNegentropicHandshake,
 } from "../src/index.js";
-import { computeNIndex } from "../src/handshake/negantropic-handshake.js";
+import { computeNIndex } from "../src/handshake/negentropic-handshake.js";
 
 describe("computeNIndex", () => {
   const adversarialBase64 = fc.oneof(
@@ -50,9 +50,9 @@ describe("computeNIndex", () => {
   });
 });
 
-describe("Negantropic handshake", () => {
+describe("Negentropic handshake", () => {
   it("creates and verifies signed handshake payloads", () => {
-    const hs = createNegantropicHandshake({
+    const hs = createNegentropicHandshake({
       version: "1.0.0",
       tags: { device: "alpha" },
     });
@@ -60,21 +60,21 @@ describe("Negantropic handshake", () => {
     expect(typeof hs.signature).toBe("string");
     expect(typeof hs.negHash).toBe("string");
     expect(hs.nIndex).toBeGreaterThanOrEqual(0);
-    expect(verifyNegantropicHandshake(hs)).toBe(true);
+    expect(verifyNegentropicHandshake(hs)).toBe(true);
 
     const tampered = { ...hs, negHash: "00" + hs.negHash.slice(2) };
-    expect(verifyNegantropicHandshake(tampered)).toBe(false);
+    expect(verifyNegentropicHandshake(tampered)).toBe(false);
   });
 
   it("allows server-side handshake verification", async () => {
-    const handshake = createNegantropicHandshake({ version: "1.0.0" });
+    const handshake = createNegentropicHandshake({ version: "1.0.0" });
     const server = new QWormholeServer<any>({
       host: "127.0.0.1",
       port: 0,
       protocolVersion: "1.0.0",
       framing: "length-prefixed",
       deserializer: jsonDeserializer,
-      verifyHandshake: verifyNegantropicHandshake,
+      verifyHandshake: verifyNegentropicHandshake,
     });
     const connectionReady = new Promise<string | undefined>(resolve => {
       server.once("connection", client => {
@@ -93,7 +93,7 @@ describe("Negantropic handshake", () => {
       protocolVersion: "1.0.0",
       framing: "length-prefixed",
       deserializer: jsonDeserializer,
-      handshakeSigner: () => createNegantropicHandshake({ version: "1.0.0" }),
+      handshakeSigner: () => createNegentropicHandshake({ version: "1.0.0" }),
     });
 
     await client.connect();

@@ -410,11 +410,11 @@ Install attempts a native build automatically; if native fails, TS remains avail
 ## Handshake & security
 - **Default handshake** – `{ type: "handshake", version, tags? }` automatically queues when `protocolVersion` is set.
 - **Native parity** – the libwebsockets server binding now enforces the same handshake pipeline as the TS server, surfaces TLS fingerprints/negentropic metadata on `connection.handshake`, and only emits `connection` after your optional `verifyHandshake` hook approves the snapshot.
-- **Negantropic signer** – pass `handshakeSigner` or use `createNegantropicHandshake` to emit signed payloads with `negHash` + coherence metadata for downstream policy engines.
+- **Negentropic signer** – pass `handshakeSigner` or use `createNegentropicHandshake` to emit signed payloads with `negHash` + coherence metadata for downstream policy engines.
 - **TLS-aware metadata** – when `tls` options are provided, the client captures peer fingerprints, ALPN, and exported keying material, then merges them into `handshake.tags`. The server pins those fingerprints via `verifyTlsFingerprint`, derives a session-bound key, and attaches the TLS snapshot to `connection.handshake.tls` for your app.
 - **Policy hooks** – `verifyHandshake` and `createHandshakeVerifier` make it easy to reject unwanted versions, tags, or signatures; failures immediately drop the socket and emit `clientClosed(hadError: true)`.
 
-### Negantropic handshake tests
+### Negentropic handshake tests
 - Property-based fuzzing (fast-check) now hammers `computeNIndex` with balanced entropy, repeated bytes, malformed Base64, and multi-kilobyte payloads. Every run asserts the metric is finite, non-NaN, and clamped to `[0,1]`.
 - Regression tests cover empties (`""`, `"===="`) plus pathological long strings (`"A".repeat(10_000)`) to guarantee graceful fallbacks instead of entropy collapse.
 - These invariants backstop roadmap targets: native server parity/reconnect logic keep using the same bounded negentropy values, TLS playbooks can bind fingerprints without skew, session-key rotation/replay guards inherit deterministic coherence math, SCP semantics get stable identity vectors, and QUIC/WebTransport research can rely on identical entropy contracts.
@@ -426,9 +426,9 @@ Install attempts a native build automatically; if native fails, TS remains avail
 
 ### Security story at a glance
 - **Transport confidentiality** – enable `tls` (TS or native-lws) for on-the-wire encryption, mutual auth, ALPN pinning, and exportable keying material.
-- **Identity & attestation** – use negantropic handshakes or custom `handshakeSigner` payloads so every socket announces a signed identity with coherence metadata.
+- **Identity & attestation** – use negentropic handshakes or custom `handshakeSigner` payloads so every socket announces a signed identity with coherence metadata.
 - **Policy enforcement** – `verifyHandshake`, TLS fingerprint pinning, rate limits, and backpressure guards let the server enforce both crypto posture and resource usage before promoting a socket to application traffic.
-- **Layered defense** – TLS metadata is merged into handshake tags, so downstream routers or registries can insist on matching TLS fingerprints *and* negantropic hashes; external tunnels (WireGuard, SSH) remain optional but compose cleanly via `localAddress` / `interfaceName`.
+- **Layered defense** – TLS metadata is merged into handshake tags, so downstream routers or registries can insist on matching TLS fingerprints *and* negentropic hashes; external tunnels (WireGuard, SSH) remain optional but compose cleanly via `localAddress` / `interfaceName`.
 - **Forward-secrecy roadmap** – sovereign tunnel sessions use long-lived X25519-derived keys today; rotation + replay protection are on the shortlist so meshes that need FS guarantees can opt in without bolting on a second transport.
 
 ## Error handling & backpressure
