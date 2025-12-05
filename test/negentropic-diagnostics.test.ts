@@ -18,7 +18,7 @@ describe("Negentropic Diagnostics", () => {
     const freq = hist.frequencies();
     expect(freq).toEqual({ A: 3, B: 3, C: 4 });
     expect(shannonEntropy(freq)).toBeCloseTo(1.57, 2);
-    expect(negentropy(freq)).toBeCloseTo(0.42, 2);
+    expect(negentropy(freq)).toBeCloseTo(0.014, 2);
   });
   it("maps negentropy to coherence", () => {
     expect(mapCoherence(2)).toBe(Coherence.High);

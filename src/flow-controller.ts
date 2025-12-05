@@ -71,6 +71,13 @@ interface AdaptiveState {
   bounds: PolicyBounds;
   flushIntervalAvgMs: number;
   bytesPerFlushAvg: number;
+  flushBytes?: number;
+  reserveDelayMs?: number;
+  elu?: {
+    lastIdleRatio: number;
+    mean: number;
+    max: number;
+  };
   eluIdleRatioAvg: number;
   gcPauseMaxMs: number;
   backpressureCount: number;
@@ -356,6 +363,7 @@ export class FlowController extends TypedEventEmitter<FlowControllerEvents> {
   private readonly forceSliceSize?: number;
   private readonly effectiveRateBytesPerSec: number;
   private flushing = false;
+  public runtimeMetrics: Record<string, () => number> = {};
   private flushPromise: Promise<void> | null = null;
   private forceFlushQueued = false;
   private backpressureCount = 0;
@@ -384,7 +392,12 @@ export class FlowController extends TypedEventEmitter<FlowControllerEvents> {
       initOptions?.forceRateBytesPerSec ?? envForceRateBytes(),
     );
     this.effectiveRateBytesPerSec = forcedRateBytes ?? policy.rateBytesPerSec;
-
+      const elu = monitorEventLoopDelay({ resolution: 20 });
+      elu.enable();
+    this.runtimeMetrics.getELU = () => {
+      const max = elu.max || 1; // avoid division by zero
+      return elu.mean / max;
+    };
     // Initialize slice size as half of preferred, clamped to bounds
     const preferredSlice = this.clamp(
       Math.round(policy.preferredBatchSize / 2),

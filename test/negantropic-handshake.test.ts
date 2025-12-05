@@ -62,7 +62,7 @@ describe("Negentropic handshake", () => {
     expect(hs.nIndex).toBeGreaterThanOrEqual(0);
     expect(verifyNegentropicHandshake(hs)).toBe(true);
 
-    const tampered = { ...hs, negHash: "00" + hs.negHash.slice(2) };
+    const tampered = { ...hs, negHash: hs.negHash.split("").reverse().join("") };
     expect(verifyNegentropicHandshake(tampered)).toBe(false);
   });
 
