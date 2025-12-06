@@ -27,6 +27,10 @@ import type {
 } from "./handshake/entropy-policy";
 import { deriveEntropyPolicy } from "./handshake/entropy-policy";
 import { TypedEventEmitter } from "./typedEmitter";
+import {
+  NegentropicDiagnostics,
+  type NegentropicSnapshot,
+} from "./utils/negentropic-diagnostics";
 
 /**
  * Session flow policy derived during handshake negotiation
@@ -368,6 +372,7 @@ export class FlowController extends TypedEventEmitter<FlowControllerEvents> {
   private forceFlushQueued = false;
   private backpressureCount = 0;
   private adaptive?: AdaptiveInternals;
+  private readonly negDiagnostics = new NegentropicDiagnostics();
 
   // Diagnostics
   private totalFlushes = 0;
@@ -620,6 +625,7 @@ export class FlowController extends TypedEventEmitter<FlowControllerEvents> {
    * Get diagnostics snapshot
    */
   getDiagnostics(): FlowControllerDiagnostics {
+    const negentropic = this.negDiagnostics.getSnapshot();
     return {
       currentSliceSize: this.sliceSize,
       forceSliceSize: this.forceSliceSize,
@@ -645,6 +651,7 @@ export class FlowController extends TypedEventEmitter<FlowControllerEvents> {
             gcPauseMaxMs: this.adaptive.state.gcPauseMaxMs,
           }
         : undefined,
+      negentropic,
     };
   }
 
@@ -658,6 +665,7 @@ export class FlowController extends TypedEventEmitter<FlowControllerEvents> {
         size: this.sliceSize,
       },
     ];
+    this.negDiagnostics.reset();
   }
 
   /**
@@ -687,6 +695,10 @@ export class FlowController extends TypedEventEmitter<FlowControllerEvents> {
    */
   private delay(ms: number): Promise<void> {
     return new Promise(resolve => setTimeout(resolve, ms));
+  }
+
+  recordMessageType(messageType: string): void {
+    this.negDiagnostics.recordMessageType(messageType);
   }
 
   private handlePostFlushTelemetry(
@@ -870,6 +882,7 @@ export interface FlowControllerDiagnostics {
     eluIdleRatioAvg: number;
     gcPauseMaxMs: number;
   };
+  negentropic: NegentropicSnapshot;
 }
 
 /**

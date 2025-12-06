@@ -19,6 +19,7 @@ import {
 import type { EntropyMetrics } from "../handshake/entropy-policy";
 import { handshakePayloadSchema } from "../schema/scp";
 import { createFlowController, type FlowController } from "../flow-controller";
+import { inferMessageType } from "../utils/negentropic-diagnostics";
 import type {
   Payload,
   QWormholeServerConnection,
@@ -436,6 +437,7 @@ export class QWormholeServer<TMessage = Buffer> extends TypedEventEmitter<
     payload: Payload,
     options?: SendOptions,
   ): Promise<void> {
+    connection.flowController?.recordMessageType(inferMessageType(payload));
     const serialized = this.options.serializer(payload);
     const priority = options?.priority ?? 0;
     connection.queue.enqueue(serialized, priority);

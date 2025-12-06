@@ -19,6 +19,7 @@ import type {
   Serializer,
   SendOptions,
 } from "src/types/types";
+import { inferMessageType } from "../utils/negentropic-diagnostics";
 
 const DEFAULT_RECONNECT: QWormholeReconnectOptions = {
   enabled: true,
@@ -409,6 +410,7 @@ export class QWormholeClient<TMessage = Buffer> extends TypedEventEmitter<
       }
       return;
     }
+    this.recordNegentropicSample(payload);
     const serialized = this.options.serializer(payload);
     this.queue.enqueue(serialized, options?.priority ?? 0);
     void this.drainQueue();
@@ -497,6 +499,7 @@ export class QWormholeClient<TMessage = Buffer> extends TypedEventEmitter<
       }
       return;
     }
+    this.recordNegentropicSample(payload);
     const serialized = this.options.serializer(payload);
     this.queue.enqueue(serialized, options?.priority ?? 0);
     await this.drainQueue();
@@ -520,6 +523,11 @@ export class QWormholeClient<TMessage = Buffer> extends TypedEventEmitter<
       clearInterval(this.heartbeatTimer);
       this.heartbeatTimer = undefined;
     }
+  }
+
+  private recordNegentropicSample(payload: Payload): void {
+    if (!this.flowController) return;
+    this.flowController.recordMessageType(inferMessageType(payload));
   }
 
   private buildTlsHandshakeTags(): Record<string, string | number> | undefined {

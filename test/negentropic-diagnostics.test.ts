@@ -6,6 +6,8 @@ import {
   mapVelocity,
   Coherence,
   Velocity,
+  NegentropicDiagnostics,
+  inferMessageType,
 } from "../src/utils/negentropic-diagnostics";
 import { describe, it, expect } from "vitest";
 
@@ -29,5 +31,23 @@ describe("Negentropic Diagnostics", () => {
     expect(mapVelocity(2)).toBe(Velocity.Fast);
     expect(mapVelocity(0.5)).toBe(Velocity.Moderate);
     expect(mapVelocity(0.1)).toBe(Velocity.Slow);
+  });
+  it("builds negentropic snapshot", () => {
+    const diag = new NegentropicDiagnostics(16);
+    diag.recordMessageType("handshake");
+    diag.recordMessageType("message");
+    const snapshot = diag.getSnapshot();
+    expect(snapshot.sampleCount).toBe(2);
+    expect(snapshot.histogram).toHaveProperty("handshake");
+    expect(snapshot.negentropy).toBeGreaterThanOrEqual(0);
+    diag.reset();
+    expect(diag.getSnapshot().sampleCount).toBe(0);
+  });
+  it("infers message type from payloads", () => {
+    expect(inferMessageType("hello")).toBe("string");
+    expect(inferMessageType(Buffer.from("data"))).toBe("buffer");
+    expect(inferMessageType({ type: "event" })).toBe("event");
+    expect(inferMessageType({ event: "pong" })).toBe("event:pong");
+    expect(inferMessageType({ action: "sync" })).toBe("action:sync");
   });
 });
