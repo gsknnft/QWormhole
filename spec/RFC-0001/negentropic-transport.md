@@ -1,7 +1,12 @@
-# RFC-0001: Negentropic Transport Protocol
+
+# RFC-0001: Negentropic Transport Protocol (v0.2.0 — Diagnostics Release)
 
 ## Introduction
 This RFC formalizes the Negentropic Transport Protocol, grounded in the mathematical framework defined in [Negentropic Coupling Theory](https://github.com/gsknnft/NegentropicCouplingTheory/tree/dev). It describes the coupling operators, invariants, and entropy/coherence mappings that power the QWormhole transport stack.
+
+**v0.2.0 Release:**
+- Negentropic diagnostics (entropy, negentropy, coherence/velocity enums) are now integrated in FlowController, client/server, and telemetry.
+- Implementation ↔ theory mapping is formalized and covered by CI.
 
 ## Theory & Coupling Table
 - **Definitions & Axioms:** See [Negentropic Coupling Theory](https://github.com/gsknnft/NegentropicCouplingTheory/tree/dev) for formal definitions, axioms, and operator formalism.

@@ -4,7 +4,7 @@
 
 | Version | Supported          |
 | ------- | ------------------ |
-| 0.1.x   | :white_check_mark: |
+| 0.2.x   | :white_check_mark: |
 
 ## Reporting a Vulnerability
 
@@ -66,14 +66,15 @@ The libwebsockets native backend supports TLS with the same options as the TypeS
 
 > **Important**: The libsocket backend is plaintext-only and will throw if TLS is requested. This prevents accidental security downgrades.
 
+
 ### Handshake & Authentication
 
 QWormhole supports several authentication mechanisms:
 
-1. **Protocol versioning** - Reject clients with incompatible versions
-2. **Handshake tags** - Include identity metadata in handshakes
+1. **Protocol versioning** - Reject clients with incompatible versions (now 0.2.0+)
+2. **Handshake tags** - Include identity metadata and negentropic diagnostics in handshakes
 3. **TLS fingerprint pinning** - Validate client certificates
-4. **Negentropic signatures** - Cryptographically signed handshakes
+4. **Negentropic signatures** - Cryptographically signed handshakes, entropy/negentropy, coherence/velocity enums
 5. **Custom verification** - Implement `verifyHandshake` for custom logic
 
 ### Rate Limiting & DoS Protection

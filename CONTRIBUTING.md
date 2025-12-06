@@ -11,4 +11,4 @@ QWormhole Core is a transport kernel. Please keep contributions scoped to transp
 Before opening a PR:
 - `pnpm --filter @sigilnet/qwormhole test` (TS + coverage)
 - `pnpm --filter @sigilnet/qwormhole run build:native` (optional; native smoke)
-- Ensure README/CHANGELOG stay accurate.
+- Ensure README/CHANGELOG/docs stay accurate, especially for diagnostics/negentropic features (0.2.0+).

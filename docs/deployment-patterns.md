@@ -477,7 +477,7 @@ QWORMHOLE_RATE_LIMIT=1000000
 QWORMHOLE_MAX_BACKPRESSURE=5242880
 
 # Protocol
-QWORMHOLE_PROTOCOL_VERSION=1.0.0
+QWORMHOLE_PROTOCOL_VERSION=0.2.0
 ```
 
 ### Configuration Loader
@@ -490,7 +490,7 @@ function loadConfig(): QWormholeServerOptions {
   const config: QWormholeServerOptions = {
     host: process.env.QWORMHOLE_HOST ?? "0.0.0.0",
     port: parseInt(process.env.QWORMHOLE_PORT ?? "9000"),
-    protocolVersion: process.env.QWORMHOLE_PROTOCOL_VERSION,
+    protocolVersion: process.env.QWORMHOLE_PROTOCOL_VERSION, // Use 0.2.0 for latest diagnostics/negentropic features
     maxClients: process.env.QWORMHOLE_MAX_CLIENTS
       ? parseInt(process.env.QWORMHOLE_MAX_CLIENTS)
       : undefined,

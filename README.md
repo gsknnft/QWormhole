@@ -1,5 +1,8 @@
+
 [![NPM Version](https://img.shields.io/npm/v/@gsknnft/qwormhole.svg?style=flat-square)](https://www.npmjs.com/package/@gsknnft/qwormhole)
 [![Node Version](https://img.shields.io/node/v/@gsknnft/qwormhole.svg?style=flat-square)](https://nodejs.org)
+
+> **Current version: 0.2.0 — Native server, adaptive slicing, diagnostics**
 
 <p align="center">
   <h1 style="font-size:2.5rem; font-family:Segoe UI, Arial, sans-serif; margin-bottom:0.2em;">
@@ -15,7 +18,8 @@
 ### TypeScript-first TCP transport with native acceleration and framing, reconnect, and codec orchestration.
 
 
-A TypeScript-first TCP transport kernel with native acceleration, framing, reconnect, and codec orchestration.
+
+A TypeScript-first TCP transport kernel with native acceleration, adaptive slicing, diagnostics, framing, reconnect, and codec orchestration.
 
 QWormhole is a modern transport layer for Node environments.
 It wraps raw TCP sockets with:
@@ -83,6 +87,9 @@ QWormhole isn’t just a socket wrapper — it’s a transport ritual.
 - 📈 **Adaptive slicing** (auto tunes TS/native batch sizes via ELU/GC telemetry; override with `QWORMHOLE_ADAPTIVE_SLICES`)
 - 🧩 **Pluggable codecs** (JSON, text, buffer, CBOR, custom binary)
 - 🔐 **Protocol versioning + handshake tags**
+- 🖥️ **Native server wrapper (libwebsockets)**
+- 📈 **Adaptive slice control (FlowController)**
+- 🧑‍🔬 **Bench diagnostics (event-loop delay, send latency)**
 - 🛡️ **TLS wrapping + fingerprint pinning (TS + native-lws)**
 - 🎛️ **TS/native factory with intelligent fallback**
 - 🧪 **Full test suite** (TS + native smoke tests)

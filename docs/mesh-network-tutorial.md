@@ -56,7 +56,7 @@ Endpoint = peer.example.com:51820
 import { QWormholeRuntime } from "@gsknnft/qwormhole";
 
 const rt = new QWormholeRuntime({
-  protocolVersion: "mesh-1.0",
+  protocolVersion: "0.2.0", // Use 0.2.0 for latest diagnostics/negentropic handshake features
   handshakeTags: { 
     nodeId: "alpha", 
     region: "us-west",

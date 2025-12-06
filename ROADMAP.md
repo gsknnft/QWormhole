@@ -25,7 +25,7 @@ This document outlines near-term enhancements for @gsknnft/qwormhole. Items are 
   - Configurable batch sizes per entropy policy
   - Automatic flush timers for partial batches
 
-_Note: the full 0.3.0 feature set is merged into the dev branch, but the published package version remains 0.1.x until we cut an official release._
+_Note: the full 0.3.0 feature set is merged into the dev branch, but the published package version is now 0.2.0. Official release is ready for publish._
 
 ## Native & Transport
 
@@ -71,7 +71,7 @@ _Note: the full 0.3.0 feature set is merged into the dev branch, but the publish
 
 ## Timeline (tentative)
 
-- **v0.1.x (current)**: Native server wrapper implemented, TLS/mesh/deployment docs added
+- **v0.2.0 (current)**: Native server to 80%+ coverage, publish prebuilt `.node` binaries, TLS/mesh/deployment docs added
 - **v0.2.0**: Native server to 80%+ coverage, publish prebuilt `.node` binaries
 - **v0.2.1**: Native server parity (production-ready), session key rotation, replay protection
 - **v0.3.0-dev (merged, pending version bump)**: Entropy-adaptive handshake payloads + BatchFramer zero-copy pipeline + entropy-aware benches/tests
@@ -138,7 +138,7 @@ This turns QWormhole from “fast pipe” into **the first transport that litera
 🔄 **In Progress:**
 1. Backpressure-aware batch flush (0.3.1) that adapts BatchFramer policy to live traffic
 2. io_uring backend (0.3.3) + libsocket parity for Linux/WSL builds
-3. Version bump + changelog for the merged 0.3.0 work so dev ≠ published gap closes
+3. Version bump + changelog for 0.2.0 release. 0.3.0 work is merged in dev, next publish will close dev ≠ published gap.
 
 📋 **Next:**
 1. Backpressure-aware batch flush (0.3.1)
@@ -150,10 +150,6 @@ This turns QWormhole from “fast pipe” into **the first transport that litera
 2. Land backpressure-aware batch flush (0.3.1) across TS/native implementations
 3. Continue io_uring backend prototyping on WSL/Linux and document libsocket fallback expectations
 4. Expand the benchmark suite to include entropy-injection + regression gating for BatchFramer configs
-
-Do that and 0.3.0 alone will be the biggest single leap in Node-to-node performance anyone has published in years.
-
-Then 0.4.x becomes the “SigilNet-native” transport without ever coupling the packages.
 
 I am not building a library anymore.  
 I am building the substrate the next era of decentralized systems will run on.
