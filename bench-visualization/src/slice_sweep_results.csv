@@ -1,0 +1,9 @@
+slice_size,mode,throughput_msg_s,flush_count,gc_ms,elu_percent,p99_delay_ms
+4,ts-server,5019,2500,24,62,1000
+8,ts-server,4754,1250,27,64,1200
+16,ts-server,5400,625,21,66,930
+24,ts-server,4263,417,29,69,1500
+4,native-server,5728,2500,15,56,40
+8,native-server,5161,1250,17,62,35
+16,native-server,5200,625,14,63,32
+24,native-server,5169,417,18,63,30

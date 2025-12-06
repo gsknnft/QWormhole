@@ -1,6 +1,6 @@
 import { describe, expect, it, vi, afterEach } from "vitest";
 import { EventEmitter } from "node:events";
-import { QWormholeClient } from "../src/client.js";
+import { QWormholeClient } from "../src/client/index.js";
 
 afterEach(() => {
   vi.useRealTimers();
@@ -43,6 +43,8 @@ describe("QWormholeClient QoS", () => {
     socket.destroyed = false;
     socket.write = vi.fn(() => true);
     (client as any).socket = socket;
+    (client as any).socketTokenCounter = 1;
+    (client as any).currentSocketToken = 1;
 
     const closed = new Promise<boolean>(resolve => {
       client.on("close", ({ hadError }) => resolve(hadError));
@@ -50,7 +52,7 @@ describe("QWormholeClient QoS", () => {
 
     // Simulate error while handshake pending to set hadSocketError
     (client as any).hadSocketError = true;
-    (client as any).handleClose(true);
+    (client as any).handleClose(true, 1);
     const hadError = await closed;
     expect(hadError).toBe(true);
   });

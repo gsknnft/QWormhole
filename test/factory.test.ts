@@ -3,7 +3,7 @@ import { QWormholeClient } from "../src/client";
 import { QWormholeServer } from "../src/server";
 import {
   getNativeBackend,
-  NativeTcpClient,
+  // NativeTcpClient,
   isNativeAvailable,
 } from "../src/native";
 import {

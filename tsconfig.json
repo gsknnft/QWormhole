@@ -12,6 +12,7 @@
     "isolatedModules": true,
     "esModuleInterop": true,
     "forceConsistentCasingInFileNames": true,
+    "jsx": "react-jsx",
     "strict": true,
     "noUnusedLocals": true,
     "noUnusedParameters": true,
@@ -19,14 +20,14 @@
     "skipLibCheck": true,
     "types": ["node"],
     "paths": {
-      "types": ["types/types.d.ts"],
-      "types/*": ["types/*"]
+      "types": ["src/types/types.d.ts"],
+      "types/*": ["src/types/*"]
     },
     "typeRoots": [
-      "types",
+      "src/types",
       "node_modules/@types"
     ]
   },
-  "include": ["src"],
+  "include": ["src", "test/negentropic-diagnostics.test.ts"],
   "exclude": ["node_modules", "dist", "**/dist", "**/test"]
 }

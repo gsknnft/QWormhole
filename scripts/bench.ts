@@ -1,10 +1,28 @@
-import net from "node:net";
-import { performance } from "node:perf_hooks";
+import {
+  performance,
+  PerformanceObserver,
+  constants as perfConstants,
+  monitorEventLoopDelay,
+  type EventLoopUtilization,
+} from "node:perf_hooks";
+import type { EventEmitter } from "node:events";
 import {
   QWormholeClient,
-  isNativeAvailable,
   NativeTcpClient,
+  createQWormholeServer,
+  isNativeAvailable,
 } from "../src/index";
+import { isNativeServerAvailable } from "../src/native-server";
+import { BatchFramer } from "../src/batch-framer";
+import type {
+  FramingMode,
+  NativeBackend,
+  Payload,
+  QWormholeServerOptions,
+  Serializer,
+} from "../src/types/types";
+
+type Mode = "ts" | "native-lws" | "native-libsocket";
 
 const MODES: Mode[] = ["ts", "native-lws", "native-libsocket"];
 function parseModeArg(): Mode[] {
@@ -16,11 +34,32 @@ function parseModeArg(): Mode[] {
   return MODES;
 }
 
-const PAYLOAD = Buffer.alloc(1024, 1); // 1 KB
+const PAYLOAD = Buffer.alloc(1024, 1);
 const TOTAL_MESSAGES = 10_000;
 const TIMEOUT_MS = 5000;
+const BENCH_FRAMING: FramingMode =
+  process.env.QWORMHOLE_BENCH_FRAMING === "none" ? "none" : "length-prefixed";
+const BENCH_NEG_INDEX = (() => {
+  const raw = process.env.QWORMHOLE_BENCH_NEG_INDEX;
+  if (!raw) return 0.9;
+  const parsed = Number.parseFloat(raw);
+  if (Number.isNaN(parsed)) return 0.9;
+  return Math.min(Math.max(parsed, 0), 1);
+})();
+const FRAME_HEADER_BYTES = 4;
+const ENABLE_DIAGNOSTICS =
+  process.argv.includes("--diagnostics") ||
+  process.env.QWORMHOLE_BENCH_DIAGNOSTICS === "1";
 
-type Mode = "ts" | "native-lws" | "native-libsocket";
+const encodeLengthPrefixed = (payload: Buffer): Buffer => {
+  const framed = Buffer.allocUnsafe(FRAME_HEADER_BYTES + payload.length);
+  framed.writeUInt32BE(payload.length, 0);
+  payload.copy(framed, FRAME_HEADER_BYTES);
+  return framed;
+};
+
+const NATIVE_CLIENT_PAYLOAD =
+  BENCH_FRAMING === "length-prefixed" ? encodeLengthPrefixed(PAYLOAD) : PAYLOAD;
 
 const detectNativeBackend = (backend: "lws" | "libsocket") => {
   try {
@@ -36,118 +75,653 @@ const detectNativeBackend = (backend: "lws" | "libsocket") => {
 const availableLws = detectNativeBackend("lws");
 const availableLibsocket = detectNativeBackend("libsocket");
 
-async function run(mode: Mode) {
-  // Simple TCP server that counts raw bytes received.
-  const server = net.createServer();
-  let receivedBytes = 0;
-  // let resolveDone: (() => void) | null = null;
-  // const done = new Promise<void>(resolve => {
-  //   resolveDone = resolve;
-  // });
+interface Scenario {
+  id: string;
+  preferNativeServer: boolean;
+  clientMode: Mode;
+  serverBackend?: NativeBackend;
+}
 
-  server.on("connection", socket => {
-    socket.on("data", chunk => {
-      receivedBytes += chunk.length;
-      if (receivedBytes >= PAYLOAD.length * TOTAL_MESSAGES) {
-        server.close();
-      }
-    });
-  });
+const serverBackends: NativeBackend[] = [];
+if (isNativeServerAvailable("lws")) {
+  serverBackends.push("lws");
+}
+if (isNativeServerAvailable("libsocket")) {
+  serverBackends.push("libsocket");
+}
 
-  const address = await new Promise<net.AddressInfo>((resolve, reject) => {
-    server.listen(0, "127.0.0.1", () => {
-      const info = server.address();
-      if (info && typeof info === "object") {
-        resolve(info);
-      } else {
-        reject(new Error("Failed to bind server"));
-      }
-    });
-  });
+const scenarios: Scenario[] = [];
+for (const preferNativeServer of [false, true]) {
+  const serverTargets = preferNativeServer
+    ? serverBackends.length
+      ? serverBackends
+      : [undefined]
+    : [undefined];
+  for (const backend of serverTargets) {
+    for (const mode of MODES) {
+      const serverLabel = preferNativeServer
+        ? backend
+          ? `native-server(${backend})`
+          : "native-server"
+        : "ts-server";
 
+      scenarios.push({
+        id: `${serverLabel}+${mode}`,
+        preferNativeServer,
+        clientMode: mode,
+        serverBackend: backend,
+      });
+    }
+  }
+}
+
+const toBytes: Serializer = (payload: Payload): Buffer => {
+  if (Buffer.isBuffer(payload)) return payload;
+  if (payload instanceof Uint8Array) return Buffer.from(payload);
+  if (typeof payload === "string") return Buffer.from(payload);
+  if (payload instanceof ArrayBuffer) return Buffer.from(payload);
+  if (typeof payload === "object" && payload !== null) {
+    return Buffer.from(JSON.stringify(payload));
+  }
+  return Buffer.from(String(payload ?? ""));
+};
+
+const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
+
+const clientModeAvailable = (mode: Mode): boolean => {
+  if (mode === "ts") return true;
+  if (mode === "native-lws") return availableLws && isNativeAvailable();
+  return availableLibsocket && isNativeAvailable();
+};
+
+const serverModeAvailable = (
+  preferNative: boolean,
+  backend?: NativeBackend,
+): boolean => {
+  if (!preferNative) return true;
+  return isNativeServerAvailable(backend);
+};
+
+const deriveBenchCoherence = (): "high" | "medium" | "low" | "chaos" => {
+  if (BENCH_NEG_INDEX >= 0.85) return "high";
+  if (BENCH_NEG_INDEX >= 0.65) return "medium";
+  if (BENCH_NEG_INDEX >= 0.4) return "low";
+  return "chaos";
+};
+
+type ScenarioResult = {
+  id: string;
+  serverMode: Mode;
+  clientMode: Mode;
+  preferredServerBackend?: NativeBackend;
+  durationMs: number;
+  messagesReceived: number;
+  bytesReceived: number;
+  framing: FramingMode;
+  skipped?: boolean;
+  reason?: string;
+  msgsPerSec?: number;
+  mbPerSec?: number;
+  diagnostics?: ScenarioDiagnostics;
+};
+
+type BatchFlushStats = {
+  flushes: number;
+  totalBuffers: number;
+  totalBytes: number;
+  maxBuffers: number;
+  maxBytes: number;
+};
+
+type GcTotals = {
+  count: number;
+  durationMs: number;
+  byKind: Record<string, number>;
+};
+
+type SendBlockStats = {
+  blockSize: number;
+  samples: number;
+  avgMs: number;
+  minMs: number;
+  maxMs: number;
+};
+
+type ScenarioDiagnostics = {
+  gc: GcTotals;
+  eventLoop: {
+    utilization: number;
+    activeMs: number;
+    idleMs: number;
+  };
+  eventLoopDelay?: {
+    minMs: number;
+    maxMs: number;
+    meanMs: number;
+    stdMs: number;
+    p50Ms: number;
+    p99Ms: number;
+  };
+  backpressure: {
+    events: number;
+    drainEvents: number;
+    maxQueuedBytes: number;
+  };
+  batching: {
+    flushes: number;
+    avgBuffersPerFlush: number;
+    avgBytesPerFlush: number;
+    maxBuffers: number;
+    maxBytes: number;
+  };
+  sendBlocks?: SendBlockStats;
+};
+
+type DiagnosticsExtras = {
+  sendBlocks?: SendBlockStats;
+};
+
+type DiagnosticsScope = {
+  stop: (extras?: DiagnosticsExtras) => ScenarioDiagnostics;
+};
+
+const GC_KIND_LABELS: Record<number, string> = {
+  [perfConstants.NODE_PERFORMANCE_GC_MAJOR]: "major",
+  [perfConstants.NODE_PERFORMANCE_GC_MINOR]: "minor",
+  [perfConstants.NODE_PERFORMANCE_GC_INCREMENTAL]: "incremental",
+  [perfConstants.NODE_PERFORMANCE_GC_WEAKCB]: "weak",
+};
+
+const globalGcTotals: GcTotals = {
+  count: 0,
+  durationMs: 0,
+  byKind: {},
+};
+
+const gcObserver = new PerformanceObserver(entries => {
+  for (const entry of entries.getEntries()) {
+    globalGcTotals.count += 1;
+    globalGcTotals.durationMs += entry.duration;
+    const gcEntry = entry as PerformanceEntry & { detail?: { kind?: number } };
+    const kind = gcEntry.detail?.kind;
+    const kindLabel =
+      typeof kind === "number"
+        ? (GC_KIND_LABELS[kind] ?? "unknown")
+        : "unknown";
+    globalGcTotals.byKind[kindLabel] =
+      (globalGcTotals.byKind[kindLabel] ?? 0) + 1;
+  }
+});
+if (ENABLE_DIAGNOSTICS) {
+  gcObserver.observe({ entryTypes: ["gc"], buffered: true });
+}
+
+const snapshotGcTotals = (): GcTotals => ({
+  count: globalGcTotals.count,
+  durationMs: globalGcTotals.durationMs,
+  byKind: { ...globalGcTotals.byKind },
+});
+
+const diffGcTotals = (start: GcTotals): GcTotals => {
+  const byKind: Record<string, number> = {};
+  for (const [key, value] of Object.entries(globalGcTotals.byKind)) {
+    byKind[key] = value - (start.byKind[key] ?? 0);
+  }
+  return {
+    count: globalGcTotals.count - start.count,
+    durationMs: Math.max(globalGcTotals.durationMs - start.durationMs, 0),
+    byKind,
+  };
+};
+
+let batchFramerPatched = false;
+let activeBatchCollector: BatchFlushStats | null = null;
+
+const ensureBatchFramerDiagnostics = () => {
+  if (batchFramerPatched) return;
+  const originalEmit = BatchFramer.prototype.emit;
+  const wrappedEmit = function (
+    this: BatchFramer,
+    ...args: Parameters<typeof originalEmit>
+  ): ReturnType<typeof originalEmit> {
+    const [event, payload] = args;
+    if (event === "flush" && payload && activeBatchCollector) {
+      const flushPayload = payload as {
+        bufferCount: number;
+        totalBytes: number;
+      };
+      activeBatchCollector.flushes += 1;
+      activeBatchCollector.totalBuffers += flushPayload.bufferCount;
+      activeBatchCollector.totalBytes += flushPayload.totalBytes;
+      activeBatchCollector.maxBuffers = Math.max(
+        activeBatchCollector.maxBuffers,
+        flushPayload.bufferCount,
+      );
+      activeBatchCollector.maxBytes = Math.max(
+        activeBatchCollector.maxBytes,
+        flushPayload.totalBytes,
+      );
+    }
+    return originalEmit.apply(this, args);
+  };
+  BatchFramer.prototype.emit = wrappedEmit as typeof originalEmit;
+  batchFramerPatched = true;
+};
+
+const microsToMillis = (value: number): number => value / 1000;
+const nanosToMillis = (value: number): number => value / 1_000_000;
+
+const startDiagnostics = (
+  serverInstance: Pick<EventEmitter, "on" | "off">,
+): DiagnosticsScope => {
+  if (ENABLE_DIAGNOSTICS) {
+    ensureBatchFramerDiagnostics();
+  }
+
+  const startGc = snapshotGcTotals();
+  const startElu = performance.eventLoopUtilization();
+  const loopDelay = monitorEventLoopDelay({ resolution: 20 });
+  loopDelay.enable();
+
+  let backpressureEvents = 0;
+  let drainEvents = 0;
+  let maxQueuedBytes = 0;
+
+  const onBackpressure = ({ queuedBytes }: { queuedBytes?: number }) => {
+    backpressureEvents += 1;
+    if (typeof queuedBytes === "number") {
+      maxQueuedBytes = Math.max(maxQueuedBytes, queuedBytes);
+    }
+  };
+  const onDrain = () => {
+    drainEvents += 1;
+  };
+
+  serverInstance.on("backpressure", onBackpressure as never);
+  serverInstance.on("drain", onDrain as never);
+
+  const batchStats: BatchFlushStats = {
+    flushes: 0,
+    totalBuffers: 0,
+    totalBytes: 0,
+    maxBuffers: 0,
+    maxBytes: 0,
+  };
+
+  const previousCollector = activeBatchCollector;
+  activeBatchCollector = batchStats;
+
+  return {
+    stop: (extras?: DiagnosticsExtras) => {
+      serverInstance.off("backpressure", onBackpressure as never);
+      serverInstance.off("drain", onDrain as never);
+      activeBatchCollector = previousCollector;
+      loopDelay.disable();
+
+      const gc = diffGcTotals(startGc);
+      const eluDelta: EventLoopUtilization =
+        performance.eventLoopUtilization(startElu);
+      const eventLoop = {
+        utilization: Number(eluDelta.utilization) || 0,
+        activeMs: microsToMillis(Number(eluDelta.active) || 0),
+        idleMs: microsToMillis(Number(eluDelta.idle) || 0),
+      };
+      const eventLoopDelay = buildLoopDelayStats(loopDelay);
+
+      const batching = {
+        flushes: batchStats.flushes,
+        avgBuffersPerFlush:
+          batchStats.flushes > 0
+            ? batchStats.totalBuffers / batchStats.flushes
+            : 0,
+        avgBytesPerFlush:
+          batchStats.flushes > 0
+            ? batchStats.totalBytes / batchStats.flushes
+            : 0,
+        maxBuffers: batchStats.maxBuffers,
+        maxBytes: batchStats.maxBytes,
+      };
+
+      const backpressure = {
+        events: backpressureEvents,
+        drainEvents,
+        maxQueuedBytes,
+      };
+
+      return {
+        gc,
+        eventLoop,
+        eventLoopDelay,
+        backpressure,
+        batching,
+        sendBlocks: extras?.sendBlocks,
+      };
+    },
+  };
+};
+
+const buildLoopDelayStats = (
+  histogram: ReturnType<typeof monitorEventLoopDelay>,
+) => ({
+  minMs: nanosToMillis(histogram.min),
+  maxMs: nanosToMillis(histogram.max),
+  meanMs: nanosToMillis(histogram.mean),
+  stdMs: nanosToMillis(histogram.stddev),
+  p50Ms: nanosToMillis(histogram.percentile(50)),
+  p99Ms: nanosToMillis(histogram.percentile(99)),
+});
+
+const summarizeBlockDurations = (
+  durations: number[],
+  blockSize: number,
+): SendBlockStats | undefined => {
+  if (!durations.length) return undefined;
+  let sum = 0;
+  let min = Number.POSITIVE_INFINITY;
+  let max = 0;
+  for (const d of durations) {
+    sum += d;
+    if (d < min) min = d;
+    if (d > max) max = d;
+  }
+  return {
+    blockSize,
+    samples: durations.length,
+    avgMs: sum / durations.length,
+    minMs: min,
+    maxMs: max,
+  };
+};
+
+async function waitForCompletion(
+  predicate: () => boolean,
+  timeoutMs: number,
+): Promise<boolean> {
+  const start = performance.now();
+  while (performance.now() - start < timeoutMs) {
+    if (predicate()) return true;
+    await sleep(5);
+  }
+  return predicate();
+}
+
+async function runScenario({
+  id,
+  preferNativeServer,
+  clientMode,
+  serverBackend,
+}: Scenario): Promise<ScenarioResult> {
+  if (!clientModeAvailable(clientMode)) {
+    return {
+      id,
+      clientMode,
+      serverMode: preferNativeServer ? "native-lws" : "ts",
+      durationMs: 0,
+      messagesReceived: 0,
+      bytesReceived: 0,
+      framing: BENCH_FRAMING,
+      skipped: true,
+      reason: "Native client backend unavailable",
+    };
+  }
+
+  if (!serverModeAvailable(preferNativeServer, serverBackend)) {
+    return {
+      id,
+      clientMode,
+      serverMode: "ts",
+      preferredServerBackend: serverBackend,
+      durationMs: 0,
+      messagesReceived: 0,
+      bytesReceived: 0,
+      framing: BENCH_FRAMING,
+      skipped: true,
+      reason: serverBackend
+        ? `Native server backend ${serverBackend} unavailable`
+        : "Native server backend unavailable",
+    };
+  }
+
+  type BenchServerOptions = QWormholeServerOptions<Buffer> & {
+    preferNative?: boolean;
+    preferredNativeBackend?: NativeBackend;
+  };
+  const serverResult = createQWormholeServer({
+    host: "127.0.0.1",
+    port: 0,
+    framing: BENCH_FRAMING,
+    serializer: toBytes,
+    deserializer: (data: Buffer) => data as Buffer,
+    preferNative: preferNativeServer,
+    preferredNativeBackend: serverBackend,
+  } as BenchServerOptions);
+  if (preferNativeServer && serverResult.mode !== "native-lws") {
+    return {
+      id,
+      serverMode: serverResult.mode as Mode,
+      clientMode,
+      preferredServerBackend: serverBackend,
+      durationMs: 0,
+      messagesReceived: 0,
+      bytesReceived: 0,
+      framing: BENCH_FRAMING,
+      skipped: true,
+      reason: "Native backend unavailable",
+    };
+  }
+  const serverMode = serverResult.mode;
+  const serverInstance = serverResult.server;
+
+  const diagnosticsScope = ENABLE_DIAGNOSTICS
+    ? startDiagnostics(serverInstance)
+    : null;
+
+  const address = await serverInstance.listen();
   const port = address.port;
+
   let tsClient: QWormholeClient<Buffer> | null = null;
   let nativeClient: NativeTcpClient | null = null;
-
-  if (mode === "ts") {
+  if (clientMode === "ts") {
     tsClient = new QWormholeClient<Buffer>({
       host: "127.0.0.1",
       port,
-      framing: "none", // raw bytes for apples-to-apples comparison
+      framing: BENCH_FRAMING,
+      serializer: toBytes,
+      deserializer: (data: Buffer) => data,
+      entropyMetrics: {
+        negIndex: BENCH_NEG_INDEX,
+        coherence: deriveBenchCoherence(),
+        entropyVelocity: "low",
+      },
     });
     await tsClient.connect();
   } else {
-    const backend = mode === "native-lws" ? "lws" : "libsocket";
+    const backend = clientMode === "native-lws" ? "lws" : "libsocket";
     nativeClient = new NativeTcpClient(backend);
+    if (nativeClient.backend !== backend) {
+      await serverInstance.close();
+      return {
+        id,
+        serverMode: serverMode as Mode,
+        clientMode,
+        preferredServerBackend: serverBackend,
+        durationMs: 0,
+        messagesReceived: 0,
+        bytesReceived: 0,
+        framing: BENCH_FRAMING,
+        skipped: true,
+        reason: `Native client backend ${backend} unavailable`,
+      };
+    }
     nativeClient.connect("127.0.0.1", port);
   }
 
-  const start = performance.now();
-  for (let i = 0; i < TOTAL_MESSAGES; i++) {
-    if (tsClient) {
-      tsClient.send(PAYLOAD);
-    } else if (nativeClient) {
-      nativeClient.send(PAYLOAD);
+  let messagesReceived = 0;
+  let bytesReceived = 0;
+  const onMessage = ({ data }: { data: Buffer }) => {
+    const buffer = Buffer.isBuffer(data) ? data : toBytes(data);
+    messagesReceived += 1;
+    bytesReceived += buffer.length;
+  };
+  serverInstance.on("message", onMessage as never);
+
+  let duration = 0;
+  let diagnostics: ScenarioDiagnostics | undefined;
+  const sendBlockDurations: number[] = [];
+  const blockSampleSize =
+    Number(process.env.QWORMHOLE_BENCH_BLOCK_SIZE ?? "1000") || 1000;
+  let blockCount = 0;
+  let blockStart = ENABLE_DIAGNOSTICS ? performance.now() : 0;
+
+  try {
+    const start = performance.now();
+    for (let i = 0; i < TOTAL_MESSAGES; i++) {
+      if (tsClient) {
+        tsClient.send(PAYLOAD);
+      } else if (nativeClient) {
+        nativeClient.send(NATIVE_CLIENT_PAYLOAD);
+      }
+      if (ENABLE_DIAGNOSTICS) {
+        blockCount += 1;
+        if (blockCount >= blockSampleSize || i === TOTAL_MESSAGES - 1) {
+          const now = performance.now();
+          sendBlockDurations.push(now - blockStart);
+          blockStart = now;
+          blockCount = 0;
+        }
+      }
     }
+
+    await waitForCompletion(
+      () => messagesReceived >= TOTAL_MESSAGES,
+      TIMEOUT_MS,
+    );
+    duration = performance.now() - start;
+  } finally {
+    serverInstance.off("message", onMessage as never);
+    if (tsClient) {
+      tsClient.disconnect();
+    }
+    if (nativeClient) {
+      nativeClient.close();
+    }
+    await serverInstance.close();
+    const blockStats =
+      ENABLE_DIAGNOSTICS && sendBlockDurations.length
+        ? summarizeBlockDurations(sendBlockDurations, blockSampleSize)
+        : undefined;
+    diagnostics = diagnosticsScope?.stop({ sendBlocks: blockStats });
   }
 
-  const waitStart = performance.now();
-  while (
-    receivedBytes < PAYLOAD.length * TOTAL_MESSAGES &&
-    performance.now() - waitStart < TIMEOUT_MS
-  ) {
-    await new Promise(r => setTimeout(r, 10));
-  }
-  const duration = performance.now() - start;
-
-  if (tsClient) {
-    tsClient.disconnect();
-  }
-  if (nativeClient) {
-    nativeClient.close();
-  }
-  server.close();
+  const seconds = duration / 1000;
+  const msgsPerSec =
+    seconds > 0 && messagesReceived > 0
+      ? messagesReceived / seconds
+      : undefined;
+  const mbPerSec =
+    seconds > 0 && bytesReceived > 0
+      ? bytesReceived / seconds / (1024 * 1024)
+      : undefined;
 
   return {
+    id,
+    serverMode: serverMode as Mode,
+    clientMode,
+    preferredServerBackend: serverBackend,
     durationMs: duration,
-    receivedBytes,
-    messagesReceived: Math.floor(receivedBytes / PAYLOAD.length),
+    messagesReceived,
+    bytesReceived,
+    framing: BENCH_FRAMING,
+    msgsPerSec,
+    mbPerSec,
+    diagnostics,
   };
 }
 
 async function main() {
   const modes = parseModeArg();
-  const results: Record<string, any> = {};
+  const results: ScenarioResult[] = [];
 
-  for (const mode of modes) {
-    if (mode === "ts") {
-      results["ts"] = await run("ts");
-    } else if (mode === "native-lws" && isNativeAvailable() && availableLws) {
-      results["native-lws"] = await run("native-lws");
-    } else if (
-      mode === "native-libsocket" &&
-      isNativeAvailable() &&
-      availableLibsocket
-    ) {
-      results["native-libsocket"] = await run("native-libsocket");
-    }
+  for (const scenario of scenarios) {
+    if (!modes.includes(scenario.clientMode)) continue;
+    const res = await runScenario(scenario);
+    results.push(res);
   }
 
-  // Print JSON
   // eslint-disable-next-line no-console
   console.log(JSON.stringify(results, null, 2));
 
-  // Print summary table
-  const pad = (s: string, n: number) => s.padEnd(n);
-  const header = `${pad("Backend", 18)}${pad("Duration (ms)", 16)}${pad("Messages", 12)}${pad("Bytes", 12)}`;
+  const pad = (s: string, n: number) => s.toString().padEnd(n);
+  const header = `${pad("Scenario", 28)}${pad("Server", 15)}${pad("Client", 15)}${pad(
+    "Duration (ms)",
+    16,
+  )}${pad("Messages", 12)}${pad("Bytes", 12)}${pad("Msg/s", 12)}${pad(
+    "MB/s",
+    12,
+  )}${pad("Framing", 12)}${pad("Status", 10)}`;
   console.log("\n" + header);
   console.log("-".repeat(header.length));
-  for (const mode of modes) {
-    const r = results[mode];
-    if (!r) continue;
+  for (const res of results) {
     console.log(
-      `${pad(mode, 18)}${pad(r.durationMs.toFixed(2), 16)}${pad(r.messagesReceived + "", 12)}${pad(r.receivedBytes + "", 12)}`,
+      `${pad(res.id, 28)}${pad(res.serverMode, 15)}${pad(res.clientMode, 15)}${pad(
+        res.durationMs ? res.durationMs.toFixed(2) : "-",
+        16,
+      )}${pad(`${res.messagesReceived ?? "-"}`, 12)}${pad(
+        `${res.bytesReceived ?? "-"}`,
+        12,
+      )}${pad(
+        res.msgsPerSec && Number.isFinite(res.msgsPerSec)
+          ? res.msgsPerSec.toFixed(0)
+          : "-",
+        12,
+      )}${pad(
+        res.mbPerSec && Number.isFinite(res.mbPerSec)
+          ? res.mbPerSec.toFixed(2)
+          : "-",
+        12,
+      )}${pad(res.framing, 12)}${pad(res.skipped ? "skipped" : "ok", 10)}`,
     );
+  }
+
+  if (ENABLE_DIAGNOSTICS) {
+    const diagHeader = `${pad("Scenario", 28)}${pad("GC", 12)}${pad(
+      "GC ms",
+      12,
+    )}${pad("ELU%", 10)}${pad("BP", 12)}${pad("Drain", 10)}${pad(
+      "MaxQueued",
+      14,
+    )}${pad("Flushes", 10)}${pad("AvgBuf", 10)}${pad("AvgKB", 10)}${pad(
+      "MaxBuf",
+      10,
+    )}${pad("MaxKB", 10)}`;
+    console.log("\n" + diagHeader);
+    console.log("-".repeat(diagHeader.length));
+    for (const res of results) {
+      if (res.skipped || !res.diagnostics) continue;
+      const diag = res.diagnostics;
+      const eluPercent = (diag.eventLoop.utilization * 100).toFixed(2);
+      const avgKb = (diag.batching.avgBytesPerFlush / 1024).toFixed(2);
+      const maxKb = (diag.batching.maxBytes / 1024).toFixed(2);
+      const gcDuration = diag.gc.durationMs.toFixed(2);
+      console.log(
+        `${pad(res.id, 28)}${pad(`${diag.gc.count}`, 12)}${pad(
+          gcDuration,
+          12,
+        )}${pad(eluPercent, 10)}${pad(
+          `${diag.backpressure.events}`,
+          12,
+        )}${pad(`${diag.backpressure.drainEvents}`, 10)}${pad(
+          `${diag.backpressure.maxQueuedBytes}`,
+          14,
+        )}${pad(`${diag.batching.flushes}`, 10)}${pad(
+          diag.batching.avgBuffersPerFlush.toFixed(2),
+          10,
+        )}${pad(avgKb, 10)}${pad(
+          `${diag.batching.maxBuffers}`,
+          10,
+        )}${pad(maxKb, 10)}`,
+      );
+    }
   }
 }
 

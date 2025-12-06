@@ -1,0 +1,24 @@
+{
+  "name": "bench-visualization",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview"
+  },
+  "dependencies": {
+    "plotly.js": "3.3.0",
+    "react": "^19.2.1",
+    "react-dom": "^19.2.1",
+    "next": "16.0.7",
+    "react-plotly.js": "^2.6.0"
+  },
+  "devDependencies": {
+    "@types/react": "^19.2.3",
+    "@types/react-dom": "^19.2.3",
+    "@vitejs/plugin-react": "^5.1.1",
+    "vite": "^7.2.6",
+    "typescript": "^5.9.3"
+  }
+}

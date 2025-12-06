@@ -1,3 +1,10 @@
+import { handshakePayloadSchema, type HandshakePayload } from "../schema/scp";
+
+export { type HandshakePayload } from "../schema/scp";
+
+export const isHandshakePayload = (value: unknown): value is HandshakePayload =>
+  handshakePayloadSchema.safeParse(value).success;
+
 export interface HandshakePolicyOptions {
   allowedVersions?: string[];
   validateTags?: (tags: Record<string, unknown> | undefined) => boolean;
@@ -9,8 +16,8 @@ export interface HandshakePolicyOptions {
  */
 export function createHandshakeVerifier(options: HandshakePolicyOptions = {}) {
   const { allowedVersions, validateTags } = options;
-  return (payload: any): boolean => {
-    if (!payload || payload.type !== "handshake") return false;
+  return (payload: unknown): boolean => {
+    if (!isHandshakePayload(payload)) return false;
     if (allowedVersions && allowedVersions.length > 0) {
       if (!payload.version || !allowedVersions.includes(payload.version)) {
         return false;

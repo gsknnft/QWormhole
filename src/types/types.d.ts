@@ -1,5 +1,8 @@
 //@preserve
 import type net from "node:net";
+import type { EntropyMetrics } from "../handshake/entropy-policy";
+import type { FlowControllerDiagnostics } from "../flow-controller";
+import type { BatchFramerStats } from "../batch-framer";
 
 export type Payload = string | Buffer | Uint8Array | Record<string, unknown>;
 
@@ -9,6 +12,26 @@ export type Deserializer<TMessage = unknown> = (data: Buffer) => TMessage;
 export type FramingMode = "length-prefixed" | "none";
 export type TransportMode = "ts" | "native-lws" | "native-libsocket";
 export type NativeBackend = "lws" | "libsocket";
+
+export interface QWTlsOptions {
+  enabled?: boolean;
+  key?: string | Buffer;
+  cert?: string | Buffer;
+  ca?: Array<string | Buffer> | string | Buffer;
+  alpnProtocols?: string[];
+  requestCert?: boolean;
+  rejectUnauthorized?: boolean;
+  servername?: string;
+  passphrase?: string;
+  /**
+   * Export TLS keying material to bind with negentropic handshake results.
+   */
+  exportKeyingMaterial?: {
+    label?: string;
+    length?: number;
+    context?: Buffer;
+  };
+}
 
 export interface QWormholeReconnectOptions {
   enabled: boolean;
@@ -30,12 +53,16 @@ export interface NativeSocketOptions {
   interfaceName?: string;
   localAddress?: string;
   localPort?: number;
+  /**
+   * Optional TLS configuration. Mirrors the public TLS options so native bindings can wrap TLS sockets.
+   */
+  tls?: QWTlsOptions;
 }
 
 export interface NativeTcpClient {
   connect(opts: NativeSocketOptions | { host: string; port: number }): void;
-  send(data: string | Buffer): void;          // queues and flushes via LWS writable callbacks
-  recv(maxBytes?: number): Buffer;            // drains from the recv ring buffer; empty Buffer if none
+  send(data: string | Buffer): void; // queues and flushes via LWS writable callbacks
+  recv(maxBytes?: number): Buffer; // drains from the recv ring buffer; empty Buffer if none
   close(): void;
   backend?: NativeBackend;
 }
@@ -43,6 +70,10 @@ export interface NativeTcpClient {
 export interface QWormholeCommonOptions<TMessage = unknown> {
   host: string;
   port: number;
+  /**
+   * Optional TLS settings; when provided, connections wrap Node's tls module.
+   */
+  tls?: QWTlsOptions;
   /**
    * Optional local bind address (e.g., WireGuard interface IP).
    */
@@ -106,19 +137,31 @@ export interface QWormholeCommonOptions<TMessage = unknown> {
    * Called with telemetry snapshots (bytes in/out, connections, backpressure toggles).
    */
   onTelemetry?: (metrics: QWormholeTelemetry) => void;
+  /**
+   * Called when a connection closes so downstream systems can persist flow diagnostics for trust weighting.
+   */
+  onTrustSnapshot?: (snapshot: FlowTrustSnapshot) => void | Promise<void>;
 }
 
-export interface QWormholeClientOptions<TMessage = unknown>
-  extends QWormholeCommonOptions<TMessage> {
+export interface QWormholeClientOptions<
+  TMessage = unknown,
+> extends QWormholeCommonOptions<TMessage> {
   /**
    * When true, socket writes will throw if not connected instead of being ignored.
    */
   requireConnectedForSend?: boolean;
+  /** Optional entropy metrics used to derive adaptive flow control policy */
+  entropyMetrics?: EntropyMetrics;
+  /** Hint indicating whether the peer transport is native (enables macro batches) */
+  peerIsNative?: boolean;
 }
 
-export interface QWormholeServerOptions<TMessage = unknown>
-  extends QWormholeCommonOptions<TMessage> {
+export interface QWormholeServerOptions<
+  TMessage = unknown,
+> extends QWormholeCommonOptions<TMessage> {
   allowHalfOpen?: boolean;
+  /** When true, handshake payloads are emitted through the normal message event stream. */
+  emitHandshakeMessages?: boolean;
   /**
    * Maximum concurrent clients. Extra connections are rejected immediately.
    */
@@ -159,6 +202,36 @@ export interface QWormholeServerConnection {
     tags?: Record<string, unknown>;
     nIndex?: number;
     negHash?: string;
+    /** Entropy metrics from peer handshake (0.3.2) */
+    entropyMetrics?: {
+      entropy?: number;
+      entropyVelocity?: "low" | "stable" | "rising" | "spiking";
+      coherence?: "high" | "medium" | "low" | "chaos";
+      negIndex?: number;
+    };
+    /** Derived transport policy from entropy (0.3.2) */
+    policy?: {
+      mode: "trust-zero" | "trust-light" | "immune" | "paranoia";
+      framing:
+        | "zero-copy-writev"
+        | "length-prefix"
+        | "length-ack"
+        | "length-ack-checksum";
+      batchSize: number;
+      codec: "flatbuffers" | "cbor" | "messagepack" | "json-compressed";
+      requireAck: boolean;
+      requireChecksum: boolean;
+      trustLevel: number;
+    };
+    tls?: {
+      alpnProtocol?: string | false;
+      authorized?: boolean;
+      peerFingerprint256?: string;
+      peerFingerprint?: string;
+      tlsSessionKey?: string;
+      cipher?: string;
+      protocol?: string;
+    };
   };
   /**
    * Writes data to the client, respecting backpressure. Resolves once the data is accepted by the OS buffer.
@@ -189,6 +262,20 @@ export interface QWormholeTelemetry {
   connections: number;
   backpressureEvents: number;
   drainEvents: number;
+}
+
+export interface FlowTrustSnapshot {
+  direction: "client" | "server";
+  reason: "close" | "error" | "disconnect";
+  timestamp: number;
+  remoteAddress?: string;
+  remotePort?: number;
+  peerId?: string;
+  handshakeTags?: Record<string, unknown>;
+  entropyMetrics?: EntropyMetrics;
+  policyTrustLevel?: number;
+  flowDiagnostics?: FlowControllerDiagnostics;
+  batchStats?: BatchFramerStats;
 }
 
 export interface SendOptions {

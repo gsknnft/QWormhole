@@ -1,0 +1,53 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>QWormhole Slice Sweep Visualization</title>
+  <script src="https://cdn.plot.ly/plotly-latest.min.js"></script>
+  <style>
+    body { font-family: sans-serif; margin: 40px; }
+    #chart { width: 900px; height: 600px; }
+  </style>
+</head>
+<body>
+  <h2>QWormhole Slice Sweep: Throughput, GC, p99 Delay vs Slice Size</h2>
+  <div id="chart"></div>
+  <script>
+    var slice = [4,8,16,24];
+    var ts_throughput = [5019,4754,5400,4263];
+    var ts_gc = [24,27,21,29];
+    var ts_p99 = [1000,1200,930,1500];
+    var native_throughput = [5728,5161,5200,5169];
+    var native_gc = [15,17,14,18];
+    var native_p99 = [40,35,32,30];
+
+    var trace1 = {
+      x: slice, y: ts_throughput, name: 'TS Throughput', type: 'scatter', mode: 'lines+markers', line: {color: 'blue'}
+    };
+    var trace2 = {
+      x: slice, y: native_throughput, name: 'Native Throughput', type: 'scatter', mode: 'lines+markers', line: {color: 'green', dash: 'dot'}
+    };
+    var trace3 = {
+      x: slice, y: ts_gc, name: 'TS GC ms', type: 'scatter', mode: 'lines+markers', line: {color: 'red'}
+    };
+    var trace4 = {
+      x: slice, y: native_gc, name: 'Native GC ms', type: 'scatter', mode: 'lines+markers', line: {color: 'orange', dash: 'dot'}
+    };
+    var trace5 = {
+      x: slice, y: ts_p99, name: 'TS p99 Delay (ms)', type: 'scatter', mode: 'markers', marker: {color: 'purple', symbol: 'x', size: 12}
+    };
+    var trace6 = {
+      x: slice, y: native_p99, name: 'Native p99 Delay (ms)', type: 'scatter', mode: 'markers', marker: {color: 'magenta', symbol: 'triangle-up', size: 12}
+    };
+
+    var data = [trace1, trace2, trace3, trace4, trace5, trace6];
+    var layout = {
+      xaxis: {title: 'Slice Size'},
+      yaxis: {title: 'Throughput / GC / p99 Delay'},
+      legend: {orientation: 'h'},
+      margin: {t: 60}
+    };
+    Plotly.newPlot('chart', data, layout);
+  </script>
+</body>
+</html>

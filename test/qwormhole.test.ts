@@ -6,7 +6,10 @@ import {
   isNativeAvailable,
 } from "../src/index.js";
 import { jsonDeserializer, textDeserializer } from "../src/codecs.js";
-import type { QWormholeClientOptions, QWormholeServerConnection } from "../types/types.js";
+import type {
+  QWormholeClientOptions,
+  QWormholeServerConnection,
+} from "../src/types/types.js";
 import net from "node:net";
 import { CreateClientOptions } from "../src/factory.js";
 
@@ -81,8 +84,10 @@ describe("QWormhole client/server", () => {
     const client = new QWormholeClient<string>({
       host: "10.255.255.1", // unroutable
       port: 9,
-      connectTimeoutMs: 100,
+      connectTimeoutMs: 500,
+      reconnect: { enabled: false },
     });
+    client.on("error", () => {}); // swallow expected timeout errors
     await expect(client.connect()).rejects.toThrow(/Connection timed out/);
   });
 
@@ -126,6 +131,7 @@ describe("QWormhole client/server", () => {
         protocolVersion: "1.0.0",
         framing: "length-prefixed",
         deserializer: jsonDeserializer,
+        emitHandshakeMessages: true,
       });
       hsServer.on("listening", info => {
         console.log(`[SERVER] Listening on ${info.host}:${info.port}`);

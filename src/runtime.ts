@@ -5,6 +5,7 @@ import {
   QWormholeServer,
   QWormholeClientOptions,
   QWormholeServerOptions,
+  NativeQWormholeServer,
   NativeTcpClient,
 } from "./index";
 
@@ -62,7 +63,7 @@ export class QWormholeRuntime<TMessage = Buffer> {
       QWormholeServerOptions<TMessage>,
       "serializer" | "deserializer"
     >,
-  ): QWormholeServer<TMessage> {
+  ): QWormholeServer<TMessage> | NativeQWormholeServer<TMessage> {
     const merged: QWormholeServerOptions<TMessage> = {
       serializer: (this.opts.serializer ??
         defaultSerializer) as QWormholeServerOptions<TMessage>["serializer"],
@@ -74,7 +75,11 @@ export class QWormholeRuntime<TMessage = Buffer> {
       rateLimitBurstBytes: this.opts.rateLimitBurstBytes,
       ...options,
     };
-    const { server } = createQWormholeServer<TMessage>(merged);
+    const { server } = createQWormholeServer<TMessage>({
+      ...merged,
+      preferNative: this.opts.preferNative,
+      forceTs: this.opts.forceTs,
+    });
     return server;
   }
 }

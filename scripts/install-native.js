@@ -5,7 +5,11 @@ const os = require("node:os");
 const fs = require("node:fs");
 const path = require("node:path");
 
-const skipNative = process.env.QWORMHOLE_NATIVE === "0";
+const platform = os.platform();
+const forceNative = process.env.QWORMHOLE_NATIVE === "1";
+const explicitSkip = process.env.QWORMHOLE_NATIVE === "0";
+const macOsAutoSkip = platform === "darwin" && !forceNative;
+const skipNative = explicitSkip || macOsAutoSkip;
 const nodeGypCmd = process.platform === "win32" ? "node-gyp.cmd" : "node-gyp";
 
 const hasNodeGyp = () => {
@@ -14,7 +18,8 @@ const hasNodeGyp = () => {
 };
 const skipLibsocket =
   process.env.QWORMHOLE_BUILD_LIBSOCKET === "0" ||
-  os.platform() === "win32"; // libsocket is POSIX-only
+  platform === "win32" ||
+  platform === "darwin"; // libsocket relies on Linux-only APIs
 
 const artifacts = [
   path.join(process.cwd(), "dist", "native", "qwormhole_lws.node"),
@@ -24,9 +29,15 @@ const artifacts = [
 const alreadyBuilt = artifacts.some(p => fs.existsSync(p));
 
 if (skipNative) {
-  console.log(
-    "[qwormhole] Native build skipped via QWORMHOLE_NATIVE=0 (TS transport remains available).",
-  );
+  if (macOsAutoSkip) {
+    console.log(
+      "[qwormhole] Native build skipped on macOS (libsocket backend requires Linux). Set QWORMHOLE_NATIVE=1 to force an attempted build.",
+    );
+  } else {
+    console.log(
+      "[qwormhole] Native build skipped via QWORMHOLE_NATIVE=0 (TS transport remains available).",
+    );
+  }
   process.exit(0);
 }
 
@@ -59,6 +70,17 @@ if (needsTmpFix) {
   env.TMPDIR = env.TMP = env.TEMP = "/tmp";
   console.log("[qwormhole] Using TMPDIR=/tmp to avoid cross-mount temp permission issues.");
 }
+
+const ensureLibsocketConf = () => {
+  const src = path.join(process.cwd(), "libsocket", "headers", "conf.h");
+  const dstDir = path.join(process.cwd(), "libsocket", "C", "inet");
+  const dst = path.join(dstDir, "conf.h");
+  if (!fs.existsSync(src)) return;
+  if (!fs.existsSync(dstDir)) fs.mkdirSync(dstDir, { recursive: true });
+  fs.copyFileSync(src, dst);
+};
+
+ensureLibsocketConf();
 
 const result = spawnSync(nodeGypCmd, ["rebuild"], {
   stdio: "inherit",

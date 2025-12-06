@@ -1,4 +1,5 @@
-import type { Deserializer, Serializer } from "types";
+import cbor from "cbor";
+import type { Deserializer, Serializer } from "src/types/types";
 
 export const defaultSerializer: Serializer = payload => {
   if (Buffer.isBuffer(payload)) return payload;
@@ -13,14 +14,14 @@ export const textDeserializer: Deserializer<string> = data =>
   data.toString("utf8");
 
 export const bigint2Str = (_key: string, value: unknown): unknown => {
-  return typeof value === 'bigint' ? value.toString() : value;
-}
+  return typeof value === "bigint" ? value.toString() : value;
+};
 
 export const jsonDeserializer: Deserializer<unknown> = data => {
   const text = data.toString("utf8");
   try {
     return JSON.parse(text);
-  } catch (err) {
+  } catch (_err) {
     // Optionally emit/log error here
     return null; // or throw a custom error if needed
   }
@@ -31,18 +32,23 @@ export const jsonSerializer: Serializer = payload => {
   return Buffer.from(JSON.stringify(payload, bigint2Str), "utf8");
 };
 
-// CBOR helpers (lightweight lazy import to avoid hard dep if unused)
+// CBOR helpers (lazy instance to avoid repeated imports during hot paths)
+let cachedCbor: typeof import("cbor") | null = null;
+
+const getCbor = (): typeof import("cbor") => {
+  cachedCbor = cachedCbor ?? cbor;
+  return cachedCbor;
+};
+
 export const createCborSerializer = (): Serializer => {
-  // eslint-disable-next-line @typescript-eslint/no-var-requires
-  const cbor = require("cbor") as typeof import("cbor");
+  const cborModule = getCbor();
   return payload => {
     if (Buffer.isBuffer(payload)) return payload;
-    return cbor.encode(payload);
+    return cborModule.encode(payload);
   };
 };
 
 export const createCborDeserializer = <T = unknown>(): Deserializer<T> => {
-  // eslint-disable-next-line @typescript-eslint/no-var-requires
-  const cbor = require("cbor") as typeof import("cbor");
-  return data => cbor.decode(data);
+  const cborModule = getCbor();
+  return data => cborModule.decode(data);
 };
