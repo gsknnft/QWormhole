@@ -18,15 +18,10 @@
     "noUnusedParameters": true,
     "noFallthroughCasesInSwitch": true,
     "skipLibCheck": true,
-    "types": ["node"],
     "paths": {
       "types": ["src/types/types.d.ts"],
       "types/*": ["src/types/*"]
-    },
-    "typeRoots": [
-      "src/types",
-      "node_modules/@types"
-    ]
+    }
   },
   "include": ["src", "test/negentropic-diagnostics.test.ts"],
   "exclude": ["node_modules", "dist", "**/dist", "**/test"]

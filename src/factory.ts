@@ -12,7 +12,8 @@ import type {
   QWormholeServerOptions,
   NativeBackend,
   TransportMode,
-} from "src/types/types";
+  FramingMode,
+} from "types";
 
 export interface CreateClientOptions<
   TMessage,
@@ -59,6 +60,9 @@ export function createQWormholeClient<TMessage = Buffer>(
 export interface CreateServerOptions<
   TMessage,
 > extends QWormholeServerOptions<TMessage> {
+  host: string;
+  port: number;
+  framing?: FramingMode;
   preferNative?: boolean;
   forceTs?: boolean;
   preferredNativeBackend?: NativeBackend;
