@@ -12,7 +12,7 @@
     "node": ">=20.0.0",
     "pnpm": ">=10.0.0"
   },
-  "packageManager": "pnpm@10.23.0",
+  "packageManager": "pnpm@10.24.0",
   "repository": "git+https://github.com/gsknnft/QWormhole.git",
   "author": "Gordon Skinner",
   "license": "BSD-3-Clause",
@@ -30,6 +30,7 @@
   "scripts": {
     "build:tsup": "tsup",
     "build:vite": "vite build",
+    "mathplotlib": "python scripts/plot_bench.py /data/*.csv",
     "rebuild": "node -e \"const fs=require('fs');const path=require('path');fs.mkdirSync(path.join(__dirname,'dist','native'),{recursive:true});for (const name of ['qwormhole.node','qwormhole_lws.node']){const src=path.join(__dirname,'build','Release',name);const dst=path.join(__dirname,'dist','native',name);if(fs.existsSync(src)){fs.copyFileSync(src,dst);console.log('[qwormhole] copied',src,'->',dst);}}\"  && pnpm run install",
     "rebuild:nodegyp": "node-gyp rebuild && pnpm run rebuild",
     "build:tsc": "tsc --p tsconfig.json",
@@ -42,6 +43,7 @@
     "test:native": "vitest run test/native.smoke.test.ts",
     "bench": "tsx scripts/bench.ts",
     "bench:writev": "tsx scripts/bench-writev.ts",
+    "bench:sweep": "node scripts/run-bench-sweep.js",
     "bench:qwormhole": "pnpm run bench -- --mode=all --diagnostics",
     "lint": "eslint . && tsc --noEmit",
     "format": "prettier . --write"

@@ -1,3 +1,28 @@
+// CSV output helpers for plotting
+const CSV_FIELDS = [
+  "scenario",
+  "serverMode",
+  "clientMode",
+  "durationMs",
+  "messagesReceived",
+  "bytesReceived",
+  "msgsPerSec",
+  "mbPerSec",
+  "framing",
+];
+const formatCsvHeader = () => CSV_FIELDS.join(",") + "\n";
+const formatCsvRow = (res: any) =>
+  CSV_FIELDS.map(f =>
+    typeof res[f] === "string" ? JSON.stringify(res[f]) : res[f],
+  ).join(",") + "\n";
+
+const getCsvPath = () => {
+  const cli = process.argv.find(arg => arg.startsWith("--csv"));
+  if (cli && cli.includes("=")) return cli.split("=")[1];
+  if (cli) return ""; // --csv with no path: print to stdout
+  if (process.env.QW_BENCH_CSV) return process.env.QW_BENCH_CSV;
+  return undefined;
+};
 import {
   performance,
   PerformanceObserver,
@@ -648,8 +673,23 @@ async function main() {
     results.push(res);
   }
 
-  // eslint-disable-next-line no-console
-  console.log(JSON.stringify(results, null, 2));
+  const csvPath = getCsvPath();
+  if (csvPath !== undefined) {
+    const header = formatCsvHeader();
+    const rows = results.map(formatCsvRow).join("");
+    const csv = header + rows;
+    if (csvPath) {
+      await import("node:fs/promises").then(fs =>
+        fs.writeFile(csvPath, csv, "utf8"),
+      );
+      console.log(`csv written to ${csvPath}`);
+    } else {
+      process.stdout.write(csv);
+    }
+  } else {
+    // eslint-disable-next-line no-console
+    console.log(JSON.stringify(results, null, 2));
+  }
 
   const pad = (s: string, n: number) => s.toString().padEnd(n);
   const header = `${pad("Scenario", 28)}${pad("Server", 15)}${pad("Client", 15)}${pad(

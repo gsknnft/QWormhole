@@ -8,6 +8,8 @@ yarn.lock
 build-linux/
 build/
 .rollup.cache/
+.venv/
+__pycache__/
 
 #Ignore build files
 CMakeCache.txt
