@@ -10,7 +10,7 @@ build/
 .rollup.cache/
 .venv/
 __pycache__/
-
+src/something.ts
 #Ignore build files
 CMakeCache.txt
 CMakeFiles

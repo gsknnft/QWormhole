@@ -1,0 +1,20 @@
+{
+  "name": "@vquantum/electron",
+  "version": "4.6.0",
+  "description": "A foundation for scalable desktop apps",
+  "license": "MIT",
+  "author": {
+    "name": "Electron React Boilerplate Maintainers",
+    "email": "electronreactboilerplate@gmail.com",
+    "url": "https://github.com/electron-react-boilerplate"
+  },
+  "main": "./dist/main/main.js",
+  "scripts": {
+    "rebuild": "node -r ts-node/register ../scripts/electron-rebuild.ts",
+    "postinstall": "pnpm run rebuild && pnpm run link-modules",
+    "link-modules": "node -r ts-node/register ../scripts/link-modules.ts"
+  },
+  "dependencies": {
+    "better-sqlite3": "^12.5.0"
+  }
+}

@@ -1,0 +1,29 @@
+{
+  "name": "@sigilnet/console",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "typecheck": "tsc --noEmit",
+    "preview": "vite preview",
+    "lint": "eslint src --ext ts,tsx --max-warnings=0"
+  },
+  "dependencies": {
+    "next": "16.0.7",
+    "react": "19.2.1",
+    "react-dom": "19.2.1",
+    "react-router-dom": "^7.10.1",
+    "zustand": "^5.0.0",
+    "zod": "^4.1.12"
+  },
+  "devDependencies": {
+    "@types/react": "^19.2.7",
+    "@types/react-dom": "^19.2.3",
+    "@vitejs/plugin-react-swc": "^4.2.2",
+    "eslint": "^9.39.1",
+    "eslint-plugin-react-hooks": "^7.0.1",
+    "typescript": "^5.9.3",
+    "vite": "7.2.4"
+  }
+}

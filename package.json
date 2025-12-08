@@ -12,6 +12,10 @@
     "node": ">=20.0.0",
     "pnpm": ">=10.0.0"
   },
+  "workspaces": [
+    "src/console",
+    "bench-visualization"
+  ],
   "packageManager": "pnpm@10.24.0",
   "repository": "git+https://github.com/gsknnft/QWormhole.git",
   "author": "Gordon Skinner",
@@ -40,6 +44,8 @@
     "install": "node ./scripts/install-native.js",
     "dev": "tsup --watch",
     "test": "vitest run",
+    "dev:console": "cd ./app && pnpm dev:console",
+    "app:idev": "cd ./app && pnpm install && pnpm dev:console",
     "test:native": "vitest run test/native.smoke.test.ts",
     "bench": "tsx scripts/bench.ts",
     "bench:writev": "tsx scripts/bench-writev.ts",
@@ -107,7 +113,7 @@
   },
   "dependencies": {
     "bindings": "^1.5.0",
-    "cbor": "^9.0.1",
+    "cbor": "^10.0.11",
     "tweetnacl": "^1.0.3",
     "tweetnacl-util": "^0.15.1",
     "ws": "^8.18.3"

@@ -1,0 +1,14 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "module": "ESNext",
+    "moduleResolution": "nodenext",
+    "noEmit": false,
+    "outDir": "dist/main",
+    "lib": ["ESNext"],
+    "jsx": "preserve",
+    "allowImportingTsExtensions": false
+  },
+  "include": ["src/main/**/*.ts"],
+  "exclude": ["node_modules", "dist", "src/renderer", "src/preload"]
+}

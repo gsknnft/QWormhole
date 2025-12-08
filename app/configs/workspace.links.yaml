@@ -1,0 +1,40 @@
+baseurl: ../../../../
+packages:
+  - src/**
+  - src/app
+  - src/apps/**
+  - src/adapters/**
+  - src/packages/**
+  - src/providers/**
+  - src/vera-core/**
+  - src/QVera/**
+  - src/mse
+  - src/workers
+  - src/shared-utils/**
+  - src/tools
+  - src/utils
+  - src/token_rewards
+  - src/sol-diamond
+  - src/QuantumBot/**
+  - src/city-portal
+  - '!**/dist/**'
+  - '!**/build/**'
+  - '!src/island/**'
+  - '!src/packages/secure/**'
+
+version: 1.0.0-29e6aa52
+enabled: true
+link:
+#  '@vera/core': true
+  '@app': true
+  '@shared': false
+build:
+  skip:
+    # - '@shared'
+  include:
+    - '@vera/core'
+    - '@app'
+    - '@shared'
+
+baseVersion: 1.0.0-29e6aa52
+lastSynced: '2025-10-13T19:46:18.509Z'

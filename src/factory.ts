@@ -14,6 +14,8 @@ import type {
   TransportMode,
   FramingMode,
 } from "types";
+import { BatchFramer } from "./batch-framer";
+import { QWormholeContext } from "types/context";
 
 export interface CreateClientOptions<
   TMessage,
@@ -101,3 +103,62 @@ export function createQWormholeServer<TMessage = Buffer>(
     nativeBackend: backend,
   };
 }
+
+export function createQWormholeContext(): QWormholeContext {
+  const instances: Record<string, {
+    client?: QWormholeClient;
+    server?: QWormholeServer;
+    framer?: BatchFramer;
+  }> = {};
+  const metricsData: Record<string, {
+    bytesIn: number;
+    bytesOut: number;
+    flushes: number;
+    backpressure: number;
+  }> = {};
+  return {
+    registerInstance(name, instance) {
+      instances[name] = instance;
+      metricsData[name] = { bytesIn: 0, bytesOut: 0, flushes: 0, backpressure: 0 };
+    }
+    ,
+    onFlush(name, _info) {
+      metricsData[name].flushes += 1;
+    },
+    onBackpressure(name, _info) {
+      metricsData[name].backpressure += 1;
+    },
+    onFrame(name, info) {
+      if (info.direction === "in") {
+        metricsData[name].bytesIn += info.bytes;
+      } else {
+        metricsData[name].bytesOut += info.bytes;
+      }
+    },
+    metrics() {
+      const totals = {  bytesIn: 0, bytesOut: 0, backpressureEvents: 0, flushes: 0 };
+      for (const name in metricsData) {
+        const data = metricsData[name];
+        totals.bytesIn += data.bytesIn;
+        totals.bytesOut += data.bytesOut;
+        totals.backpressureEvents += data.backpressure;
+        totals.flushes += data.flushes;
+      }
+      return { totals, byInstance: metricsData };
+    }
+  };
+}
+
+
+
+
+
+/* 
+const ctx = createQWormholeContext();
+ctx.registerInstance("telemetry", { client, framer });
+framer.onFlush = info => ctx.onFlush?.("telemetry", info);
+framer.onBackpressure = info => ctx.onBackpressure?.("telemetry", info);
+// ...in your bus or adapter:
+ctx.onFrame?.("telemetry", { direction: "out", bytes: 1024, ts: Date.now() });
+console.log(ctx.metrics());
+*/

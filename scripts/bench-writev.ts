@@ -35,6 +35,13 @@ const stringFlag = (name: string, env: string): string | undefined => {
   return process.env[env];
 };
 
+const boolFlag = (name: string, env: string, defaultValue: boolean): boolean => {
+  const cliArg = process.argv.find(arg => arg === `--${name}` || arg.startsWith(`--${name}=`));
+  const raw = cliArg?.includes("=") ? cliArg.split("=")[1] : cliArg ? "1" : process.env[env];
+  if (raw === undefined) return defaultValue;
+  return raw === "1" || raw === "true" || raw === "yes";
+};
+
 const TOTAL_FRAMES = numberFlag({
   name: "frames",
   env: "QW_WRITEV_FRAMES",
@@ -59,6 +66,36 @@ const FLUSH_INTERVAL_MS = numberFlag({
   name: "flushMs",
   env: "QW_WRITEV_FLUSH_MS",
   defaultValue: 1,
+});
+const JITTER_MS = numberFlag({
+  name: "jitter",
+  env: "QW_WRITEV_JITTER",
+  defaultValue: 0,
+});
+const ADAPT_BACKPRESSURE = boolFlag(
+  "adapt",
+  "QW_WRITEV_ADAPT",
+  false,
+);
+const BACKPRESSURE_THRESHOLD = numberFlag({
+  name: "bpThreshold",
+  env: "QW_WRITEV_BP_THRESHOLD",
+  defaultValue: 200,
+});
+const MIN_BATCH_SIZE = numberFlag({
+  name: "batchMin",
+  env: "QW_WRITEV_BATCH_MIN",
+  defaultValue: 4,
+});
+const LOG_INTERVAL_MS = numberFlag({
+  name: "logInterval",
+  env: "QW_WRITEV_LOG_MS",
+  defaultValue: 1000,
+});
+const ROLLING_WINDOW = numberFlag({
+  name: "rolling",
+  env: "QW_WRITEV_ROLLING",
+  defaultValue: 400,
 });
 const CSV_PATH = stringFlag("csv", "QW_WRITEV_CSV");
 
@@ -85,28 +122,49 @@ const mean = (samples: number[]): number =>
     ? samples.reduce((acc, value) => acc + value, 0) / samples.length
     : 0;
 
+const clamp = (value: number, min: number, max: number): number =>
+  Math.min(Math.max(value, min), max);
+
+const applyJitter = (base: number): number => {
+  if (JITTER_MS <= 0) return base;
+  const delta = (Math.random() * 2 - 1) * JITTER_MS;
+  return Math.max(0, base + delta);
+};
+
+type FlushObserverHooks = {
+  onFlush?: () => void;
+  onBackpressure?: () => void;
+};
+
 const attachFlushObservers = (
   framer: BatchFramer | undefined,
   target: FlushSamples,
+  hooks?: FlushObserverHooks,
 ): void => {
   if (!framer) return;
   framer.on("flush", ({ bufferCount, totalBytes }) => {
     target.buffers.push(bufferCount);
     target.bytes.push(totalBytes);
+    hooks?.onFlush?.();
   });
   framer.on("backpressure", () => {
     target.backpressureEvents += 1;
+    hooks?.onBackpressure?.();
   });
 };
 
-const tuneFramer = (framer: BatchFramer | undefined): void => {
+const tuneFramer = (
+  framer: BatchFramer | undefined,
+  batchSize: number,
+  flushMs: number,
+): void => {
   if (!framer) return;
   const mutable = framer as unknown as {
     batchSize?: number;
     flushIntervalMs?: number;
   };
-  mutable.batchSize = BATCH_SIZE;
-  mutable.flushIntervalMs = FLUSH_INTERVAL_MS;
+  mutable.batchSize = batchSize;
+  mutable.flushIntervalMs = applyJitter(flushMs);
 };
 
 const formatCsvRow = (row: Record<string, number | string>): string => {
@@ -133,23 +191,18 @@ async function main(): Promise<void> {
     backpressureEvents: 0,
   };
 
+  let currentBatchSize = BATCH_SIZE;
+  let currentFlushInterval = FLUSH_INTERVAL_MS;
+  const serverFramers = new Set<BatchFramer>();
+  const rollingLatencies: number[] = [];
+  let logTimer: NodeJS.Timeout | undefined;
+
   const { server } = createQWormholeServer<Buffer>({
     host: "127.0.0.1",
     port: 0,
     framing: "length-prefixed",
   });
 
-  const serverFramerAttached = new Set<string>();
-  server.on("message", ({ client, data }: { client: any; data: Buffer }) => {
-    const framer = (client as unknown as { outboundFramer?: BatchFramer })
-      .outboundFramer;
-    if (framer && !serverFramerAttached.has(client.id)) {
-      tuneFramer(framer);
-      attachFlushObservers(framer, serverFlush);
-      serverFramerAttached.add(client.id);
-    }
-    client.send(data);
-  });
 
   const client = new QWormholeClient<Buffer>({
     host: "127.0.0.1",
@@ -158,10 +211,58 @@ async function main(): Promise<void> {
     entropyMetrics: { negIndex: 0.9 }, // bias towards macro batching
   });
 
+  const applyFramerConfig = (): void => {
+    tuneFramer(
+      (client as unknown as { outboundFramer?: BatchFramer }).outboundFramer,
+      currentBatchSize,
+      currentFlushInterval,
+    );
+    for (const framer of serverFramers) {
+      tuneFramer(framer, currentBatchSize, currentFlushInterval);
+    }
+  };
+
+  const maybeAdaptBatch = (backpressureCount: number): void => {
+    if (!ADAPT_BACKPRESSURE) return;
+    if (backpressureCount < BACKPRESSURE_THRESHOLD) return;
+    const next = clamp(
+      Math.floor(currentBatchSize * 0.75),
+      MIN_BATCH_SIZE,
+      BATCH_SIZE,
+    );
+    if (next < currentBatchSize) {
+      currentBatchSize = next;
+      applyFramerConfig();
+      console.log(
+        `[adaptive] backpressure ${backpressureCount} → shrinking batch to ${currentBatchSize}`,
+      );
+    }
+  };
+
+  const serverFramerAttached = new Set<string>();
+  server.on("message", ({ client, data }: { client: any; data: Buffer }) => {
+    const framer = (client as unknown as { outboundFramer?: BatchFramer })
+      .outboundFramer;
+    if (framer && !serverFramerAttached.has(client.id)) {
+      serverFramers.add(framer);
+      tuneFramer(framer, currentBatchSize, currentFlushInterval);
+      attachFlushObservers(framer, serverFlush, {
+        onFlush: () => tuneFramer(framer, currentBatchSize, currentFlushInterval),
+        onBackpressure: () => maybeAdaptBatch(serverFlush.backpressureEvents),
+      });
+      serverFramerAttached.add(client.id);
+    }
+    client.send(data);
+  });
+
   const clientFramer = (client as unknown as { outboundFramer?: BatchFramer })
     .outboundFramer;
-  attachFlushObservers(clientFramer, clientFlush);
-  tuneFramer(clientFramer);
+  attachFlushObservers(clientFramer, clientFlush, {
+    onFlush: () =>
+      tuneFramer(clientFramer, currentBatchSize, currentFlushInterval),
+    onBackpressure: () => maybeAdaptBatch(clientFlush.backpressureEvents),
+  });
+  tuneFramer(clientFramer, currentBatchSize, currentFlushInterval);
 
   let received = 0;
   let dropped = 0;
@@ -169,6 +270,19 @@ async function main(): Promise<void> {
 
   try {
     await client.connect();
+
+    const startTs = performance.now();
+    if (LOG_INTERVAL_MS > 0) {
+      logTimer = setInterval(() => {
+        const rollP50 = quantile(rollingLatencies, 0.5);
+        const rollP99 = quantile(rollingLatencies, 0.99);
+        const elapsedSec = (performance.now() - startTs) / 1000;
+        const tput = elapsedSec > 0 ? durationsMs.length / elapsedSec : 0;
+        console.log(
+          `[live] batch=${currentBatchSize} flushMs=${currentFlushInterval}${JITTER_MS > 0 ? `±${JITTER_MS}` : ""} recv=${durationsMs.length} bp(client/server)=${clientFlush.backpressureEvents}/${serverFlush.backpressureEvents} p50=${rollP50.toFixed(2)}ms p99=${rollP99.toFixed(2)}ms thr=${tput.toFixed(0)} msg/s`,
+        );
+      }, LOG_INTERVAL_MS);
+    }
 
     const completion = new Promise<void>((resolve, reject) => {
       const timeout = setTimeout(() => {
@@ -191,6 +305,10 @@ async function main(): Promise<void> {
         pending.delete(seq);
         const elapsedMs = Number(process.hrtime.bigint() - started) / 1_000_000;
         durationsMs.push(elapsedMs);
+        rollingLatencies.push(elapsedMs);
+        if (rollingLatencies.length > ROLLING_WINDOW) {
+          rollingLatencies.shift();
+        }
         received += 1;
         if (received >= TOTAL_FRAMES) {
           benchFinished = true;
@@ -259,7 +377,7 @@ async function main(): Promise<void> {
       `frames=${TOTAL_FRAMES}, payload=${PAYLOAD_BYTES} bytes, timeout=${TIMEOUT_MS} ms`,
     );
     console.log(
-      `batchSize=${BATCH_SIZE}, flushIntervalMs=${FLUSH_INTERVAL_MS}`,
+      `batchSize=${currentBatchSize} (initial ${BATCH_SIZE}), flushIntervalMs=${currentFlushInterval}${JITTER_MS > 0 ? `±${JITTER_MS}` : ""}`,
     );
     console.log(
       `latency: p50=${p50.toFixed(2)} ms, p99=${p99.toFixed(
@@ -283,8 +401,10 @@ async function main(): Promise<void> {
         frames: TOTAL_FRAMES,
         payloadBytes: PAYLOAD_BYTES,
         timeoutMs: TIMEOUT_MS,
-        batchSize: BATCH_SIZE,
-        flushIntervalMs: FLUSH_INTERVAL_MS,
+        batchSize: currentBatchSize,
+        initialBatchSize: BATCH_SIZE,
+        flushIntervalMs: currentFlushInterval,
+        jitterMs: JITTER_MS,
         p50Ms: Number(p50.toFixed(3)),
         p99Ms: Number(p99.toFixed(3)),
         maxMs: Number(maxMs.toFixed(3)),
@@ -320,6 +440,9 @@ async function main(): Promise<void> {
       }
     }
   } finally {
+    if (logTimer) {
+      clearInterval(logTimer);
+    }
     try {
       await client.disconnect();
     } catch {

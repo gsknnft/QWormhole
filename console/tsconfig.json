@@ -1,0 +1,28 @@
+{
+  "compilerOptions": {
+    "target": "esnext",
+    "module": "NodeNext",
+    "moduleResolution": "nodenext",
+    "jsx": "react-jsx",
+    "strict": true,
+    "baseUrl": ".",
+    "rootDir": "src",
+    "outDir": "dist",
+    "declarationDir": "dist/types",
+    "declaration": true,
+    "allowJs": false,
+    "composite": true,
+    "esModuleInterop": true,
+    "skipLibCheck": true,
+    "allowSyntheticDefaultImports": true,
+    "typeRoots": ["../../node_modules/@types"],
+    "lib": ["ESNext", "DOM"],
+    "paths": {
+      "@fonts/*": ["src/fonts/*"],
+      "@components/*": ["src/components/*"],
+      "@routes/*": ["src/routes/*"],
+      "@stores/*": ["src/stores/*"]
+    },
+  },
+  "include": ["src"]
+}
