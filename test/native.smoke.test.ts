@@ -31,7 +31,7 @@ describe("NativeTcpClient coverage", () => {
     vi.stubGlobal("bindings", () => {
       throw new Error("not found");
     });
-    const { NativeTcpClient } = await import("../src/native");
+    const { NativeTcpClient } = await import("../src/core/NativeTCPClient");
     expect(() => new NativeTcpClient()).toThrow(
       /Native qwormhole binding not available/,
     );
@@ -45,7 +45,8 @@ describe("NativeTcpClient coverage", () => {
       throw new Error("not found");
     });
     vi.stubGlobal("bindings", bindingsMock);
-    const { NativeTcpClient, getNativeBackend } = await import("../src/native");
+    const { NativeTcpClient, getNativeBackend } =
+      await import("../src/core/NativeTCPClient");
     const client = new NativeTcpClient();
     expect(client).toBeDefined();
     expect(client.backend).toBe("lws");
@@ -68,7 +69,8 @@ describe("NativeTcpClient coverage", () => {
       throw new Error("not found");
     });
     vi.stubGlobal("bindings", bindingsMock);
-    const { NativeTcpClient, getNativeBackend } = await import("../src/native");
+    const { NativeTcpClient, getNativeBackend } =
+      await import("../src/core/NativeTCPClient");
     const client = new NativeTcpClient();
     expect(client.backend).toBe("libsocket");
     expect(getNativeBackend()).toBe("libsocket");
@@ -82,11 +84,15 @@ describe("NativeTcpClient coverage", () => {
       throw new Error("not found");
     });
     vi.stubGlobal("bindings", bindingsMock);
-    const { NativeTcpClient } = await import("../src/native");
+    const { NativeTcpClient } = await import("../src/core/NativeTCPClient");
     const client = new NativeTcpClient();
     client.connect({ host: "example.com", port: 8080, useTls: true });
     expect(mockImpl.connect).toHaveBeenCalledWith(
-      expect.objectContaining({ host: "example.com", port: 8080, useTls: true }),
+      expect.objectContaining({
+        host: "example.com",
+        port: 8080,
+        useTls: true,
+      }),
     );
     client.close();
   });

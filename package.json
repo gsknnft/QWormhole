@@ -35,13 +35,13 @@
     "build:tsup": "tsup",
     "build:vite": "vite build",
     "mathplotlib": "python scripts/plot_bench.py /data/*.csv",
-    "rebuild": "node -e \"const fs=require('fs');const path=require('path');fs.mkdirSync(path.join(__dirname,'dist','native'),{recursive:true});for (const name of ['qwormhole.node','qwormhole_lws.node']){const src=path.join(__dirname,'build','Release',name);const dst=path.join(__dirname,'dist','native',name);if(fs.existsSync(src)){fs.copyFileSync(src,dst);console.log('[qwormhole] copied',src,'->',dst);}}\"  && pnpm run install",
-    "rebuild:nodegyp": "node-gyp rebuild && pnpm run rebuild",
+    "rebuild:binds": "node -e \"const fs=require('fs');const path=require('path');fs.mkdirSync(path.join(__dirname,'dist','native'),{recursive:true});for (const name of ['qwormhole.node','qwormhole_lws.node']){const src=path.join(__dirname,'build','Release',name);const dst=path.join(__dirname,'dist','native',name);if(fs.existsSync(src)){fs.copyFileSync(src,dst);console.log('[qwormhole] copied',src,'->',dst);}}\"",
+    "rebuild": "node-gyp rebuild && pnpm run rebuild:binds && pnpm build",
     "build:tsc": "tsc --p tsconfig.json",
     "build:rollup": "rollup -c rollup.config.js",
-    "build": "vite build && pnpm run build:tsc && pnpm run build:decl && pnpm run build:rollup",
-    "build:decl": "tsc --emitDeclarationOnly --declaration --outDir dist --project tsconfig.json",
-    "install": "node ./scripts/install-native.js",
+    "build": "pnpm run build:rollup && vite build && pnpm run build:tsc && pnpm run build:decl",
+    "build:decl": "tsc --emitDeclarationOnly --declaration --outDir dist/types --project tsconfig.json",
+    "install": "node ./scripts/install-native.js && pnpm run rebuild && pnpm run build",
     "dev": "tsup --watch",
     "test": "vitest run",
     "dev:console": "cd ./app && pnpm dev:console",
@@ -86,15 +86,18 @@
     "arrowParens": "avoid"
   },
   "devDependencies": {
+    "@types/ws": "^8.18.1",
     "@arethetypeswrong/cli": "^0.17.3",
     "@eslint/js": "^9.39.1",
     "@types/bindings": "^1.5.5",
+    "@types/multicast-dns": "7.2.4",
     "@types/node": "^24.10.1",
-    "@vitest/coverage-v8": "^4.0.9",
+    "@vitest/coverage-v8": "^4.0.15",
     "eslint": "^9.39.1",
     "fast-check": "^4.3.0",
     "node-addon-api": "8.5.0",
-    "node-gyp": "^10.3.1",
+    "node-gyp": "^12.1.0",
+    "node-gyp-build": "4.8.4",
     "prettier": "^3.5.3",
     "ts-node": "^10.9.2",
     "tsup": "^8.5.1",
@@ -109,9 +112,12 @@
     "access": "restricted"
   },
   "optionalDependencies": {
-    "@rollup/rollup-linux-x64-gnu": "4.53.3"
+    "@rollup/rollup-linux-x64-gnu": "4.53.3",
+    "node-kcp": "^1.7.5"
   },
   "dependencies": {
+    "multicast-dns": "7.2.5",
+    "multicast-dns-service-types": "1.1.0",
     "bindings": "^1.5.0",
     "cbor": "^10.0.11",
     "tweetnacl": "^1.0.3",

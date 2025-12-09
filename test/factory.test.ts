@@ -5,12 +5,12 @@ import {
   getNativeBackend,
   // NativeTcpClient,
   isNativeAvailable,
-} from "../src/native";
+} from "../src/core/NativeTCPClient";
 import {
   createQWormholeClient,
   createQWormholeServer,
   CreateClientOptions,
-} from "../src/factory";
+} from "../src/core/factory";
 
 vi.mock("../src/native", () => {
   const isNativeAvailableMock = vi.fn(() => true);

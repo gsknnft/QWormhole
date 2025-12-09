@@ -7,7 +7,7 @@
 
 import { performance } from "node:perf_hooks";
 import { QWormholeClient, createQWormholeServer } from "../src";
-import type { BatchFramer } from "../src/batch-framer";
+import type { BatchFramer } from "../src/core/batch-framer";
 import path from "node:path";
 
 type NumberFlag = {
@@ -31,13 +31,24 @@ const stringFlag = (name: string, env: string): string | undefined => {
   if (!cliArg) return process.env[env];
   if (cliArg.includes("=")) return cliArg.split("=")[1];
   // If --csv is present with no value, use a sensible default
-  if (cliArg === `--${name}`) return path.join(__dirname, "../data/bench-writev.csv");
+  if (cliArg === `--${name}`)
+    return path.join(__dirname, "../data/bench-writev.csv");
   return process.env[env];
 };
 
-const boolFlag = (name: string, env: string, defaultValue: boolean): boolean => {
-  const cliArg = process.argv.find(arg => arg === `--${name}` || arg.startsWith(`--${name}=`));
-  const raw = cliArg?.includes("=") ? cliArg.split("=")[1] : cliArg ? "1" : process.env[env];
+const boolFlag = (
+  name: string,
+  env: string,
+  defaultValue: boolean,
+): boolean => {
+  const cliArg = process.argv.find(
+    arg => arg === `--${name}` || arg.startsWith(`--${name}=`),
+  );
+  const raw = cliArg?.includes("=")
+    ? cliArg.split("=")[1]
+    : cliArg
+      ? "1"
+      : process.env[env];
   if (raw === undefined) return defaultValue;
   return raw === "1" || raw === "true" || raw === "yes";
 };
@@ -72,11 +83,7 @@ const JITTER_MS = numberFlag({
   env: "QW_WRITEV_JITTER",
   defaultValue: 0,
 });
-const ADAPT_BACKPRESSURE = boolFlag(
-  "adapt",
-  "QW_WRITEV_ADAPT",
-  false,
-);
+const ADAPT_BACKPRESSURE = boolFlag("adapt", "QW_WRITEV_ADAPT", false);
 const BACKPRESSURE_THRESHOLD = numberFlag({
   name: "bpThreshold",
   env: "QW_WRITEV_BP_THRESHOLD",
@@ -203,7 +210,6 @@ async function main(): Promise<void> {
     framing: "length-prefixed",
   });
 
-
   const client = new QWormholeClient<Buffer>({
     host: "127.0.0.1",
     port: (await server.listen()).port,
@@ -247,7 +253,8 @@ async function main(): Promise<void> {
       serverFramers.add(framer);
       tuneFramer(framer, currentBatchSize, currentFlushInterval);
       attachFlushObservers(framer, serverFlush, {
-        onFlush: () => tuneFramer(framer, currentBatchSize, currentFlushInterval),
+        onFlush: () =>
+          tuneFramer(framer, currentBatchSize, currentFlushInterval),
         onBackpressure: () => maybeAdaptBatch(serverFlush.backpressureEvents),
       });
       serverFramerAttached.add(client.id);

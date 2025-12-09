@@ -1,4 +1,4 @@
-import type { WireGuardAdapter } from "../wireguard-adapter";
+import type { WireGuardAdapter } from "../adapters/wireguard-adapter";
 import type { Sigil, Origin, Intent, JsonValue } from "./sigil.types";
 import type { PeerSeal, SovereignSeal } from "../utils/seal";
 

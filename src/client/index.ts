@@ -1,14 +1,17 @@
 import net from "node:net";
 import tls from "node:tls";
-import { LengthPrefixedFramer } from "../framing";
-import { BatchFramer } from "../batch-framer";
-import { defaultSerializer, bufferDeserializer } from "../codecs";
-import { TypedEventEmitter } from "../typedEmitter";
+import { LengthPrefixedFramer } from "../core/framing";
+import { BatchFramer } from "../core/batch-framer";
+import { defaultSerializer, bufferDeserializer } from "../core/codecs";
+import { TypedEventEmitter } from "../utils/typedEmitter";
 import { resolveInterfaceAddress } from "../utils/netUtils";
-import { QWormholeError } from "../errors";
-import { TokenBucket, PriorityQueue, delay } from "../qos";
+import { QWormholeError } from "../utils/errors";
+import { TokenBucket, PriorityQueue, delay } from "../core/qos";
 import { handshakePayloadSchema, type HandshakePayload } from "../schema/scp";
-import { createFlowController, type FlowController } from "../flow-controller";
+import {
+  createFlowController,
+  type FlowController,
+} from "../core/flow-controller";
 import type { EntropyMetrics } from "../handshake/entropy-policy";
 import type {
   QWormholeClientEvents,

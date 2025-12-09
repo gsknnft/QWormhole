@@ -45,7 +45,7 @@ function registerBinding(name: string) {
 }
 
 async function importNative() {
-  return import("../src/native");
+  return import("../src/core/NativeTCPClient");
 }
 
 describe("native binding loader", () => {

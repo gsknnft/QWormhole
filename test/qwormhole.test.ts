@@ -5,13 +5,13 @@ import {
   createQWormholeClient,
   isNativeAvailable,
 } from "../src/index.js";
-import { jsonDeserializer, textDeserializer } from "../src/codecs.js";
+import { jsonDeserializer, textDeserializer } from "../src/core/codecs.js";
 import type {
   QWormholeClientOptions,
   QWormholeServerConnection,
 } from "../src/types/types.js";
 import net from "node:net";
-import { CreateClientOptions } from "../src/factory.js";
+import { CreateClientOptions } from "../src/core/factory.js";
 
 if (typeof vi !== "undefined" && process.env.TEST_NATIVE_MOCK === "true") {
   vi.mock("../src/native", () => ({

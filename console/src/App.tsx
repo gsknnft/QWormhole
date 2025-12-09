@@ -5,7 +5,7 @@ import { NodesPage } from '@routes/NodesPage';
 import { QWormholePage } from '@routes/QWormholePage';
 
 
-export default function Console() {
+export default function App() {
   return (
     <ConsoleShell>
       <Routes>

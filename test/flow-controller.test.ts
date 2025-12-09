@@ -6,8 +6,8 @@ import {
   deriveSessionFlowPolicy,
   FLOW_DEFAULTS,
   type SessionFlowPolicy,
-} from "../src/flow-controller";
-import { BatchFramer } from "../src/batch-framer";
+} from "../src/core/flow-controller";
+import { BatchFramer } from "../src/core/batch-framer";
 import type { EntropyMetrics } from "../src/handshake/entropy-policy";
 
 let adaptiveEnvOriginal: string | undefined;

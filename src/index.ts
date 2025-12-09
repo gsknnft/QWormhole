@@ -1,10 +1,7 @@
-// export * from "./client";
-// export * from "./server";
-// export * from "./codecs.js";
 export { QWormholeClient } from "./client";
-export { QWormholeServer } from "./server/index.js";
-export { LengthPrefixedFramer } from "./framing";
-export { BatchFramer, createBatchFramer } from "./batch-framer";
+export { QWormholeServer } from "./server";
+export { LengthPrefixedFramer } from "./core/framing";
+export { BatchFramer, createBatchFramer } from "./core/batch-framer";
 export {
   defaultSerializer,
   bufferDeserializer,
@@ -13,17 +10,21 @@ export {
   jsonSerializer,
   createCborSerializer,
   createCborDeserializer,
-} from "./codecs";
-export { NativeTcpClient, isNativeAvailable, getNativeBackend } from "./native";
+} from "./core/codecs";
+export {
+  NativeTcpClient,
+  isNativeAvailable,
+  getNativeBackend,
+} from "./core/NativeTCPClient";
 export {
   NativeQWormholeServer,
   isNativeServerAvailable,
   getNativeServerBackend,
-} from "./native-server";
-export { createQWormholeClient, createQWormholeServer } from "./factory";
-export { QWormholeError } from "./errors";
-export type { QWormholeErrorCode } from "./errors";
-export { QWormholeRuntime } from "./runtime";
+} from "./core/native-server";
+export { createQWormholeClient, createQWormholeServer } from "./core/factory";
+export { QWormholeError } from "./utils/errors";
+export type { QWormholeErrorCode } from "./utils/errors";
+export { QWormholeRuntime } from "./core/runtime";
 export { QWormholeClient as TcpClient } from "./client";
 export {
   createNegentropicHandshake,
@@ -62,7 +63,7 @@ export {
   type SCPStatePayload,
   type EntropyMetricsPayload,
 } from "./schema/scp";
-export { createConsoleTelemetryLogger } from "./telemetry-logger";
+export { createConsoleTelemetryLogger } from "./utils/telemetry-logger";
 export { createHandshakeVerifier } from "./handshake/handshake-policy";
 export {
   FlowController,
@@ -72,7 +73,7 @@ export {
   FLOW_DEFAULTS,
   type SessionFlowPolicy,
   type FlowControllerDiagnostics,
-} from "./flow-controller";
+} from "./core/flow-controller";
 export type {
   Payload,
   QWormholeClientEvents,
@@ -104,4 +105,4 @@ export {
   type RpcAdapterOptions,
   type SpawnAdapterOptions,
   type QwormTorchAdapterOptions,
-} from "./utils/mlAdapter";
+} from "./adapters/mlAdapter";

@@ -24,13 +24,13 @@ vi.mock("../src/utils/randomId", () => ({
   sovereignHash: sovereignHashMock,
 }));
 
-import { SovereignTunnel } from "../src/sovereign/tunnel";
+import { SovereignTunnel } from "../src/tunnel";
 import type {
   Peer,
   SessionHandshakeEvent,
   SigilEvent,
 } from "../src/types/sigilnet.types";
-import { PeerRegistry } from "../src/sovereign/registry";
+import { PeerRegistry } from "../src/registry";
 
 describe("SovereignTunnel", () => {
   let registry: PeerRegistry;

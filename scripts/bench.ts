@@ -37,8 +37,8 @@ import {
   createQWormholeServer,
   isNativeAvailable,
 } from "../src/index";
-import { isNativeServerAvailable } from "../src/native-server";
-import { BatchFramer } from "../src/batch-framer";
+import { isNativeServerAvailable } from "../src/core/native-server";
+import { BatchFramer } from "../src/core/batch-framer";
 import type {
   FramingMode,
   NativeBackend,

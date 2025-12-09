@@ -1,12 +1,12 @@
 import React from 'react';
 import ReactDOM from 'react-dom/client';
 import { BrowserRouter } from 'react-router-dom';
-import Console from './App';
+import App from './App';
 
 ReactDOM.createRoot(document.getElementById('app')!).render(
   <React.StrictMode>
     <BrowserRouter>
-      <Console />
+      <App />
     </BrowserRouter>
   </React.StrictMode>
 );

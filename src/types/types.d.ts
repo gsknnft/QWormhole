@@ -1,8 +1,8 @@
 //@preserve
 import type net from "node:net";
 import type { EntropyMetrics } from "../handshake/entropy-policy";
-import type { FlowControllerDiagnostics } from "../flow-controller";
-import type { BatchFramerStats } from "../batch-framer";
+import type { FlowControllerDiagnostics } from "../core/flow-controller";
+import type { BatchFramerStats } from "../core/batch-framer";
 
 export type Payload = string | Buffer | Uint8Array | Record<string, unknown>;
 

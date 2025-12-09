@@ -9,7 +9,7 @@ import {
   afterAll,
 } from "vitest";
 import { QWormholeClient } from "../src/client/index.js";
-import { jsonDeserializer, textDeserializer } from "../src/codecs.js";
+import { jsonDeserializer, textDeserializer } from "../src/core/codecs.js";
 import net from "node:net";
 import { QWormholeServer } from "../src/server/index.js";
 import { QWormholeClientOptions } from "../src/index.js";

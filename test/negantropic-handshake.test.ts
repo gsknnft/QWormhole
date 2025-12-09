@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import fc from "fast-check";
-import { jsonDeserializer } from "../src/codecs.js";
+import { jsonDeserializer } from "../src/core/codecs.js";
 import {
   QWormholeClient,
   QWormholeServer,
@@ -62,7 +62,10 @@ describe("Negentropic handshake", () => {
     expect(hs.nIndex).toBeGreaterThanOrEqual(0);
     expect(verifyNegentropicHandshake(hs)).toBe(true);
 
-    const tampered = { ...hs, negHash: hs.negHash.split("").reverse().join("") };
+    const tampered = {
+      ...hs,
+      negHash: hs.negHash.split("").reverse().join(""),
+    };
     expect(verifyNegentropicHandshake(tampered)).toBe(false);
   });
 

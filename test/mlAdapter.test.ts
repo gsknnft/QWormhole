@@ -7,7 +7,7 @@ import {
   createSpawnAdapter,
   queryMLLayer,
   setMLAdapter,
-} from "../src/utils/mlAdapter";
+} from "../src/adapters/mlAdapter";
 
 vi.mock("node:child_process", () => ({
   spawn: vi.fn(),
@@ -176,7 +176,8 @@ describe("mlAdapter", () => {
     });
     (global as any).fetch = fetchMock;
 
-    const { queryMLLayer: freshQuery } = await import("../src/utils/mlAdapter");
+    const { queryMLLayer: freshQuery } =
+      await import("../src/adapters/mlAdapter");
     const result = await freshQuery({ value: 2 });
     expect(fetchMock).toHaveBeenCalled();
     expect(result).toEqual({ env: true });
@@ -189,7 +190,8 @@ describe("mlAdapter", () => {
     vi.resetModules();
     process.env.QWORMHOLE_ML_ADAPTER = "spawn";
     const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
-    const { queryMLLayer: freshQuery } = await import("../src/utils/mlAdapter");
+    const { queryMLLayer: freshQuery } =
+      await import("../src/adapters/mlAdapter");
     const result = (await freshQuery({ value: 1 })) as any;
     expect(warnSpy).toHaveBeenCalledWith(
       expect.stringContaining("failed to resolve ML adapter"),

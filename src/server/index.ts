@@ -1,12 +1,12 @@
-import net from "node:net";
-import tls from "node:tls";
-import { createHash, randomUUID } from "node:crypto";
-import { LengthPrefixedFramer } from "../framing";
-import { BatchFramer } from "../batch-framer";
-import { TypedEventEmitter } from "../typedEmitter";
-import { bufferDeserializer, defaultSerializer } from "../codecs";
-import { QWormholeError } from "../errors";
-import { TokenBucket, PriorityQueue, delay } from "../qos";
+import net from "net";
+import tls from "tls";
+import { createHash, randomUUID } from "crypto";
+import { LengthPrefixedFramer } from "../core/framing";
+import { BatchFramer } from "../core/batch-framer";
+import { TypedEventEmitter } from "../utils/typedEmitter";
+import { bufferDeserializer, defaultSerializer } from "../core/codecs";
+import { QWormholeError } from "../utils/errors";
+import { TokenBucket, PriorityQueue, delay } from "../core/qos";
 import {
   isNegentropicHandshake,
   verifyNegentropicHandshake,
@@ -18,7 +18,10 @@ import {
 } from "../handshake/entropy-policy";
 import type { EntropyMetrics } from "../handshake/entropy-policy";
 import { handshakePayloadSchema } from "../schema/scp";
-import { createFlowController, type FlowController } from "../flow-controller";
+import {
+  createFlowController,
+  type FlowController,
+} from "../core/flow-controller";
 import { inferMessageType } from "../utils/negentropic-diagnostics";
 import type {
   Payload,

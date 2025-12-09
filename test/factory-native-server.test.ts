@@ -23,7 +23,7 @@ describe("createQWormholeServer transport selection", () => {
       },
     );
 
-    const { createQWormholeServer } = await import("../src/factory");
+    const { createQWormholeServer } = await import("../src/core/factory");
 
     const result = createQWormholeServer({
       host: "127.0.0.1",
@@ -41,7 +41,7 @@ describe("createQWormholeServer transport selection", () => {
     nativeServerMock.getNativeServerBackend.mockReturnValue(null);
     nativeServerMock.isNativeServerAvailable.mockReturnValue(false);
 
-    const { createQWormholeServer } = await import("../src/factory");
+    const { createQWormholeServer } = await import("../src/core/factory");
 
     const result = createQWormholeServer({
       host: "127.0.0.1",

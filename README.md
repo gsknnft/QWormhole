@@ -611,3 +611,67 @@ Secure Streams will provide encrypted, multiplexed channels.
 - UDP transport
 - Browser transport (WebRTC)
 
+This is a big milestone — you’ve essentially turned QWormhole into a **mesh‑ready runtime shell** with diagnostics baked in. Let’s unpack what you’ve landed and what it unlocks:
+
+---
+
+## 🧩 What You’ve Built
+
+- **QWormholeNode**  
+  - Wraps a `QWormholeServer` (listener) and optional `QWormholeClient` (dialer).  
+  - Participates in **UDP/mDNS discovery** so nodes can auto‑discover peers on a LAN.  
+  - Maintains a **PeerTable** with metadata (negentropic index, trust level, keys, etc.).  
+  - Exposes **gossip hooks** (`tick`, `broadcast`) for higher layers like SigilNet or NegentropicCouplingTheory.  
+  - Can **dial seeds** to bootstrap into a mesh.
+
+- **Bench harness upgrades**  
+  - Adaptive/jitter flags for batch sizing and flush interval tuning.  
+  - Live logging via `console.table`.  
+  - Richer CSV metadata for plotting sweeps.  
+  - README‑style benchmark template (`docs/benchmarks-template.md`) for reproducible reporting.
+
+- **Plotting script polish**  
+  - Combined subplots by default, with clearer annotations and colorbar.  
+  - `--separate` switch for individual windows.  
+  - Heatmap gated to multi‑flush sweeps, so you don’t clutter single‑run plots.
+
+---
+
+## 🚀 Why This Matters
+
+You’ve now got a **full stack feedback loop**:
+
+1. **Transport substrate (QWormhole)** → canonical batching, flush, backpressure.  
+2. **Mesh runtime (QWormholeNode)** → discovery, peer tracking, gossip.  
+3. **Bench harness** → adaptive tuning, CSV emission, live diagnostics.  
+4. **Plotting script** → annotated heatmaps, throughput vs latency tradeoff curves.  
+5. **Docs template** → reproducible benchmark narratives for contributors.
+
+This is the kind of scaffolding that makes performance optimization **teachable and auditable**.
+
+---
+
+## 🔧 Next Moves
+
+- **Connection tracking**  
+  - Extend `dialSeed()` to register live `QWormholeClient` connections keyed by `PeerId`.  
+  - Feed latency/flush metrics back into `PeerTable`.
+
+- **Gossip forwarding**  
+  - Right now gossip emits locally. Next step: forward gossip messages across QWormhole connections.  
+  - That turns your runtime into a true mesh overlay.
+
+- **Adaptive runtime**  
+  - Let `QWormholeNode` auto‑tune batch size/flush interval based on peer backpressure and latency.  
+  - You already have adaptive flags in the bench harness — fold them into runtime.
+
+- **Diagnostics surfacing**  
+  - Pipe node metrics (peer count, gossip ticks, backpressure events) into your console UI.  
+  - Export snapshots for README diagrams.
+
+---
+
+### 🎯 Takeaway
+You’ve elevated QWormhole from a transport substrate into a **mesh‑ready runtime** with diagnostics, plotting, and reproducible benchmarks. The next leap is wiring gossip through live connections and folding adaptive tuning into the node runtime — that’s when SigilNet/NegentropicCouplingTheory can treat QWormhole as a full mesh backbone.
+
+Would you like me to sketch a **README benchmark section template** that shows how to run nodes, capture CSVs, and interpret the heatmap so contributors can follow your workflow end‑to‑end?

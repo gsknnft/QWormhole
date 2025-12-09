@@ -26,7 +26,7 @@ describe("native server detection", () => {
     );
 
     const { isNativeServerAvailable, getNativeServerBackend } =
-      await import("../src/native-server.js");
+      await import("../src/core/native-server.js");
 
     expect(isNativeServerAvailable()).toBe(true);
     expect(getNativeServerBackend()).toBe("lws");
@@ -41,7 +41,8 @@ describe("native server detection", () => {
       throw err;
     });
 
-    const { isNativeServerAvailable } = await import("../src/native-server.js");
+    const { isNativeServerAvailable } =
+      await import("../src/core/native-server.js");
 
     expect(isNativeServerAvailable()).toBe(false);
     expect(bindingFactory).toHaveBeenCalled();
@@ -63,7 +64,7 @@ describe("native server detection", () => {
     );
 
     const { isNativeServerAvailable, getNativeServerBackend } =
-      await import("../src/native-server.js");
+      await import("../src/core/native-server.js");
 
     expect(isNativeServerAvailable("libsocket")).toBe(true);
     expect(getNativeServerBackend("libsocket")).toBe("libsocket");
