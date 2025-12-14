@@ -7,6 +7,7 @@ import { MuxError } from "./mux-error";
 export interface MuxSessionOptions {
   allowHalfOpen?: boolean;
   initialStreamId?: number;
+  implicitOpen?: boolean; // allow data/close to implicitly create stream (useful for UDP reorder)
 }
 
 export class MuxSession extends EventEmitter {
@@ -20,7 +21,10 @@ export class MuxSession extends EventEmitter {
   ) {
     super();
     this.nextStreamId = opts.initialStreamId ?? 1;
+    this.opts = { implicitOpen: true, ...opts };
   }
+  private opts: Required<Pick<MuxSessionOptions, "implicitOpen">> &
+    Partial<MuxSessionOptions>;
 
   createStream(): MuxStream {
     const id = this.nextStreamId++;
@@ -41,18 +45,23 @@ export class MuxSession extends EventEmitter {
   private handleFrame(frame: MuxFrame): void {
     let stream = this.streams.get(frame.streamId);
 
-    if (!stream && frame.type === "open") {
-      stream = new MuxStream(frame.streamId, this);
-      this.streams.set(frame.streamId, stream);
-      this.emit("stream", stream);
-      return;
-    }
-
     if (!stream) {
-      throw new MuxError("MUX_UNKNOWN_STREAM", `Unknown stream ${frame.streamId}`);
+      if (frame.type === "open" || this.opts.implicitOpen) {
+        stream = new MuxStream(frame.streamId, this);
+        this.streams.set(frame.streamId, stream);
+        this.emit("stream", stream);
+      } else {
+        throw new MuxError(
+          "MUX_UNKNOWN_STREAM",
+          `Unknown stream ${frame.streamId}`,
+        );
+      }
     }
 
     switch (frame.type) {
+      case "open":
+        // Already handled above (stream creation), nothing else to do
+        break;
       case "data":
         stream._pushData(frame.payload);
         break;
@@ -66,7 +75,10 @@ export class MuxSession extends EventEmitter {
         this.emit("window", frame);
         break;
       default:
-        throw new MuxError("MUX_PROTOCOL_VIOLATION", `Unhandled frame type ${frame.type}`);
+        throw new MuxError(
+          "MUX_PROTOCOL_VIOLATION",
+          `Unhandled frame type ${frame.type}`,
+        );
     }
   }
 

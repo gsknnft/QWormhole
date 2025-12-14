@@ -21,6 +21,7 @@ import type {
   Deserializer,
   Serializer,
   SendOptions,
+  FramingMode,
 } from "src/types/types";
 import { inferMessageType } from "../utils/negentropic-diagnostics";
 
@@ -39,7 +40,7 @@ type InternalOptions<TMessage> = Omit<
   reconnect: QWormholeReconnectOptions;
   serializer: Serializer;
   deserializer: Deserializer<TMessage>;
-  framing: "length-prefixed" | "none";
+  framing: FramingMode;
   rateLimitBytesPerSec?: number;
   rateLimitBurstBytes?: number;
   handshakeSigner?: () => Record<string, unknown>;
@@ -47,7 +48,7 @@ type InternalOptions<TMessage> = Omit<
   heartbeatPayload?: Payload;
 };
 
-type TrustSnapshotReason = "close" | "error" | "disconnect";
+type TrustSnapshotReason = "close" | "error" | "disconnect" | "entropy-related" | "handshake";
 
 export class QWormholeClient<TMessage = Buffer> extends TypedEventEmitter<
   QWormholeClientEvents<TMessage>

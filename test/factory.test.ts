@@ -1,23 +1,25 @@
-import { describe, it, expect, beforeEach, vi, Mock } from "vitest";
+import { describe, it, expect, vi, beforeEach, Mock } from "vitest";
 import { QWormholeClient } from "../src/client";
 import { QWormholeServer } from "../src/server";
-import {
-  getNativeBackend,
-  // NativeTcpClient,
-  isNativeAvailable,
-} from "../src/core/NativeTCPClient";
 import {
   createQWormholeClient,
   createQWormholeServer,
   CreateClientOptions,
 } from "../src/core/factory";
+import {
+  NativeTcpClient,
+  getNativeBackend,
+  isNativeAvailable,
+} from "../src/core/NativeTCPClient";
 
-vi.mock("../src/native", () => {
+vi.mock("../src/core/NativeTCPClient", () => {
   const isNativeAvailableMock = vi.fn(() => true);
   const getNativeBackendMock = vi.fn(() => "lws");
   class NativeTcpClientMock {
-    native = true;
-    backend = "lws";
+    backend: "lws" | "libsocket";
+    constructor(kind?: "lws" | "libsocket") {
+      this.backend = kind ?? "lws";
+    }
   }
   return {
     NativeTcpClient: NativeTcpClientMock,
@@ -26,11 +28,17 @@ vi.mock("../src/native", () => {
   };
 });
 
-describe("createQWormholeClient", () => {
-  const defaultOptions: CreateClientOptions<Buffer> = {};
+const isNativeAvailableMock = isNativeAvailable as Mock;
+const getNativeBackendMock = getNativeBackend as Mock;
+const NativeTcpClientMock = NativeTcpClient as unknown as {
+  new (kind?: "lws" | "libsocket"): { backend: "lws" | "libsocket" };
+};
 
-  const isNativeAvailableMock = isNativeAvailable as Mock;
-  const getNativeBackendMock = getNativeBackend as Mock;
+describe("createQWormholeClient", () => {
+  const defaultOptions: CreateClientOptions<Buffer> = {
+    host: "127.0.0.1",
+    port: 9,
+  };
 
   beforeEach(() => {
     vi.clearAllMocks();
@@ -43,10 +51,10 @@ describe("createQWormholeClient", () => {
       ...defaultOptions,
       preferNative: true,
     });
-    expect(result.client).toHaveProperty("native", true);
+    expect(result.client).toBeInstanceOf(NativeTcpClientMock);
     expect(result.mode).toBe("native-lws");
-    expect(result.nativeBackend).toBe("lws");
     expect(result.nativeAvailable).toBe(true);
+    expect(result.nativeBackend).toBe("lws");
   });
 
   it("returns QWormholeClient when preferNative is false", () => {
@@ -88,7 +96,10 @@ describe("createQWormholeClient", () => {
 
 describe("createQWormholeServer", () => {
   it("always returns QWormholeServer and mode ts", () => {
-    const options = {};
+    const options = {
+      host: "127.0.0.1",
+      port: 0,
+    };
     const result = createQWormholeServer(options);
     expect(result.server).toBeInstanceOf(QWormholeServer);
     expect(result.mode).toBe("ts");

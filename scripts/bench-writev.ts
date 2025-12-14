@@ -182,7 +182,7 @@ const formatCsvRow = (row: Record<string, number | string>): string => {
   return `${header}\n${values}\n`;
 };
 
-async function main(): Promise<void> {
+async function mainBenchWritev(): Promise<void> {
   const payload = buildPayload();
   const pending = new Map<number, bigint>();
   const durationsMs: number[] = [];
@@ -451,6 +451,9 @@ async function main(): Promise<void> {
       clearInterval(logTimer);
     }
     try {
+      clientFlush.buffers = [];
+      clientFlush.bytes = [];
+      clientFlush.backpressureEvents = 0;
       await client.disconnect();
     } catch {
       // ignore
@@ -463,7 +466,10 @@ async function main(): Promise<void> {
   }
 }
 
-void main().catch(err => {
+void mainBenchWritev().catch(err => {
   console.error(err);
   process.exitCode = 1;
 });
+
+
+export { mainBenchWritev };

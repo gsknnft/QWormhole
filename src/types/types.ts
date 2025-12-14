@@ -9,7 +9,7 @@ export type Payload = string | Buffer | Uint8Array | Record<string, unknown>;
 export type Serializer = (payload: Payload) => Buffer;
 export type Deserializer<TMessage = unknown> = (data: Buffer) => TMessage;
 
-export type FramingMode = "length-prefixed" | "none";
+export type FramingMode = "length-prefixed" | "kcp-arq" | "none";
 export type TransportMode = "ts" | "native-lws" | "native-libsocket";
 export type NativeBackend = "lws" | "libsocket";
 
@@ -266,7 +266,7 @@ export interface QWormholeTelemetry {
 
 export interface FlowTrustSnapshot {
   direction: "client" | "server";
-  reason: "close" | "error" | "disconnect";
+  reason: "close" | "error" | "disconnect" | "entropy-related" | "handshake";
   timestamp: number;
   remoteAddress?: string;
   remotePort?: number;

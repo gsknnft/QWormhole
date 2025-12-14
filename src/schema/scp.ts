@@ -150,6 +150,19 @@ export const scpStatePayloadSchema = z
   })
   .catchall(z.unknown());
 
+
+export const revelationSchema = z
+  .object({
+    type: z.literal("revelation"),
+    sid: z.string().min(1),
+    intent: z.string().min(1),
+    payload: z.unknown(),
+    ts: z.number().int().nonnegative(),
+    sig: z.string().min(1),
+  })
+  .catchall(z.unknown());
+
+
 export type HandshakePayload = z.infer<typeof handshakePayloadSchema>;
 export type NegentropicHandshake = z.infer<typeof negentropicHandshakeSchema>;
 export type SCPStatePayload = z.infer<typeof scpStatePayloadSchema>;

@@ -7,19 +7,19 @@
 // - Exposes gossip hooks for SigilNet/NCF layers
 
 import { EventEmitter } from "events";
-import { PeerInfo, PeerId } from "./peer-types";
+import { Peer, PeerId } from "./peer-types";
 import { PeerTable } from "./peer-table";
 import { GossipModule } from "./gossip";
 import { DiscoveryModule } from "./discovery";
 import { QWormholeServer } from "../server";
 import { QWormholeClient } from "../client";
-import { MuxSession } from "../core/mux/mux-session";
+import { MuxSession } from "../transports/mux/mux-session";
 import { PeerRegistry } from "../registry";
 import { SovereignTunnel, createSovereignTunnel } from "../tunnel";
 import type { QWormholeTransport } from "../transports/transport";
-import { WSTransport } from "../transports/ws/ws-transport";
-import { KcpSession } from "../transports/kcp/kcp-session";
-// import { MuxSession } from "src/core/mux/mux-session";
+// import { WSTransport } from "../transports/ws/ws-transport";
+// import { KcpSession } from "../transports/kcp/kcp-session";
+import { createTransport, type TransportKind } from "../transports/factory";
 
 // const transport = await TransportFactory.create(cfg.transport);
 
@@ -79,7 +79,7 @@ export class QWormholeNode extends EventEmitter {
       port: cfg.discoveryPort ?? 43_221,
     });
 
-    this.discovery.on("peer:discovered", (peer: PeerInfo) => {
+    this.discovery.on("peer:discovered", (peer: Peer) => {
       this.handleDiscoveredPeer(peer);
       this.emit("discovery:peer", peer);
     });
@@ -115,7 +115,9 @@ export class QWormholeNode extends EventEmitter {
 
     if (this.cfg.seeds && this.cfg.seeds.length) {
       for (const seed of this.cfg.seeds) {
-        this.dialSeed(seed).catch(err => this.emit("seed:error", { seed, err }));
+        this.dialSeed(seed).catch(err =>
+          this.emit("seed:error", { seed, err }),
+        );
       }
     }
 
@@ -126,15 +128,15 @@ export class QWormholeNode extends EventEmitter {
     this.running = false;
     this.discovery.stop();
     if (this.server) {
-      await this.server.close().catch(err =>
-        this.emit("server:error", { err }),
-      );
+      await this.server
+        .close()
+        .catch(err => this.emit("server:error", { err }));
       this.server = null;
     }
     this.emit("node:stopped", { id: this.cfg.id });
   }
 
-  getSelfPeer(): PeerInfo {
+  getSelfPeer(): Peer {
     return {
       id: this.cfg.id,
       address: `${this.cfg.host}:${this.cfg.port}`,
@@ -175,7 +177,7 @@ export class QWormholeNode extends EventEmitter {
     }
   }
 
-  private handleDiscoveredPeer(peer: PeerInfo): void {
+  private handleDiscoveredPeer(peer: Peer): void {
     if (peer.id === this.cfg.id) return;
     this.peers.upsert(peer);
     void this.registry.registerPeer({
@@ -224,24 +226,13 @@ export class QWormholeNode extends EventEmitter {
     return mux;
   }
 
-  private async createTransport(): Promise<QWormholeTransport | undefined> {
-    const mode = this.cfg.transport ?? "tcp";
-    if (mode === "ws") {
-      const url =
-        this.cfg.url ?? `ws://${this.cfg.host}:${this.cfg.port}/qwormhole`;
-      const ws = new WSTransport(url);
-      await ws.connect();
-      return ws;
-    }
-    if (mode === "kcp") {
-      const kcp = new KcpSession(
-        { address: this.cfg.host, port: this.cfg.port },
-        { conv: 1 },
-      );
-      await kcp.connect();
-      return kcp;
-    }
-    // default: TCP handled by existing QWormholeClient elsewhere
-    return undefined;
+private async createTransport(): Promise<QWormholeTransport | undefined> {
+    const mode: TransportKind = this.cfg.transport ?? "tcp";
+    return createTransport({
+      kind: mode,
+      host: this.cfg.host,
+      port: this.cfg.port,
+      url: this.cfg.url,
+    });
   }
 }

@@ -17,9 +17,9 @@ import type {
   NativeBackend,
   TransportMode,
   FramingMode,
-} from "types";
+} from "../types/types";
 import { BatchFramer } from "./batch-framer";
-import { QWormholeContext } from "types/context";
+import { QWormholeContext } from "src/types/context";
 
 export interface CreateClientOptions<
   TMessage,

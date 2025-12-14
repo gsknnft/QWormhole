@@ -1,9 +1,10 @@
 import { EventEmitter } from "events";
 import WebSocket, { WebSocketServer } from "ws";
-import { MuxSession } from "../../core/mux/mux-session";
+import { MuxSession } from "../mux/mux-session";
 import type { QWormholeTransport } from "../transport";
 
 export class WSTransport extends EventEmitter implements QWormholeTransport {
+  readonly type = "ws" as const;
   public socket: WebSocket | null = null;
   public mux: MuxSession | null = null;
 

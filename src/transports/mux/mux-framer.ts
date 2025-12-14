@@ -10,6 +10,7 @@ function encodeVarint(value: number): Uint8Array {
     v >>>= 7;
   }
   bytes.push(v);
+  
   return Uint8Array.from(bytes);
 }
 

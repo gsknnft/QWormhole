@@ -1,13 +1,12 @@
 // QWormhole/src/node/peer-table.ts
-
-import { PeerId, PeerInfo } from "./peer-types";
+import { PeerId, Peer } from "./peer-types";
 
 export class PeerTable {
-  private peers = new Map<PeerId, PeerInfo>();
+  private peers = new Map<PeerId, Peer>();
 
-  upsert(peer: PeerInfo) {
+  upsert(peer: Peer) {
     const prev = this.peers.get(peer.id);
-    const next: PeerInfo = {
+    const next: Peer = {
       ...(prev || {}),
       ...peer,
       lastSeen: peer.lastSeen || Date.now(),
@@ -15,11 +14,11 @@ export class PeerTable {
     this.peers.set(peer.id, next);
   }
 
-  get(id: PeerId): PeerInfo | undefined {
+  get(id: PeerId): Peer | undefined {
     return this.peers.get(id);
   }
 
-  all(): PeerInfo[] {
+  all(): Peer[] {
     return [...this.peers.values()];
   }
 
@@ -36,7 +35,7 @@ export class PeerTable {
     }
   }
 
-  topByNegentropy(limit = 8): PeerInfo[] {
+  topByNegentropy(limit = 8): Peer[] {
     return this.all()
       .sort((a, b) => (b.negentropicIndex || 0) - (a.negentropicIndex || 0))
       .slice(0, limit);

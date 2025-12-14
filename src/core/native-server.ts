@@ -91,7 +91,12 @@ const resolveBindings = () =>
   (globalThis as unknown as { bindings?: typeof bindings }).bindings ??
   bindings;
 
-const bindingModuleRoot = path.resolve(__dirname, "..");
+/**
+ * bindings() resolves native .node relative to module_root/build/Release.
+ * From src/ (ts-node) or dist/ (compiled), we need to climb two levels to the
+ * package root so build/Release can be found.
+ */
+const bindingModuleRoot = path.resolve(__dirname, "..", "..");
 
 type BindingLoader = (
   target: string | { module_root: string; bindings: string },

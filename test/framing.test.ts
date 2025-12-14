@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { LengthPrefixedFramer } from '../src/framing';
+import { LengthPrefixedFramer } from '../src/core/framing';
 
 function makeBuffer(str: string): Buffer {
   return Buffer.from(str, 'utf8');

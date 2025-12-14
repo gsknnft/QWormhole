@@ -10,7 +10,7 @@ const forceNative = process.env.QWORMHOLE_NATIVE === "1";
 const explicitSkip = process.env.QWORMHOLE_NATIVE === "0";
 const macOsAutoSkip = platform === "darwin" && !forceNative;
 const skipNative = explicitSkip || macOsAutoSkip;
-const nodeGypCmd = process.platform === "win32" ? "node-gyp.cmd" : "node-gyp";
+const nodeGypCmd = process.platform === "win32" ? "node-gyp.cmd" : "node-gyp-build";
 
 const hasNodeGyp = () => {
   const check = spawnSync(nodeGypCmd, ["--version"], { stdio: "ignore" });

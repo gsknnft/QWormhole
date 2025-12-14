@@ -33,6 +33,7 @@ import type {
   QWormholeTelemetry,
   SendOptions,
   QWTlsOptions,
+  FramingMode,
 } from "src/types/types";
 
 const randomId = () =>
@@ -60,7 +61,7 @@ type InternalServerOptions<TMessage> = Omit<
 > & {
   serializer: Serializer;
   deserializer: Deserializer<TMessage>;
-  framing: "length-prefixed" | "none";
+  framing: FramingMode;
   onAuthorizeConnection?: QWormholeServerOptions<TMessage>["onAuthorizeConnection"];
   rateLimitBytesPerSec?: number;
   rateLimitBurstBytes?: number;

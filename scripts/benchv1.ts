@@ -1,3 +1,28 @@
+// CSV output helpers for plotting
+const CSV_FIELDS = [
+  "scenario",
+  "serverMode",
+  "clientMode",
+  "durationMs",
+  "messagesReceived",
+  "bytesReceived",
+  "msgsPerSec",
+  "mbPerSec",
+  "framing",
+];
+const formatCsvHeader = () => CSV_FIELDS.join(",") + "\n";
+const formatCsvRow = (res: any) =>
+  CSV_FIELDS.map(f =>
+    typeof res[f] === "string" ? JSON.stringify(res[f]) : res[f],
+  ).join(",") + "\n";
+
+const getCsvPath = () => {
+  const cli = process.argv.find(arg => arg.startsWith("--csv"));
+  if (cli && cli.includes("=")) return cli.split("=")[1];
+  if (cli) return ""; // --csv with no path: print to stdout
+  if (process.env.QW_BENCH_CSV) return process.env.QW_BENCH_CSV;
+  return undefined;
+};
 import {
   performance,
   PerformanceObserver,
@@ -23,59 +48,8 @@ import type {
   QWormholeServerOptions,
   Serializer,
 } from "../src/types/types";
-import { ScenarioDiagnostics, Scenario, GcTotals, BatchFlushStats, DiagnosticsScope, SendBlockStats, ScenarioResult, DiagnosticsExtras } from "../test/testtypes";
 
-
-
-// CSV output helpers for plotting
-const CSV_FIELDS = [
-  "scenario",
-  "serverMode",
-  "clientMode",
-  "durationMs",
-  "messagesReceived",
-  "bytesReceived",
-  "msgsPerSec",
-  "mbPerSec",
-  "framing",
-  "kcpRttMs",
-  "kcpLossRate",
-  "kcpPending",
-];
-const formatCsvHeader = () => CSV_FIELDS.join(",") + "\n";
-const formatCsvRow = (res: any) =>
-  CSV_FIELDS.map(f =>
-    typeof res[f] === "string" ? JSON.stringify(res[f]) : res[f],
-  ).join(",") + "\n";
-
-const getCsvPath = () => {
-  const cli = process.argv.find(arg => arg.startsWith("--csv"));
-  if (cli && cli.includes("=")) return cli.split("=")[1];
-  if (cli) return ""; // --csv with no path: print to stdout
-  if (process.env.QW_BENCH_CSV) return process.env.QW_BENCH_CSV;
-  return undefined;
-};
-
-type Mode = "ts" | "native-lws" | "native-libsocket" | "kcp" | "kcp-arq";
-
-interface BenchResult {
-  scenario: string;
-  serverMode: Mode;
-  clientMode: Mode;
-  durationMs: number;
-  messagesReceived: number;
-  bytesReceived: number;
-  framing: FramingMode;
-  skipped?: boolean;
-  reason?: string;
-  msgsPerSec?: number;
-  mbPerSec?: number;
-  preferredServerBackend?: NativeBackend;
-  diagnostics?: ScenarioDiagnostics;
-  kcpRttMs?: number;
-  kcpLossRate?: number;
-  kcpPending?: number;
-}
+type Mode = "ts" | "native-lws" | "native-libsocket" | "kcp";
 
 const SOCKET_MODES: Mode[] = ["ts", "native-lws", "native-libsocket"];
 const ALL_MODES: Mode[] = [...SOCKET_MODES, "kcp"];
@@ -91,8 +65,6 @@ function parseModeArg(): Mode[] {
 const PAYLOAD = Buffer.alloc(1024, 1);
 const TOTAL_MESSAGES = 10_000;
 const TIMEOUT_MS = 5000;
-const KCP_TIMEOUT_MS =
-  Number(process.env.QW_KCP_TIMEOUT_MS ?? "20000") || 20000;
 const BENCH_FRAMING: FramingMode =
   process.env.QWORMHOLE_BENCH_FRAMING === "none" ? "none" : "length-prefixed";
 const BENCH_NEG_INDEX = (() => {
@@ -131,6 +103,12 @@ const detectNativeBackend = (backend: "lws" | "libsocket") => {
 const availableLws = detectNativeBackend("lws");
 const availableLibsocket = detectNativeBackend("libsocket");
 
+interface Scenario {
+  id: string;
+  preferNativeServer: boolean;
+  clientMode: Mode;
+  serverBackend?: NativeBackend;
+}
 
 const serverBackends: NativeBackend[] = [];
 if (isNativeServerAvailable("lws")) {
@@ -199,7 +177,81 @@ const deriveBenchCoherence = (): "high" | "medium" | "low" | "chaos" => {
   return "chaos";
 };
 
+type ScenarioResult = {
+  id: string;
+  serverMode: Mode;
+  clientMode: Mode;
+  preferredServerBackend?: NativeBackend;
+  durationMs: number;
+  messagesReceived: number;
+  bytesReceived: number;
+  framing: FramingMode;
+  skipped?: boolean;
+  reason?: string;
+  msgsPerSec?: number;
+  mbPerSec?: number;
+  diagnostics?: ScenarioDiagnostics;
+};
 
+type BatchFlushStats = {
+  flushes: number;
+  totalBuffers: number;
+  totalBytes: number;
+  maxBuffers: number;
+  maxBytes: number;
+};
+
+type GcTotals = {
+  count: number;
+  durationMs: number;
+  byKind: Record<string, number>;
+};
+
+type SendBlockStats = {
+  blockSize: number;
+  samples: number;
+  avgMs: number;
+  minMs: number;
+  maxMs: number;
+};
+
+type ScenarioDiagnostics = {
+  gc: GcTotals;
+  eventLoop: {
+    utilization: number;
+    activeMs: number;
+    idleMs: number;
+  };
+  eventLoopDelay?: {
+    minMs: number;
+    maxMs: number;
+    meanMs: number;
+    stdMs: number;
+    p50Ms: number;
+    p99Ms: number;
+  };
+  backpressure: {
+    events: number;
+    drainEvents: number;
+    maxQueuedBytes: number;
+  };
+  batching: {
+    flushes: number;
+    avgBuffersPerFlush: number;
+    avgBytesPerFlush: number;
+    maxBuffers: number;
+    maxBytes: number;
+  };
+  sendBlocks?: SendBlockStats;
+};
+
+type DiagnosticsExtras = {
+  sendBlocks?: SendBlockStats;
+};
+
+type DiagnosticsScope = {
+  stop: (extras?: DiagnosticsExtras) => ScenarioDiagnostics;
+};
 
 const GC_KIND_LABELS: Record<number, string> = {
   [perfConstants.NODE_PERFORMANCE_GC_MAJOR]: "major",
@@ -614,93 +666,7 @@ async function runScenario({
   };
 }
 
-/**
- * Simple KCP+Mux echo bench (client + server both KCP).
- */
-async function runKcpScenario(): Promise<ScenarioResult> {
-  const server = new KcpServer({ listenPort: 0, conv: 12345 });
-  let serverPort = 0;
-  let messagesReceived = 0;
-  let bytesReceived = 0;
-  let lastKcpMetrics: { rttMs?: number; lossRate?: number; pending?: number } = {};
-
-  server.on("session", ({ mux }) => {
-    mux.on("stream", (stream: { 
-      on: (event: "data", listener: (data: Uint8Array) => void) => void; 
-      write: (data: Uint8Array) => void; 
-    }) => {
-      stream.on("data", (data: Uint8Array) => {
-      messagesReceived += 1;
-      bytesReceived += data?.byteLength ?? 0;
-      stream.write(data ?? new Uint8Array());
-      });
-    });
-  });
-
-  serverPort = await server.start();
-
-  const client = new KcpSession({ address: "127.0.0.1", port: serverPort }, { conv: 12345 });
-  await client.connect();
-  client.on("kcp:metrics", m => {
-    lastKcpMetrics = {
-      rttMs: m.rttMs,
-      lossRate: m.lossRate,
-      pending: m.pending,
-    };
-  });
-
-  const stream = client.mux.createStream();
-  stream.on("data", () => {
-    // count is tracked in server handler; client doesn't need to duplicate
-  });
-
-  const start = performance.now();
-  for (let i = 0; i < TOTAL_MESSAGES; i++) {
-    stream.write(PAYLOAD);
-  }
-
-  await waitForCompletion(
-    () => messagesReceived >= TOTAL_MESSAGES,
-    KCP_TIMEOUT_MS,
-  );
-  const duration = performance.now() - start;
-
-  try {
-    stream.close();
-    client.close();
-    server.stop();
-  } catch(e) {
-    console.error("Error during KCP cleanup:", e);
-  }
-
-
-  const seconds = duration / 1000;
-  const msgsPerSec =
-    seconds > 0 && messagesReceived > 0
-      ? messagesReceived / seconds
-      : undefined;
-  const mbPerSec =
-    seconds > 0 && bytesReceived > 0
-      ? bytesReceived / seconds / (1024 * 1024)
-      : undefined;
-
-  return {
-    id: "kcp-server+kcp",
-    serverMode: "kcp",
-    clientMode: "kcp",
-    durationMs: duration,
-    messagesReceived,
-    bytesReceived,
-    framing: "kcp-arq",
-    msgsPerSec,
-    mbPerSec,
-    kcpRttMs: lastKcpMetrics.rttMs,
-    kcpLossRate: lastKcpMetrics.lossRate,
-    kcpPending: lastKcpMetrics.pending,
-  };
-}
-
-async function mainBench() {
+async function main() {
   const modes = parseModeArg();
   const results: ScenarioResult[] = [];
 
@@ -708,11 +674,6 @@ async function mainBench() {
     if (!modes.includes(scenario.clientMode)) continue;
     const res = await runScenario(scenario);
     results.push(res);
-  }
-
-  if (modes.includes("kcp")) {
-    const kcpRes = await runKcpScenario();
-    results.push(kcpRes);
   }
 
   const csvPath = getCsvPath();
@@ -807,25 +768,8 @@ async function mainBench() {
   }
 }
 
-mainBench().catch(err => {
+main().catch(err => {
   // eslint-disable-next-line no-console
   console.error(err);
   process.exit(1);
 });
-
-export type {
-  Scenario,
-  ScenarioResult,
-  ScenarioDiagnostics,
-  BenchResult,
-};
-
-export {
-  runScenario,
-  runKcpScenario,
-  mainBench,
-  runScenario as _runScenario, // for testing
-  toBytes as _toBytes, // for testing
-  clientModeAvailable as _clientModeAvailable, // for testing
-  serverModeAvailable as _serverModeAvailable, // for testing
-};

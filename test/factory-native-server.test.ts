@@ -6,7 +6,7 @@ const nativeServerMock = {
   NativeQWormholeServer: vi.fn(),
 };
 
-vi.mock("../src/native-server", () => nativeServerMock);
+vi.mock("../src/core/native-server", () => nativeServerMock);
 
 describe("createQWormholeServer transport selection", () => {
   beforeEach(() => {

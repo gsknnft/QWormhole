@@ -3,6 +3,17 @@
   "version": "0.2.1",
   "description": "A high-performance, extensible TypeScript socket library with native bindings for Node.js",
   "private": false,
+  "exports": {
+    ".": {
+      "import": "./dist/index.mjs",
+      "require": "./dist/index.js",
+      "types": "./dist/types/index.d.ts"
+    },
+    "./native": {
+      "import": "./dist/native/qwormhole_lws.node"
+    },
+    "./package.json": "./package.json"
+  },
   "files": [
     "dist",
     "binding.gyp",
@@ -39,7 +50,7 @@
     "rebuild": "node-gyp rebuild && pnpm run rebuild:binds && pnpm build",
     "build:tsc": "tsc --p tsconfig.json",
     "build:rollup": "rollup -c rollup.config.js",
-    "build": "pnpm run build:rollup && vite build && pnpm run build:tsc && pnpm run build:decl",
+    "build": "vite build && pnpm run build:rollup && pnpm run build:tsc && pnpm run build:decl && pnpm run rebuild:binds",
     "build:decl": "tsc --emitDeclarationOnly --declaration --outDir dist/types --project tsconfig.json",
     "install": "node ./scripts/install-native.js && pnpm run rebuild && pnpm run build",
     "dev": "tsup --watch",
@@ -48,6 +59,7 @@
     "app:idev": "cd ./app && pnpm install && pnpm dev:console",
     "test:native": "vitest run test/native.smoke.test.ts",
     "bench": "tsx scripts/bench.ts",
+    "bench2": "tsx scripts/benchv1.ts",
     "bench:writev": "tsx scripts/bench-writev.ts",
     "bench:sweep": "node scripts/run-bench-sweep.js",
     "bench:qwormhole": "pnpm run bench -- --mode=all --diagnostics",
@@ -86,6 +98,7 @@
     "arrowParens": "avoid"
   },
   "devDependencies": {
+    "@sigilnet/qkcptun": "workspace:*",
     "@types/ws": "^8.18.1",
     "@arethetypeswrong/cli": "^0.17.3",
     "@eslint/js": "^9.39.1",
@@ -112,8 +125,7 @@
     "access": "restricted"
   },
   "optionalDependencies": {
-    "@rollup/rollup-linux-x64-gnu": "4.53.3",
-    "node-kcp": "^1.7.5"
+    "@rollup/rollup-linux-x64-gnu": "4.53.3"
   },
   "dependencies": {
     "multicast-dns": "7.2.5",

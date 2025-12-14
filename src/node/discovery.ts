@@ -2,7 +2,7 @@
 
 import dgram from "dgram";
 import { EventEmitter } from "events";
-import { PeerInfo } from "./peer-types";
+import { Peer} from "./peer-types";
 import type { QWormholeNode } from "./node-runtime";
 import mdns from 'multicast-dns';
 
@@ -63,7 +63,7 @@ export class DiscoveryModule extends EventEmitter {
           'target' in srv.data &&
           'port' in srv.data
         ) {
-          const peer: PeerInfo = {
+          const peer: Peer = {
             id: "", // ID would need to be obtained via additional means
             host: srv.data.target,
             port: srv.data.port,
@@ -87,7 +87,7 @@ export class DiscoveryModule extends EventEmitter {
         if (parsed.magic !== this.cfg.magic) return;
         if (!parsed.id || !parsed.host || !parsed.port) return;
 
-        const peer: PeerInfo = {
+        const peer: Peer = {
           id: parsed.id,
           host: parsed.host,
           port: parsed.port,
