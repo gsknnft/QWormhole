@@ -13,7 +13,7 @@ export interface QWormholeContext {
       framer?: BatchFramer;
     },
   ): void;
-
+  
   onFlush?(
     name: string,
     info: { buffers: number; bytes: number; ts: number },

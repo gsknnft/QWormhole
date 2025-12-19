@@ -5,7 +5,6 @@ export class WsServer extends WSTransportServer {
   constructor({port}: {port: number}) {
     super(port);
   }
-  
 
   initialize(): void {
     this.start();

@@ -42,7 +42,6 @@ const randomId = () =>
     : Math.random().toString(36).slice(2);
 
 type ManagedConnection = QWormholeServerConnection & {
-  backpressured: boolean;
   queue: PriorityQueue<Buffer>;
   limiter?: TokenBucket;
   handshakePending: boolean;
@@ -51,6 +50,7 @@ type ManagedConnection = QWormholeServerConnection & {
   entropyMetrics: EntropyMetrics;
   peerIsNative: boolean;
   handshakeMessageDelivered: boolean;
+  tuneFramer?: () => void;
 };
 
 type TrustSnapshotReason = "close" | "error" | "disconnect";
@@ -69,6 +69,15 @@ type InternalServerOptions<TMessage> = Omit<
   tls?: QWTlsOptions;
   emitHandshakeMessages?: boolean;
 };
+
+// const resolveFramerCaps = (sliceSize: number, peerIsNative: boolean) => {
+//   const minBuffers = 8;
+//   const maxBuffers = peerIsNative ? 96 : 48;
+//   const buffers = Math.min(maxBuffers, Math.max(minBuffers, sliceSize * 2));
+//   const maxBytes = peerIsNative ? 128 * 1024 : 64 * 1024;
+//   const flushMs = peerIsNative ? 1 : 2;
+//   return { maxBuffers: buffers, maxBytes, flushMs };
+// };
 
 export class QWormholeServer<TMessage = Buffer> extends TypedEventEmitter<
   QWormholeServerEvents<TMessage>
@@ -255,6 +264,17 @@ export class QWormholeServer<TMessage = Buffer> extends TypedEventEmitter<
   }
 
   private async handleConnection(socket: net.Socket): Promise<void> {
+    // Socket hygiene: disable Nagle and align writable highWaterMark for batching.
+    try {
+      socket.setNoDelay(true);
+      const writableState = (socket as any)._writableState;
+      if (writableState && writableState.highWaterMark < 96 * 1024) {
+        writableState.highWaterMark = 96 * 1024;
+      }
+    } catch {
+      // best-effort
+    }
+
     if (
       this.options.maxClients &&
       this.clients.size >= this.options.maxClients
@@ -386,7 +406,17 @@ export class QWormholeServer<TMessage = Buffer> extends TypedEventEmitter<
     const flowController = outboundFramer
       ? createFlowController(entropyMetrics)
       : undefined;
-    const connection: ManagedConnection = {
+    let connection: ManagedConnection;
+    const tuneFramer = () => {
+      if (!outboundFramer || !flowController) return;
+      const slice = flowController.currentSliceSize;
+      const caps = flowController.resolveFramerCaps(
+        connection?.peerIsNative ?? false,
+      );
+      outboundFramer.setBatchTiming(slice, caps.flushMs);
+      outboundFramer.setFlushCaps(caps.maxBuffers, caps.maxBytes);
+    };
+    connection = {
       id,
       socket,
       remoteAddress: socket.remoteAddress ?? undefined,
@@ -412,11 +442,13 @@ export class QWormholeServer<TMessage = Buffer> extends TypedEventEmitter<
       entropyMetrics,
       peerIsNative: false,
       handshakeMessageDelivered: false,
+      tuneFramer,
     };
 
     if (outboundFramer) {
       outboundFramer.on("backpressure", ({ queuedBytes }) => {
         connection.flowController?.onBackpressure(queuedBytes);
+        tuneFramer();
         this.telemetry.backpressureEvents += 1;
         this.publishTelemetry();
         this.emit("backpressure", {
@@ -428,10 +460,17 @@ export class QWormholeServer<TMessage = Buffer> extends TypedEventEmitter<
       });
       outboundFramer.on("drain", () => {
         connection.flowController?.onDrain();
+        tuneFramer();
         this.telemetry.drainEvents += 1;
         this.publishTelemetry();
         this.emit("drain", { client: connection });
       });
+      outboundFramer.on("flush", ({ bufferCount, totalBytes }) => {
+        flowController?.handleFlushMetrics(bufferCount, totalBytes);
+        tuneFramer();
+      });
+      flowController?.on("sliceDrift", tuneFramer);
+      tuneFramer();
     }
     return connection;
   }
@@ -778,6 +817,10 @@ export class QWormholeServer<TMessage = Buffer> extends TypedEventEmitter<
       connection.flowController = createFlowController(entropyMetrics, {
         peerIsNative,
       });
+      if (connection.tuneFramer) {
+        connection.flowController.on("sliceDrift", connection.tuneFramer);
+        connection.tuneFramer();
+      }
     }
     connection.handshakePending = false;
   }

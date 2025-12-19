@@ -23,7 +23,8 @@ export async function mainKCP() {
     });
   });
 
-  server.start();
+const portInfo = await server.start();
+if (!portInfo) throw new Error("KCP server failed to start");
 
   const client = new KcpSession(
     { address: "127.0.0.1", port: listenPort },
@@ -34,12 +35,14 @@ export async function mainKCP() {
   const mux = new MuxSession(buf => client.send(buf));
   client.on("data", buf => mux.receiveRaw(buf));
 
-  const stream = await mux.createStream();
-  stream.on("data", (data: Uint8Array) => {
-    console.log("[CLIENT] got:", decoder.decode(data));
+  const stream = mux.createStream();
+stream.on("data", (data: Uint8Array) => {
+  console.log("[CLIENT] got:", decoder.decode(data));
+  setTimeout(() => {
     client.close();
     server.stop();
-  });
+  }, 10); // small delay to allow socket to flush
+});
   stream.write(encoder.encode("ping"));
 }
 

@@ -131,9 +131,9 @@ export const FLOW_DEFAULTS = {
   /** Drift step when adjusting slice size */
   DRIFT_STEP: 2,
   /** TS peer max slice clamp (to reduce GC pressure) - low trust */
-  TS_PEER_MAX_SLICE: 16,
+  TS_PEER_MAX_SLICE: 64,
   /** TS peer max slice for high-trust peers (negIndex >= 0.85) */
-  TS_PEER_HIGH_TRUST_MAX_SLICE: 32,
+  TS_PEER_HIGH_TRUST_MAX_SLICE: 96,
   /** Upper bound on token bucket induced delay */
   MAX_RESERVE_DELAY_MS: 200,
 } as const;
@@ -521,9 +521,10 @@ export class FlowController extends TypedEventEmitter<FlowControllerEvents> {
     }
 
     const previousSize = this.sliceSize;
+    // Contract gently (75%) instead of halving to avoid over-thrashing.
     this.sliceSize = Math.max(
       this.policy.minSlice,
-      Math.floor(this.sliceSize / 2),
+      Math.floor(this.sliceSize * 0.75),
     );
 
     if (previousSize !== this.sliceSize) {
@@ -621,6 +622,61 @@ export class FlowController extends TypedEventEmitter<FlowControllerEvents> {
    */
   get currentSliceSize(): number {
     return this.sliceSize;
+  }
+
+  /**
+   * Ingest metrics from an external framer flush (buffers/bytes) to feed adaptive state.
+   */
+  handleFlushMetrics(bufferCount: number, bytes: number): void {
+    // Treat bufferCount as frameCount for adaptive purposes
+    this.handlePostFlushTelemetry(bufferCount, bytes, 0);
+  }
+
+  /**
+   * Suggest writev caps and flush cadence based on current adaptive state and peer trust.
+   */
+  resolveFramerCaps(peerIsNative: boolean): {
+    maxBuffers: number;
+    maxBytes: number;
+    flushMs: number;
+  } {
+    // Trust-scaled envelope: native peers get the widest caps, TS peers scale with negIndex/coherence.
+    const trust = peerIsNative
+      ? 1
+      : Math.max(
+          0.5,
+          Math.min(1, this.policy.nIndex ?? this.policy.coherence ?? 0.5),
+        );
+
+    const bounds = peerIsNative
+      ? { minBuf: 8, maxBuf: 96, minBytes: 16 * 1024, maxBytes: 128 * 1024 }
+      : { minBuf: 8, maxBuf: 96, minBytes: 16 * 1024, maxBytes: 96 * 1024 };
+
+    // Start near slice*2, but allow expansion toward the trust envelope.
+    let maxBuffers = Math.min(bounds.maxBuf, Math.max(bounds.minBuf, this.sliceSize * 2));
+    let maxBytes = Math.min(bounds.maxBytes, Math.max(bounds.minBytes, bounds.maxBytes * trust));
+    let flushMs = peerIsNative ? 1 : 2;
+
+    const adaptive = this.adaptive;
+    if (adaptive) {
+      const { state, config } = adaptive;
+      const idleOK = state.eluIdleRatioAvg >= config.idleTarget;
+      const gcOK = state.gcPauseMaxMs <= config.gcBudgetMs;
+      const bp = state.backpressureCount > 0 || this.backpressureCount > 0;
+
+      // Only contract on real pressure (GC/backpressure); otherwise nudge caps upward.
+      if (!idleOK || !gcOK || bp) {
+        maxBuffers = Math.max(bounds.minBuf, Math.round(maxBuffers * 0.75));
+        maxBytes = Math.max(bounds.minBytes, Math.round(maxBytes * 0.75));
+        flushMs = Math.max(flushMs, 2 + (bp ? 1 : 0));
+      } else {
+        maxBuffers = Math.min(bounds.maxBuf, Math.round(maxBuffers * 1.1));
+        maxBytes = Math.min(bounds.maxBytes, Math.round(maxBytes * 1.05));
+        flushMs = Math.max(1, flushMs);
+      }
+    }
+
+    return { maxBuffers, maxBytes, flushMs };
   }
 
   /**

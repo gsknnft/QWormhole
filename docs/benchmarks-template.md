@@ -27,3 +27,7 @@ python scripts/plot_bench.py --separate # individual windows
 **Artifact paths**
 - CSVs: `packages/QWormhole/data/*.csv`
 - Plots: save from matplotlib or wire into `docs/assets/qwormhole-bench.png` for README embedding.
+
+**Env overrides (TS writev/length-prefixed)**
+- `QW_WRITEV_BATCH_SIZE` (default 64) — frames per flush; try 64–96 based on sweeps.
+- `QW_WRITEV_FLUSH_MS` (default 1) — flush interval for partial batches; try 1–4 ms if latency allows.

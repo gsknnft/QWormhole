@@ -94,12 +94,27 @@ export class QWormholeClient<TMessage = Buffer> extends TypedEventEmitter<
       this.flowController = createFlowController(this.entropyMetrics, {
         peerIsNative: this.peerIsNative,
       });
+      const tuneFramer = () => {
+        if (!this.outboundFramer || !this.flowController) return;
+        const slice = this.flowController.currentSliceSize;
+        const caps = this.flowController.resolveFramerCaps(this.peerIsNative);
+        this.outboundFramer.setBatchTiming(slice, caps.flushMs);
+        this.outboundFramer.setFlushCaps(caps.maxBuffers, caps.maxBytes);
+      };
       this.outboundFramer.on("backpressure", ({ queuedBytes }) => {
         this.flowController?.onBackpressure(queuedBytes);
+        tuneFramer();
       });
       this.outboundFramer.on("drain", () => {
         this.flowController?.onDrain();
+        tuneFramer();
       });
+      this.outboundFramer.on("flush", ({ bufferCount, totalBytes }) => {
+        this.flowController?.handleFlushMetrics(bufferCount, totalBytes);
+        tuneFramer();
+      });
+      this.flowController.on("sliceDrift", tuneFramer);
+      tuneFramer();
     }
     if (this.options.rateLimitBytesPerSec) {
       this.limiter = new TokenBucket(

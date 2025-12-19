@@ -92,8 +92,8 @@ export const ENTROPY_THRESHOLDS = {
  * Default batch sizes per policy mode
  */
 export const BATCH_SIZES = {
-  "trust-zero": 64,
-  "trust-light": 32,
+  "trust-zero": Number(process.env.QW_WRITEV_BATCH_SIZE) || 64,
+  "trust-light": Number(process.env.QW_WRITEV_BATCH_SIZE) || 32,
   immune: 8,
   paranoia: 1,
 } as const;

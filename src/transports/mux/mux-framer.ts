@@ -1,6 +1,8 @@
 import { MuxFrame, MuxFrameType } from "./mux-frame";
 import { MuxError } from "./mux-error";
 
+const MUX_DEBUG = process.env.QW_KCP_DEBUG === "1";
+
 // Simple varint helpers (unsigned)
 function encodeVarint(value: number): Uint8Array {
   const bytes: number[] = [];
@@ -57,12 +59,28 @@ export class MuxFramer {
     if (frame.type === "window") {
       const win = frame.window ?? 0;
       headerParts.push(encodeVarint(win));
-      return concatBuffers(headerParts);
+      const out = concatBuffers(headerParts);
+      if (MUX_DEBUG) {
+        console.log("[mux:encode]", {
+          type: frame.type,
+          streamId: frame.streamId,
+          len: 0,
+        });
+      }
+      return out;
     }
 
     const payload = frame.payload ?? new Uint8Array();
     headerParts.push(encodeVarint(payload.length));
-    return concatBuffers([...headerParts, payload]);
+    const out = concatBuffers([...headerParts, payload]);
+    if (MUX_DEBUG) {
+      console.log("[mux:encode]", {
+        type: frame.type,
+        streamId: frame.streamId,
+        len: payload.length,
+      });
+    }
+    return out;
   }
 
   decode(buf: Uint8Array): MuxFrame[] {
@@ -95,7 +113,15 @@ export class MuxFramer {
       }
       const payload = buf.subarray(offset, offset + len);
       offset += len;
-      frames.push({ type, streamId, payload });
+      const frame = { type, streamId, payload } as MuxFrame;
+      frames.push(frame);
+      if (MUX_DEBUG) {
+        console.log("[mux:decode]", {
+          type,
+          streamId,
+          len,
+        });
+      }
     }
     return frames;
   }

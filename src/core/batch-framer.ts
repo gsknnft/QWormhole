@@ -14,9 +14,23 @@ import { TypedEventEmitter } from "../utils/typedEmitter";
 
 const HEADER_LENGTH = 4;
 const DEFAULT_MAX_FRAME_LENGTH = 4 * 1024 * 1024; // 4 MiB
-const DEFAULT_BATCH_SIZE = 64;
+const ENV_BATCH_SIZE = process.env.QW_WRITEV_BATCH_SIZE
+  ? Number(process.env.QW_WRITEV_BATCH_SIZE)
+  : undefined;
+const ENV_FLUSH_INTERVAL_MS = process.env.QW_WRITEV_FLUSH_MS
+  ? Number(process.env.QW_WRITEV_FLUSH_MS)
+  : undefined;
+
+const DEFAULT_BATCH_SIZE = Number.isFinite(ENV_BATCH_SIZE)
+  ? ENV_BATCH_SIZE!
+  : 96;
 const DEFAULT_RING_SIZE = 128;
-const DEFAULT_FLUSH_INTERVAL_MS = 1;
+const DEFAULT_FLUSH_INTERVAL_MS = Number.isFinite(ENV_FLUSH_INTERVAL_MS)
+  ? ENV_FLUSH_INTERVAL_MS!
+  : 1;
+// Do not let env silently clamp caps; FlowController governs at runtime.
+const DEFAULT_MAX_BUFFERS_PER_FLUSH = 64;
+const DEFAULT_MAX_BYTES_PER_FLUSH = 96 * 1024; // 96 KiB budget per writev
 
 interface BatchFramerEvents {
   message: Buffer;
@@ -49,6 +63,10 @@ export interface BatchFramerOptions {
   flushIntervalMs?: number;
   /** Enable writev batching (default: true) */
   enableWritev?: boolean;
+  /** Maximum buffers to send per writev flush (default: env or 32) */
+  maxBuffersPerFlush?: number;
+  /** Maximum bytes to send per writev flush (default: env or 64 KiB) */
+  maxBytesPerFlush?: number;
 }
 
 /**
@@ -65,9 +83,11 @@ interface RingSlot {
  */
 export class BatchFramer extends TypedEventEmitter<BatchFramerEvents> {
   private readonly maxFrameLength: number;
-  private readonly batchSize: number;
+  private batchSize: number;
   private readonly enableWritev: boolean;
-  private readonly flushIntervalMs: number;
+  private flushIntervalMs: number;
+  private maxBuffersPerFlush: number;
+  private maxBytesPerFlush: number;
 
   // Ring buffer for preallocated buffers
   private readonly ring: RingSlot[];
@@ -100,6 +120,10 @@ export class BatchFramer extends TypedEventEmitter<BatchFramerEvents> {
     this.enableWritev = options?.enableWritev ?? true;
     this.flushIntervalMs =
       options?.flushIntervalMs ?? DEFAULT_FLUSH_INTERVAL_MS;
+    this.maxBuffersPerFlush =
+      options?.maxBuffersPerFlush ?? DEFAULT_MAX_BUFFERS_PER_FLUSH;
+    this.maxBytesPerFlush =
+      options?.maxBytesPerFlush ?? DEFAULT_MAX_BYTES_PER_FLUSH;
 
     // Initialize ring buffer
     const ringSize = options?.ringSize ?? DEFAULT_RING_SIZE;
@@ -108,6 +132,30 @@ export class BatchFramer extends TypedEventEmitter<BatchFramerEvents> {
       length: 0,
       inUse: false,
     }));
+  }
+
+  /**
+   * Update flush caps (buffers / bytes) at runtime, primarily for tuning/benching.
+   */
+  setFlushCaps(maxBuffersPerFlush?: number, maxBytesPerFlush?: number): void {
+    if (typeof maxBuffersPerFlush === "number" && Number.isFinite(maxBuffersPerFlush) && maxBuffersPerFlush > 0) {
+      this.maxBuffersPerFlush = maxBuffersPerFlush;
+    }
+    if (typeof maxBytesPerFlush === "number" && Number.isFinite(maxBytesPerFlush) && maxBytesPerFlush > 0) {
+      this.maxBytesPerFlush = maxBytesPerFlush;
+    }
+  }
+
+  /**
+   * Update batch sizing and flush interval at runtime (bench-only).
+   */
+  setBatchTiming(batchSize?: number, flushIntervalMs?: number): void {
+    if (typeof batchSize === "number" && Number.isFinite(batchSize) && batchSize > 0) {
+      this.batchSize = batchSize;
+    }
+    if (typeof flushIntervalMs === "number" && Number.isFinite(flushIntervalMs) && flushIntervalMs >= 0) {
+      this.flushIntervalMs = flushIntervalMs;
+    }
   }
 
   /**
@@ -205,7 +253,33 @@ export class BatchFramer extends TypedEventEmitter<BatchFramerEvents> {
 
     try {
       if (this.enableWritev && buffers.length > 1) {
-        await this.writevBatch(buffers);
+        // chunk by caps (buffers and bytes) to avoid overruns/backpressure storms
+        let idx = 0;
+        while (idx < buffers.length) {
+          let count = 0;
+          let bytes = 0;
+          const chunk: Buffer[] = [];
+          while (idx < buffers.length) {
+            const next = buffers[idx];
+            const nextBytes = bytes + next.length;
+            if (
+              count >= this.maxBuffersPerFlush ||
+              nextBytes > this.maxBytesPerFlush
+            ) {
+              break;
+            }
+            chunk.push(next);
+            bytes = nextBytes;
+            count += 1;
+            idx += 1;
+          }
+          // safety: ensure progress even if a single buffer exceeds cap
+          if (chunk.length === 0) {
+            chunk.push(buffers[idx]);
+            idx += 1;
+          }
+          await this.writevBatch(chunk);
+        }
       } else {
         const combined = Buffer.concat(buffers);
         await this.writeBuffer(combined);

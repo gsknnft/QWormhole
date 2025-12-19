@@ -92,6 +92,7 @@ export class QWormholeNode extends EventEmitter {
   }
 
   private async initServer(): Promise<void> {
+    
     this.server = new QWormholeServer({
       host: this.cfg.host,
       port: this.cfg.port,

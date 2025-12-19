@@ -15,12 +15,23 @@ const root = path.resolve(__dirname, "..");
 const dataDir = path.join(root, "data");
 
 const parseList = (value, fallback) =>
-  value ? value.split(",").map(v => Number(v.trim())).filter(Number.isFinite) : fallback;
+  value
+    ? value
+        .split(",")
+        .map(v => Number(v.trim()))
+        .filter(Number.isFinite)
+    : fallback;
 
-const batches = parseList(process.env.BATCHES, [8, 16, 32, 64]);
-const flushes = parseList(process.env.FLUSHES, [1]);
+// Defaults favor higher throughput while keeping latency reasonable.
+// Tuned matrix: buffers {16, 32, 64}, flush {1, 2} (override with BATCHES/FLUSHES env).
+const batches = parseList(process.env.BATCHES, [16, 32, 64]);
+const flushes = parseList(process.env.FLUSHES, [1, 2]);
 const frames = Number(process.env.FRAMES || "10000");
 const payload = Number(process.env.PAYLOAD || "1024");
+const jitter = Number(process.env.JITTER || "0");
+const adapt = process.env.ADAPT === "1" || process.env.ADAPT === "true";
+const bpThreshold = Number(process.env.BP_THRESHOLD || "200");
+const batchMin = Number(process.env.BATCH_MIN || "4");
 
 if (!fs.existsSync(dataDir)) {
   fs.mkdirSync(dataDir, { recursive: true });
@@ -40,6 +51,10 @@ const run = (batch, flushMs) =>
       `--payload=${payload}`,
       `--csv=${csvPath}`,
     ];
+    if (jitter > 0) args.push(`--jitter=${jitter}`);
+    if (adapt) {
+      args.push("--adapt", `--bpThreshold=${bpThreshold}`, `--batchMin=${batchMin}`);
+    }
 
     const proc = spawn("pnpm", args, {
       cwd: root,

@@ -33,6 +33,41 @@ export interface QWTlsOptions {
   };
 }
 
+type QWEnvelopeBase = {
+  v: 1;
+  id: string;
+};
+
+export type QRequest<P = unknown> = QWEnvelopeBase & {
+  method: string;
+  params?: P;
+};
+
+export type QResponse<R = unknown> = QWEnvelopeBase & {
+  result?: R;
+  error?: string;
+};
+
+export interface QWormholeRequest {
+  host: string;
+  port: number;
+  useTls?: boolean;
+  path?: string;
+  headers?: Record<string, string>;
+  subprotocols?: string[];
+  connectTimeoutMs?: number;
+  idleTimeoutMs?: number;
+  interfaceName?: string;
+  localAddress?: string;
+  localPort?: number;
+}
+
+export interface QWormholeResponse {
+  statusCode: number;
+  statusMessage: string;
+  headers: Record<string, string | string[]>;
+}
+
 export interface QWormholeReconnectOptions {
   enabled: boolean;
   initialDelayMs: number;
@@ -197,6 +232,7 @@ export interface QWormholeServerConnection {
   socket: net.Socket;
   remoteAddress?: string;
   remotePort?: number;
+  backpressured: boolean;
   handshake?: {
     version?: string;
     tags?: Record<string, unknown>;

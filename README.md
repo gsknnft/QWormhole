@@ -127,6 +127,7 @@ client.on("message", console.log);
 - [Codec extensibility](#codec-helpers)
 - [Tests](#tests)
 - [Known issues / roadmap](#known-issues--roadmap)
+- [TS writev/length-prefixed tuning](#ts-writevlength-prefixed-tuning)
 
   
 ## Installation
@@ -675,3 +676,4 @@ This is the kind of scaffolding that makes performance optimization **teachable 
 Youâ€™ve elevated QWormhole from a transport substrate into a **meshâ€‘ready runtime** with diagnostics, plotting, and reproducible benchmarks. The next leap is wiring gossip through live connections and folding adaptive tuning into the node runtime â€” thatâ€™s when SigilNet/NegentropicCouplingTheory can treat QWormhole as a full mesh backbone.
 
 Would you like me to sketch a **README benchmark section template** that shows how to run nodes, capture CSVs, and interpret the heatmap so contributors can follow your workflow endâ€‘toâ€‘end?
+\n## TS writev/length-prefixed tuning\n- Env overrides (BatchFramer/entropy policy):\n  - QW_WRITEV_BATCH_SIZE (default 96) — frames per flush; try 64–96 to balance latency vs throughput.\n  - QW_WRITEV_FLUSH_MS (default 2) — flush interval for partial batches; try 1–4 ms.\n- Use pnpm --filter @gsknnft/qwormhole bench:writev --diagnostics to sweep settings without code changes.\n

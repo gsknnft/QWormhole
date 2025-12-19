@@ -18,11 +18,11 @@ export interface KcpConfig {
 
 export const DEFAULT_KCP_CONFIG: Required<Omit<KcpConfig, "conv">> = {
   mtu: 1350,
-  sndWnd: 128,
-  rcvWnd: 128,
+  sndWnd: 512,
+  rcvWnd: 512,
   stream: true,
   ackNodelay: false,
-  updateIntervalMs: 10,
+  updateIntervalMs: 2,
   nodelay: {
     nodelay: 1,
     interval: 10,

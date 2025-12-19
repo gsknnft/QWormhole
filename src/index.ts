@@ -2,6 +2,13 @@ export { QWormholeClient } from "./client";
 export { QWormholeServer } from "./server";
 export { LengthPrefixedFramer } from "./core/framing";
 export { BatchFramer, createBatchFramer } from "./core/batch-framer";
+export type { QWEnvelope } from "./http/envelope";
+export {
+  envelopeSerializer,
+  envelopeDeserializer,
+  attachRpcClient,
+  attachRpcServer,
+} from "./http";
 export {
   defaultSerializer,
   bufferDeserializer,
@@ -76,6 +83,8 @@ export {
 } from "./core/flow-controller";
 export type {
   Payload,
+  QWormholeRequest,
+  QWormholeResponse,
   QWormholeClientEvents,
   QWormholeClientOptions,
   QWormholeServerConnection,

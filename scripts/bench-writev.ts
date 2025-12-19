@@ -71,23 +71,35 @@ const TIMEOUT_MS = numberFlag({
 const BATCH_SIZE = numberFlag({
   name: "batch",
   env: "QW_WRITEV_BATCH",
-  defaultValue: 64,
+  defaultValue:
+    Number(process.env.QW_WRITEV_BATCH_SIZE ?? process.env.QW_WRITEV_BATCH) ||
+    96,
 });
 const FLUSH_INTERVAL_MS = numberFlag({
   name: "flushMs",
   env: "QW_WRITEV_FLUSH_MS",
-  defaultValue: 1,
+  defaultValue: Number(process.env.QW_WRITEV_FLUSH_MS) || 1,
+});
+const MAX_BUFFERS_PER_FLUSH = numberFlag({
+  name: "maxBuffers",
+  env: "QW_WRITEV_MAX_BUFFERS",
+  defaultValue: Number(process.env.QW_WRITEV_MAX_BUFFERS) || 64,
+});
+const MAX_BYTES_PER_FLUSH = numberFlag({
+  name: "maxBytes",
+  env: "QW_WRITEV_MAX_BYTES",
+  defaultValue: Number(process.env.QW_WRITEV_MAX_BYTES) || 96 * 1024,
 });
 const JITTER_MS = numberFlag({
   name: "jitter",
   env: "QW_WRITEV_JITTER",
   defaultValue: 0,
 });
-const ADAPT_BACKPRESSURE = boolFlag("adapt", "QW_WRITEV_ADAPT", false);
+const ADAPT_BACKPRESSURE = boolFlag("adapt", "QW_WRITEV_ADAPT", true);
 const BACKPRESSURE_THRESHOLD = numberFlag({
   name: "bpThreshold",
   env: "QW_WRITEV_BP_THRESHOLD",
-  defaultValue: 200,
+  defaultValue: 350,
 });
 const MIN_BATCH_SIZE = numberFlag({
   name: "batchMin",
@@ -166,12 +178,8 @@ const tuneFramer = (
   flushMs: number,
 ): void => {
   if (!framer) return;
-  const mutable = framer as unknown as {
-    batchSize?: number;
-    flushIntervalMs?: number;
-  };
-  mutable.batchSize = batchSize;
-  mutable.flushIntervalMs = applyJitter(flushMs);
+  framer.setBatchTiming(batchSize, applyJitter(flushMs));
+  framer.setFlushCaps(MAX_BUFFERS_PER_FLUSH, MAX_BYTES_PER_FLUSH);
 };
 
 const formatCsvRow = (row: Record<string, number | string>): string => {

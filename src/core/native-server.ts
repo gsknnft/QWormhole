@@ -339,6 +339,7 @@ export class NativeQWormholeServer<TMessage = Buffer> extends TypedEventEmitter<
       remoteAddress: snapshot.remoteAddress,
       remotePort: snapshot.remotePort,
       handshake: snapshot.handshake,
+      backpressured: false,
       socket: {} as net.Socket,
       send: sendNotSupported,
       end: close,

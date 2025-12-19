@@ -23,9 +23,9 @@ import type {
   QWormholeServerOptions,
   Serializer,
 } from "../src/types/types";
+import * as dotenv from "dotenv";
 import { ScenarioDiagnostics, Scenario, GcTotals, BatchFlushStats, DiagnosticsScope, SendBlockStats, ScenarioResult, DiagnosticsExtras } from "../test/testtypes";
-
-
+dotenv.config();
 
 // CSV output helpers for plotting
 const CSV_FIELDS = [
@@ -93,6 +93,16 @@ const TOTAL_MESSAGES = 10_000;
 const TIMEOUT_MS = 5000;
 const KCP_TIMEOUT_MS =
   Number(process.env.QW_KCP_TIMEOUT_MS ?? "20000") || 20000;
+const envNumber = (key: string): number | undefined => {
+  const raw = process.env[key];
+  if (!raw) return undefined;
+  const parsed = Number(raw);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : undefined;
+};
+const KCP_INTERVAL_MS = envNumber("QW_KCP_INTERVAL_MS");
+const KCP_SND_WND = envNumber("QW_KCP_SND_WND");
+const KCP_RCV_WND = envNumber("QW_KCP_RCV_WND");
+const KCP_MTU = envNumber("QW_KCP_MTU");
 const BENCH_FRAMING: FramingMode =
   process.env.QWORMHOLE_BENCH_FRAMING === "none" ? "none" : "length-prefixed";
 const BENCH_NEG_INDEX = (() => {
@@ -618,7 +628,14 @@ async function runScenario({
  * Simple KCP+Mux echo bench (client + server both KCP).
  */
 async function runKcpScenario(): Promise<ScenarioResult> {
-  const server = new KcpServer({ listenPort: 0, conv: 12345 });
+  const server = new KcpServer({
+    listenPort: 0,
+    conv: 12345,
+    updateIntervalMs: KCP_INTERVAL_MS,
+    sndWnd: KCP_SND_WND,
+    rcvWnd: KCP_RCV_WND,
+    mtu: KCP_MTU,
+  });
   let serverPort = 0;
   let messagesReceived = 0;
   let bytesReceived = 0;
@@ -639,7 +656,16 @@ async function runKcpScenario(): Promise<ScenarioResult> {
 
   serverPort = await server.start();
 
-  const client = new KcpSession({ address: "127.0.0.1", port: serverPort }, { conv: 12345 });
+  const client = new KcpSession(
+    { address: "127.0.0.1", port: serverPort },
+    {
+      conv: 12345,
+      updateIntervalMs: KCP_INTERVAL_MS,
+      sndWnd: KCP_SND_WND,
+      rcvWnd: KCP_RCV_WND,
+      mtu: KCP_MTU,
+    },
+  );
   await client.connect();
   client.on("kcp:metrics", m => {
     lastKcpMetrics = {

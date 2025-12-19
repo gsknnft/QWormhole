@@ -4,6 +4,8 @@ import { MuxFramer } from "./mux-framer";
 import { MuxFrame } from "./mux-frame";
 import { MuxError } from "./mux-error";
 
+const MUX_DEBUG = process.env.QW_KCP_DEBUG === "1";
+
 export interface MuxSessionOptions {
   allowHalfOpen?: boolean;
   initialStreamId?: number;
@@ -84,6 +86,13 @@ export class MuxSession extends EventEmitter {
 
   sendFrame(frame: MuxFrame): void {
     const encoded = this.framer.encode(frame);
+    if (MUX_DEBUG) {
+      console.log("[mux:sendFrame]", {
+        type: frame.type,
+        streamId: frame.streamId,
+        len: frame.payload?.length ?? 0,
+      });
+    }
     this.sendRaw(encoded);
   }
 }
