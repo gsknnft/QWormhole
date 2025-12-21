@@ -11,7 +11,11 @@ import {
   NativeTcpClient,
   createQWormholeServer,
   isNativeAvailable,
+  QuicTransport,
+  QuicServer,
+  isQuicAvailable,
 } from "../src/index";
+import { shutdownFlowControllerMonitors } from "../src/core/flow-controller";
 import { isNativeServerAvailable } from "../src/core/native-server";
 import { BatchFramer } from "../src/core/batch-framer";
 import { KcpServer } from "../src/transports/kcp/kcp-server";
@@ -78,7 +82,7 @@ interface BenchResult {
 }
 
 const SOCKET_MODES: Mode[] = ["ts", "native-lws", "native-libsocket"];
-const ALL_MODES: Mode[] = [...SOCKET_MODES, "kcp"];
+const ALL_MODES: Mode[] = [...SOCKET_MODES, "kcp", "quic"];
 function parseModeArg(): Mode[] {
   const arg = process.argv.find(a => a.startsWith("--mode="));
   if (!arg) return ALL_MODES;
@@ -191,6 +195,7 @@ const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
 const clientModeAvailable = (mode: Mode): boolean => {
   if (mode === "ts") return true;
   if (mode === "native-lws") return availableLws && isNativeAvailable();
+  if (mode === "quic") return isQuicAvailable();
   return availableLibsocket && isNativeAvailable();
 };
 
@@ -481,7 +486,8 @@ async function runScenario({
     preferNative: preferNativeServer,
     preferredNativeBackend: serverBackend,
   } as BenchServerOptions);
-  if (preferNativeServer && serverResult.mode !== "native-lws") {
+  if (preferNativeServer && serverResult.mode === "ts") {
+    await serverResult.server.close();
     return {
       id,
       serverMode: serverResult.mode as Mode,
@@ -726,6 +732,95 @@ async function runKcpScenario(): Promise<ScenarioResult> {
   };
 }
 
+async function runQuicScenario(): Promise<ScenarioResult> {
+  if (!isQuicAvailable()) {
+    return {
+      id: "quic-server+quic",
+      serverMode: "quic",
+      clientMode: "quic",
+      durationMs: 0,
+      messagesReceived: 0,
+      bytesReceived: 0,
+      framing: "quic-stream",
+      skipped: true,
+      reason: "QUIC binding unavailable",
+    };
+  }
+
+  const server = new QuicServer({ host: "127.0.0.1", port: 0 });
+  await server.listen();
+  const port = server.port ?? 0;
+  if (port === 0) {
+    server.close();
+    return {
+      id: "quic-server+quic",
+      serverMode: "quic",
+      clientMode: "quic",
+      durationMs: 0,
+      messagesReceived: 0,
+      bytesReceived: 0,
+      framing: "quic-stream",
+      skipped: true,
+      reason: "QUIC server failed to bind",
+    };
+  }
+
+  let messagesReceived = 0;
+  let bytesReceived = 0;
+
+  server.on("connection", conn => {
+    conn.onData(data => {
+      // echo
+      conn.send(data);
+    });
+  });
+
+  const client = new QuicTransport({ host: "127.0.0.1", port });
+  await client.connect();
+  client.onData(data => {
+    messagesReceived += 1;
+    bytesReceived += data.length;
+  });
+
+  const start = performance.now();
+  try {
+    for (let i = 0; i < TOTAL_MESSAGES; i++) {
+      client.send(PAYLOAD);
+    }
+
+    await waitForCompletion(
+      () => messagesReceived >= TOTAL_MESSAGES,
+      TIMEOUT_MS,
+    );
+  } finally {
+    await client.close();
+    server.close();
+  }
+
+  const duration = performance.now() - start;
+  const seconds = duration / 1000;
+  const msgsPerSec =
+    seconds > 0 && messagesReceived > 0
+      ? messagesReceived / seconds
+      : undefined;
+  const mbPerSec =
+    seconds > 0 && bytesReceived > 0
+      ? bytesReceived / seconds / (1024 * 1024)
+      : undefined;
+
+  return {
+    id: "quic-server+quic",
+    serverMode: "quic",
+    clientMode: "quic",
+    durationMs: duration,
+    messagesReceived,
+    bytesReceived,
+    framing: "quic-stream",
+    msgsPerSec,
+    mbPerSec,
+  };
+}
+
 async function mainBench() {
   const modes = parseModeArg();
   const results: ScenarioResult[] = [];
@@ -739,6 +834,10 @@ async function mainBench() {
   if (modes.includes("kcp")) {
     const kcpRes = await runKcpScenario();
     results.push(kcpRes);
+  }
+  if (modes.includes("quic")) {
+    const quicRes = await runQuicScenario();
+    results.push(quicRes);
   }
 
   const csvPath = getCsvPath();
@@ -833,11 +932,18 @@ async function mainBench() {
   }
 }
 
-mainBench().catch(err => {
-  // eslint-disable-next-line no-console
-  console.error(err);
-  process.exit(1);
-});
+mainBench()
+  .then(() => {
+    // Ensure any event-loop monitors created by FlowController don't keep the process alive.
+    shutdownFlowControllerMonitors();
+    process.exit(0);
+  })
+  .catch(err => {
+    // eslint-disable-next-line no-console
+    console.error(err);
+    shutdownFlowControllerMonitors();
+    process.exit(1);
+  });
 
 export type {
   Scenario,

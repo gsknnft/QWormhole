@@ -1,8 +1,9 @@
 import type { QWormholeTransport } from "./transport";
 import { WSTransport } from "./ws/ws-transport";
 import { KcpSession } from "./kcp/kcp-session";
+import { QuicTransport } from "./quic";
 
-export type TransportKind = "tcp" | "ws" | "kcp";
+export type TransportKind = "tcp" | "ws" | "kcp" | "quic";
 
 export interface TransportFactoryConfig {
   kind: TransportKind;
@@ -30,6 +31,14 @@ export async function createTransport(
     );
     await kcp.connect();
     return kcp;
+  }
+  if (cfg.kind === "quic") {
+    if (!QuicTransport.isAvailable()) {
+      return undefined;
+    }
+    const quic = new QuicTransport({ host: cfg.host, port: cfg.port });
+    await quic.connect();
+    return quic;
   }
   return undefined;
 }

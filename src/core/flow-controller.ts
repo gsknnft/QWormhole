@@ -149,12 +149,33 @@ const ADAPTIVE_DEFAULTS: AdaptiveConfig = {
   backpressureCooldown: 64,
 };
 
-const loopDelayMonitor =
+type LoopDelayHistogram =
+  ReturnType<typeof monitorEventLoopDelay> | undefined;
+
+const activeLoopMonitors = new Set<LoopDelayHistogram>();
+
+const trackMonitor = (hist?: LoopDelayHistogram): void => {
+  if (hist) activeLoopMonitors.add(hist);
+};
+
+const disableMonitors = (): void => {
+  for (const hist of activeLoopMonitors) {
+    try {
+      hist?.disable();
+    } catch {
+      // ignore
+    }
+  }
+  activeLoopMonitors.clear();
+};
+
+const loopDelayMonitor: LoopDelayHistogram =
   typeof monitorEventLoopDelay === "function"
     ? monitorEventLoopDelay({ resolution: 20 })
     : undefined;
 if (loopDelayMonitor) {
   loopDelayMonitor.enable();
+  trackMonitor(loopDelayMonitor);
 }
 
 let recentGcPauseMs = 0;
@@ -364,6 +385,7 @@ export class FlowController extends TypedEventEmitter<FlowControllerEvents> {
   private sliceSize: number;
   private readonly bucket: TokenBucket;
   private readonly policy: SessionFlowPolicy;
+  private readonly maxSliceBound: number;
   private readonly forceSliceSize?: number;
   private readonly effectiveRateBytesPerSec: number;
   private flushing = false;
@@ -385,6 +407,7 @@ export class FlowController extends TypedEventEmitter<FlowControllerEvents> {
   ) {
     super();
     this.policy = policy;
+    this.maxSliceBound = initOptions?.bounds?.maxSlice ?? policy.maxSlice;
 
     const peerProfile: PeerProfile = initOptions?.peerProfile ?? {
       isNative: policy.peerIsNative,
@@ -398,6 +421,7 @@ export class FlowController extends TypedEventEmitter<FlowControllerEvents> {
     this.effectiveRateBytesPerSec = forcedRateBytes ?? policy.rateBytesPerSec;
     const elu = monitorEventLoopDelay({ resolution: 20 });
     elu.enable();
+    trackMonitor(elu);
     this.runtimeMetrics.getELU = () => {
       const max = elu.max || 1; // avoid division by zero
       return elu.mean / max;
@@ -491,14 +515,11 @@ export class FlowController extends TypedEventEmitter<FlowControllerEvents> {
       // High-trust TS peers (negIndex >= 0.85) get higher slice cap
       const nIndex = this.policy.nIndex ?? this.policy.coherence ?? 0.5;
       if (nIndex >= 0.85) {
-        return Math.min(
-          this.policy.maxSlice,
-          FLOW_DEFAULTS.TS_PEER_HIGH_TRUST_MAX_SLICE,
-        );
+        return Math.min(this.maxSliceBound, FLOW_DEFAULTS.TS_PEER_HIGH_TRUST_MAX_SLICE);
       }
-      return Math.min(this.policy.maxSlice, FLOW_DEFAULTS.TS_PEER_MAX_SLICE);
+      return Math.min(this.maxSliceBound, FLOW_DEFAULTS.TS_PEER_MAX_SLICE);
     }
-    return this.policy.maxSlice;
+    return this.maxSliceBound;
   }
 
   /**
@@ -521,7 +542,7 @@ export class FlowController extends TypedEventEmitter<FlowControllerEvents> {
     }
 
     const previousSize = this.sliceSize;
-    // Contract gently (75%) instead of halving to avoid over-thrashing.
+    // Contract gently (75%) to avoid over-thrashing while relieving pressure.
     this.sliceSize = Math.max(
       this.policy.minSlice,
       Math.floor(this.sliceSize * 0.75),
@@ -1013,7 +1034,12 @@ export function deriveSessionFlowPolicy(
 
   // Determine max slice - clamp for TS peers, relaxed for high-trust
   let maxSlice = policy.batchSize;
-  if (!peerIsNative) {
+  if (peerIsNative) {
+    // Allow high-trust native peers to stretch beyond baseline batch size for throughput.
+    if (nIndex >= 0.85) {
+      maxSlice = Math.max(maxSlice, FLOW_DEFAULTS.TS_PEER_HIGH_TRUST_MAX_SLICE);
+    }
+  } else {
     // High-trust TS peers (negIndex >= 0.85) get higher slice cap
     if (nIndex >= 0.85) {
       maxSlice = Math.min(maxSlice, FLOW_DEFAULTS.TS_PEER_HIGH_TRUST_MAX_SLICE);
@@ -1055,6 +1081,11 @@ export function createFlowController(
     nIndex: policy.nIndex ?? metrics.negIndex ?? 0.5,
     coherence: policy.coherence,
   };
+  const trust = peerProfile.nIndex;
+  const runtimeMaxSlice =
+    policy.peerIsNative && trust >= 0.85
+      ? Math.max(policy.maxSlice, FLOW_DEFAULTS.TS_PEER_HIGH_TRUST_MAX_SLICE)
+      : policy.maxSlice;
   const envMode = envAdaptiveMode();
   const adaptiveOverride =
     options?.adaptiveMode ??
@@ -1064,5 +1095,14 @@ export function createFlowController(
     peerProfile,
     forceSliceSize: options?.forceSliceSize,
     forceRateBytesPerSec: options?.forceRateBytesPerSec,
+    bounds: { minSlice: policy.minSlice, maxSlice: runtimeMaxSlice },
   });
+}
+
+/**
+ * Disable all event loop delay monitors created by FlowController.
+ * Useful for benchmarks to allow process exit when diagnostics are not needed.
+ */
+export function shutdownFlowControllerMonitors(): void {
+  disableMonitors();
 }

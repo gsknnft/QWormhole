@@ -107,7 +107,9 @@ describe("FlowController", () => {
     const initialSize = controller.currentSliceSize;
     controller.onBackpressure(1024);
 
-    expect(controller.currentSliceSize).toBe(Math.floor(initialSize / 2));
+    expect(controller.currentSliceSize).toBe(
+      Math.floor(initialSize * 0.75),
+    );
   });
 
   it("expands slice on drain", () => {
@@ -273,7 +275,7 @@ describe("deriveSessionFlowPolicy", () => {
 
     expect(policy.preferredBatchSize).toBe(64);
     expect(policy.coherence).toBeGreaterThanOrEqual(0.8);
-    expect(policy.maxSlice).toBe(64);
+    expect(policy.maxSlice).toBe(96);
   });
 
   it("derives low-trust policy from chaos metrics", () => {

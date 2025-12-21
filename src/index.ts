@@ -28,6 +28,13 @@ export {
   isNativeServerAvailable,
   getNativeServerBackend,
 } from "./core/native-server";
+export {
+  QuicTransport,
+  quicAvailable as isQuicAvailable,
+  QuicServer,
+  type QuicTransportOptions,
+  type QuicConnectionStats,
+} from "./transports/quic";
 export { createQWormholeClient, createQWormholeServer } from "./core/factory";
 export { QWormholeError } from "./utils/errors";
 export type { QWormholeErrorCode } from "./utils/errors";
