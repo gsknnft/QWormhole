@@ -15,6 +15,7 @@ import {
   QuicServer,
   isQuicAvailable,
 } from "../src/index";
+import path from "node:path";
 import { shutdownFlowControllerMonitors } from "../src/core/flow-controller";
 import { isNativeServerAvailable } from "../src/core/native-server";
 import { BatchFramer } from "../src/core/batch-framer";
@@ -102,6 +103,26 @@ const envNumber = (key: string): number | undefined => {
   if (!raw) return undefined;
   const parsed = Number(raw);
   return Number.isFinite(parsed) && parsed > 0 ? parsed : undefined;
+};
+const parseHandshakeTags = (
+  raw?: string,
+): Record<string, string | number> | undefined => {
+  if (!raw) return undefined;
+  try {
+    const parsed = JSON.parse(raw) as Record<string, unknown>;
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+      return undefined;
+    }
+    const tags: Record<string, string | number> = {};
+    for (const [key, value] of Object.entries(parsed)) {
+      if (typeof value === "string" || typeof value === "number") {
+        tags[key] = value;
+      }
+    }
+    return Object.keys(tags).length > 0 ? tags : undefined;
+  } catch {
+    return undefined;
+  }
 };
 const KCP_INTERVAL_MS = envNumber("QW_KCP_INTERVAL_MS");
 const KCP_SND_WND = envNumber("QW_KCP_SND_WND");
@@ -733,6 +754,15 @@ async function runKcpScenario(): Promise<ScenarioResult> {
 }
 
 async function runQuicScenario(): Promise<ScenarioResult> {
+  const QUIC_TIMEOUT_MS =
+    Number(process.env.QW_QUIC_TIMEOUT_MS ?? "20000") || 20000;
+  const QUIC_YIELD_EVERY =
+    Number(process.env.QW_QUIC_YIELD_EVERY ?? "50") || 0;
+  const QUIC_PROTOCOL_VERSION = process.env.QWORMHOLE_PROTOCOL_VERSION;
+  const QUIC_HANDSHAKE_TAGS = parseHandshakeTags(
+    process.env.QWORMHOLE_HANDSHAKE_TAGS,
+  );
+
   if (!isQuicAvailable()) {
     return {
       id: "quic-server+quic",
@@ -747,7 +777,24 @@ async function runQuicScenario(): Promise<ScenarioResult> {
     };
   }
 
-  const server = new QuicServer({ host: "127.0.0.1", port: 0 });
+  const certPath = path.resolve(__dirname, "..", "libwebsockets", "build", "libwebsockets-test-server.pem");
+  const keyPath = path.resolve(__dirname, "..", "libwebsockets", "build", "libwebsockets-test-server.key.pem");
+  const alpn = ["h3"];
+
+  const server = new QuicServer({
+    host: "127.0.0.1",
+    port: 0,
+    certPath,
+    keyPath,
+    alpn,
+    pollIntervalMs: 1,
+    protocolVersion: QUIC_PROTOCOL_VERSION,
+    useMux: true,
+  });
+  server.on("error", err => {
+    // eslint-disable-next-line no-console
+    console.error("quic server error", err);
+  });
   await server.listen();
   const port = server.port ?? 0;
   if (port === 0) {
@@ -775,24 +822,48 @@ async function runQuicScenario(): Promise<ScenarioResult> {
     });
   });
 
-  const client = new QuicTransport({ host: "127.0.0.1", port });
+  const client = new QuicTransport({
+    host: "127.0.0.1",
+    port,
+    alpn,
+    sni: "localhost",
+    verifyPeer: false,
+    pollIntervalMs: 1,
+    protocolVersion: QUIC_PROTOCOL_VERSION,
+    handshakeTags: QUIC_HANDSHAKE_TAGS,
+    useMux: true,
+  });
+  client.on("error", err => {
+    // eslint-disable-next-line no-console
+    console.error("quic client error", err);
+  });
+  const connected = new Promise<void>(resolve => {
+    server.once("connection", () => resolve());
+  });
   await client.connect();
+  await connected;
   client.onData(data => {
-    messagesReceived += 1;
     bytesReceived += data.length;
+    messagesReceived += Math.floor(data.length / PAYLOAD.length);
   });
 
   const start = performance.now();
   try {
     for (let i = 0; i < TOTAL_MESSAGES; i++) {
       client.send(PAYLOAD);
+      // Yield periodically so recv/acks progress and prevent JS from hogging loop.
+      if (QUIC_YIELD_EVERY > 0 && i % QUIC_YIELD_EVERY === 0) {
+        await sleep(0);
+      }
     }
 
     await waitForCompletion(
       () => messagesReceived >= TOTAL_MESSAGES,
-      TIMEOUT_MS,
+      QUIC_TIMEOUT_MS,
     );
   } finally {
+    // eslint-disable-next-line no-console
+    console.log("quic stats", client.getStats?.());
     await client.close();
     server.close();
   }
@@ -818,6 +889,29 @@ async function runQuicScenario(): Promise<ScenarioResult> {
     framing: "quic-stream",
     msgsPerSec,
     mbPerSec,
+    diagnostics: ENABLE_DIAGNOSTICS
+      ? {
+          gc: { count: 0, durationMs: 0, byKind: {} },
+          eventLoop: { utilization: 0, activeMs: 0, idleMs: 0 },
+          eventLoopDelay: {
+            minMs: 0,
+            maxMs: 0,
+            meanMs: 0,
+            stdMs: 0,
+            p50Ms: 0,
+            p99Ms: 0,
+          },
+          backpressure: { events: 0, drainEvents: 0, maxQueuedBytes: 0 },
+          batching: {
+            flushes: 0,
+            avgBuffersPerFlush: 0,
+            avgBytesPerFlush: 0,
+            maxBuffers: 0,
+            maxBytes: 0,
+          },
+          sendBlocks: undefined,
+        }
+      : undefined,
   };
 }
 

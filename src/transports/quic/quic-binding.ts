@@ -20,25 +20,41 @@ const bindingCandidates = [
   // Monorepo root relative to this file (e.g., when cwd is package)
   path.resolve(__dirname, "..", "..", "..", "..", "..", "native", "qwquic", "target", "release", "qwquic.dll"),
   path.resolve(__dirname, "..", "..", "..", "..", "..", "native", "qwquic", "target", "release", "qwquic.node"),
+  // node-gyp-build style resolution (mirrors lws scripts)
+  () => {
+    try {
+      // eslint-disable-next-line @typescript-eslint/no-var-requires
+      const resolve = requireFn("node-gyp-build");
+      const root = path.resolve(__dirname, "..", "..", "..");
+      return resolve(root);
+    } catch {
+      return null;
+    }
+  },
   // Direct module name (napi-rs default)
   "qwquic",
-].filter(Boolean) as string[];
+].filter(Boolean) as (string | (() => string | null))[];
 
 export function loadQuicBinding(): QuicBinding | null {
   if (cachedBinding !== undefined) {
     return cachedBinding;
   }
   for (const candidate of bindingCandidates) {
+    const resolved = typeof candidate === "function" ? candidate() : candidate;
+    if (!resolved) continue;
     try {
       // eslint-disable-next-line @typescript-eslint/no-var-requires
-      const mod = requireFn(candidate) as QuicBinding;
+      const mod = requireFn(resolved) as QuicBinding;
       if (mod && typeof mod.createEndpoint === "function") {
         cachedBinding = mod;
+        if (process.env.QW_QUIC_DEBUG === "1") {
+          console.warn("[qwquic] loaded binding from", resolved);
+        }
         return cachedBinding;
       }
     } catch {
       if (process.env.QW_QUIC_DEBUG === "1") {
-        console.warn("[qwquic] failed to load", candidate);
+        console.warn("[qwquic] failed to load", resolved);
       }
     }
   }
