@@ -22,6 +22,11 @@ import {
   createFlowController,
   type FlowController,
 } from "../core/flow-controller";
+import {
+  attachCoherenceAdapter,
+  type CoherenceAdapterHandle,
+  type CoherenceAdapterOptions,
+} from "../coherence/adapter";
 import { inferMessageType } from "../utils/negentropic-diagnostics";
 import type {
   Payload,
@@ -47,6 +52,7 @@ type ManagedConnection = QWormholeServerConnection & {
   handshakePending: boolean;
   outboundFramer?: BatchFramer;
   flowController?: FlowController;
+  coherenceAdapter?: CoherenceAdapterHandle;
   entropyMetrics: EntropyMetrics;
   peerIsNative: boolean;
   handshakeMessageDelivered: boolean;
@@ -68,6 +74,7 @@ type InternalServerOptions<TMessage> = Omit<
   verifyHandshake?: (payload: unknown) => boolean | Promise<boolean>;
   tls?: QWTlsOptions;
   emitHandshakeMessages?: boolean;
+  coherence?: CoherenceAdapterOptions;
 };
 
 // const resolveFramerCaps = (sliceSize: number, peerIsNative: boolean) => {
@@ -379,6 +386,8 @@ export class QWormholeServer<TMessage = Buffer> extends TypedEventEmitter<
 
     socket.on("close", hadError => {
       this.publishTrustSnapshot(connection, hadError ? "error" : "close");
+      connection.coherenceAdapter?.stop();
+      connection.coherenceAdapter = undefined;
       connection.outboundFramer?.detachSocket();
       connection.outboundFramer = undefined;
       connection.flowController = undefined;
@@ -393,6 +402,25 @@ export class QWormholeServer<TMessage = Buffer> extends TypedEventEmitter<
       // Prevent uncaught exceptions during handshake rejection
       this.emit("error", err);
     });
+  }
+
+  private shouldEnableCoherence(): boolean {
+    if (this.options.coherence?.enabled !== undefined) {
+      return this.options.coherence.enabled;
+    }
+    return process.env.QWORMHOLE_COHERENCE === "1";
+  }
+
+  private attachCoherenceAdapter(connection: ManagedConnection): void {
+    connection.coherenceAdapter?.stop();
+    connection.coherenceAdapter = undefined;
+    if (!this.shouldEnableCoherence()) return;
+    if (!connection.outboundFramer || !connection.flowController) return;
+    connection.coherenceAdapter = attachCoherenceAdapter(
+      connection.outboundFramer,
+      connection.flowController,
+      this.options.coherence,
+    );
   }
 
   private createConnection(socket: net.Socket): ManagedConnection {
@@ -472,6 +500,7 @@ export class QWormholeServer<TMessage = Buffer> extends TypedEventEmitter<
       flowController?.on("sliceDrift", tuneFramer);
       tuneFramer();
     }
+    this.attachCoherenceAdapter(connection);
     return connection;
   }
 
@@ -640,6 +669,7 @@ export class QWormholeServer<TMessage = Buffer> extends TypedEventEmitter<
       onAuthorizeConnection: options.onAuthorizeConnection,
       verifyHandshake: options.verifyHandshake,
       tls: options.tls,
+      coherence: options.coherence ?? undefined,
     };
   }
 
@@ -822,6 +852,7 @@ export class QWormholeServer<TMessage = Buffer> extends TypedEventEmitter<
         connection.tuneFramer();
       }
     }
+    this.attachCoherenceAdapter(connection);
     connection.handshakePending = false;
   }
 

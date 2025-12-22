@@ -88,6 +88,24 @@ export {
   type SessionFlowPolicy,
   type FlowControllerDiagnostics,
 } from "./core/flow-controller";
+export {
+  CoherenceLoop,
+  attachCoherenceAdapter,
+  defaultSimulationConfig,
+  runCoherenceSimulation,
+  formatFailureDiary,
+  type CoherenceConfig,
+  type CoherenceLoopDeps,
+  type CoherenceState,
+  type CouplingParams,
+  type FieldSample,
+  type CoherenceSimulationConfig,
+  type CoherenceSimulationResult,
+  type FailureDiaryEntry,
+  type SimulationEvent,
+  type CoherenceAdapterOptions,
+  type CoherenceAdapterHandle,
+} from "./coherence/coherence";
 export type {
   Payload,
   QWormholeRequest,

@@ -124,10 +124,10 @@ export const FLOW_DEFAULTS = {
   MIN_SLICE: 4,
   /** Maximum slice size for macro-batching */
   MAX_SLICE: 64,
-  /** Default burst budget (256 KB) */
-  DEFAULT_BURST_BYTES: 256 * 1024,
-  /** Default rate limit (10 MB/s) */
-  DEFAULT_RATE_BYTES_PER_SEC: 10 * 1024 * 1024,
+  /** Default burst budget (512 KB) */
+  DEFAULT_BURST_BYTES: 512 * 1024,
+  /** Default rate limit (16 MB/s) */
+  DEFAULT_RATE_BYTES_PER_SEC: 16 * 1024 * 1024,
   /** Drift step when adjusting slice size */
   DRIFT_STEP: 2,
   /** TS peer max slice clamp (to reduce GC pressure) - low trust */
@@ -387,6 +387,7 @@ export class FlowController extends TypedEventEmitter<FlowControllerEvents> {
   private readonly policy: SessionFlowPolicy;
   private readonly maxSliceBound: number;
   private readonly forceSliceSize?: number;
+  private externalSliceSize?: number;
   private readonly effectiveRateBytesPerSec: number;
   private flushing = false;
   public runtimeMetrics: Record<string, () => number> = {};
@@ -535,8 +536,9 @@ export class FlowController extends TypedEventEmitter<FlowControllerEvents> {
       );
     }
 
-    if (this.forceSliceSize !== undefined) {
-      this.sliceSize = this.forceSliceSize;
+    const forced = this.resolveForcedSlice();
+    if (forced !== undefined) {
+      this.sliceSize = forced;
       this.emit("backpressure", { queuedBytes, sliceSize: this.sliceSize });
       return;
     }
@@ -572,8 +574,9 @@ export class FlowController extends TypedEventEmitter<FlowControllerEvents> {
       );
     }
 
-    if (this.forceSliceSize !== undefined) {
-      this.sliceSize = this.forceSliceSize;
+    const forced = this.resolveForcedSlice();
+    if (forced !== undefined) {
+      this.sliceSize = forced;
       this.emit("drain", { sliceSize: this.sliceSize });
       return;
     }
@@ -646,6 +649,37 @@ export class FlowController extends TypedEventEmitter<FlowControllerEvents> {
   }
 
   /**
+   * Apply an external slice size override (e.g., coherence loop).
+   */
+  setExternalSliceSize(size?: number): void {
+    if (this.forceSliceSize !== undefined) return;
+    if (size === undefined) {
+      this.externalSliceSize = undefined;
+      return;
+    }
+    if (!Number.isFinite(size) || size <= 0) return;
+    const clamped = this.clamp(
+      Math.floor(size),
+      this.policy.minSlice,
+      this.getEffectiveMaxSlice(),
+    );
+    const previousSize = this.sliceSize;
+    this.externalSliceSize = clamped;
+    this.sliceSize = clamped;
+    if (this.adaptive) {
+      this.adaptive.state.sliceSize = clamped;
+    }
+    if (previousSize !== this.sliceSize) {
+      this.recordSliceChange("coherence");
+      this.emit("sliceDrift", {
+        previousSize,
+        newSize: this.sliceSize,
+        reason: "coherence",
+      });
+    }
+  }
+
+  /**
    * Ingest metrics from an external framer flush (buffers/bytes) to feed adaptive state.
    */
   handleFlushMetrics(bufferCount: number, bytes: number): void {
@@ -708,6 +742,7 @@ export class FlowController extends TypedEventEmitter<FlowControllerEvents> {
     return {
       currentSliceSize: this.sliceSize,
       forceSliceSize: this.forceSliceSize,
+      externalSliceSize: this.externalSliceSize,
       effectiveRateBytesPerSec: this.effectiveRateBytesPerSec,
       totalFlushes: this.totalFlushes,
       totalBytes: this.totalBytes,
@@ -818,9 +853,10 @@ export class FlowController extends TypedEventEmitter<FlowControllerEvents> {
 
   private applyAdaptiveSlice(): void {
     if (!this.adaptive) return;
-    if (this.forceSliceSize !== undefined) {
-      this.sliceSize = this.forceSliceSize;
-      this.adaptive.state.sliceSize = this.forceSliceSize;
+    const forced = this.resolveForcedSlice();
+    if (forced !== undefined) {
+      this.sliceSize = forced;
+      this.adaptive.state.sliceSize = forced;
       return;
     }
     const { state, config, peer } = this.adaptive;
@@ -933,6 +969,10 @@ export class FlowController extends TypedEventEmitter<FlowControllerEvents> {
 
     return this.flushPromise;
   }
+
+  private resolveForcedSlice(): number | undefined {
+    return this.forceSliceSize ?? this.externalSliceSize;
+  }
 }
 
 /**
@@ -941,6 +981,7 @@ export class FlowController extends TypedEventEmitter<FlowControllerEvents> {
 export interface FlowControllerDiagnostics {
   currentSliceSize: number;
   forceSliceSize?: number;
+  externalSliceSize?: number;
   effectiveRateBytesPerSec: number;
   totalFlushes: number;
   totalBytes: number;
@@ -1073,6 +1114,8 @@ export function createFlowController(
     adaptiveMode?: AdaptiveMode;
     forceSliceSize?: number;
     forceRateBytesPerSec?: number;
+    bounds?: PolicyBounds;
+    adaptiveConfig?: Partial<AdaptiveConfig>;
   },
 ): FlowController {
   const policy = deriveSessionFlowPolicy(metrics, options);
@@ -1086,6 +1129,12 @@ export function createFlowController(
     policy.peerIsNative && trust >= 0.85
       ? Math.max(policy.maxSlice, FLOW_DEFAULTS.TS_PEER_HIGH_TRUST_MAX_SLICE)
       : policy.maxSlice;
+  const resolvedBounds = options?.bounds
+    ? {
+        minSlice: Math.max(policy.minSlice, options.bounds.minSlice),
+        maxSlice: Math.max(options.bounds.maxSlice, policy.minSlice),
+      }
+    : { minSlice: policy.minSlice, maxSlice: runtimeMaxSlice };
   const envMode = envAdaptiveMode();
   const adaptiveOverride =
     options?.adaptiveMode ??
@@ -1095,7 +1144,8 @@ export function createFlowController(
     peerProfile,
     forceSliceSize: options?.forceSliceSize,
     forceRateBytesPerSec: options?.forceRateBytesPerSec,
-    bounds: { minSlice: policy.minSlice, maxSlice: runtimeMaxSlice },
+    bounds: resolvedBounds,
+    adaptiveConfig: options?.adaptiveConfig,
   });
 }
 

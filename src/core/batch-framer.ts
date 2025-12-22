@@ -67,6 +67,8 @@ export interface BatchFramerOptions {
   maxBuffersPerFlush?: number;
   /** Maximum bytes to send per writev flush (default: env or 64 KiB) */
   maxBytesPerFlush?: number;
+  /** Optional flush handler for non-socket transports */
+  flushHandler?: (buffers: Buffer[]) => number;
 }
 
 /**
@@ -103,6 +105,7 @@ export class BatchFramer extends TypedEventEmitter<BatchFramerEvents> {
   private outBatchSlotIndices: number[] = [];
   private flushTimer?: NodeJS.Timeout;
   private socket?: net.Socket;
+  private flushHandler?: (buffers: Buffer[]) => number;
   private draining = false;
   private drainListener?: () => void;
   private totalFrames = 0;
@@ -124,6 +127,7 @@ export class BatchFramer extends TypedEventEmitter<BatchFramerEvents> {
       options?.maxBuffersPerFlush ?? DEFAULT_MAX_BUFFERS_PER_FLUSH;
     this.maxBytesPerFlush =
       options?.maxBytesPerFlush ?? DEFAULT_MAX_BYTES_PER_FLUSH;
+    this.flushHandler = options?.flushHandler;
 
     // Initialize ring buffer
     const ringSize = options?.ringSize ?? DEFAULT_RING_SIZE;
@@ -156,6 +160,13 @@ export class BatchFramer extends TypedEventEmitter<BatchFramerEvents> {
     if (typeof flushIntervalMs === "number" && Number.isFinite(flushIntervalMs) && flushIntervalMs >= 0) {
       this.flushIntervalMs = flushIntervalMs;
     }
+  }
+
+  /**
+   * Attach or replace the flush handler for non-socket transports.
+   */
+  setFlushHandler(handler?: (buffers: Buffer[]) => number): void {
+    this.flushHandler = handler;
   }
 
   /**
@@ -245,6 +256,23 @@ export class BatchFramer extends TypedEventEmitter<BatchFramerEvents> {
     this.totalFlushes += 1;
     this.totalBytes += totalBytes;
     this.lastFlushTimestamp = Date.now();
+
+    if (this.flushHandler) {
+      try {
+        const written = this.flushHandler(buffers);
+        if (written < totalBytes) {
+          this.queueRemainder(buffers, written);
+        } else if (this.draining) {
+          this.draining = false;
+          this.emit("drain", undefined as never);
+        }
+      } catch (err) {
+        this.emit("error", err instanceof Error ? err : new Error(String(err)));
+      } finally {
+        this.releaseSlots(slotIndices);
+      }
+      return;
+    }
 
     if (!this.socket || this.socket.destroyed) {
       this.releaseSlots(slotIndices);
@@ -494,7 +522,7 @@ export class BatchFramer extends TypedEventEmitter<BatchFramerEvents> {
    * Check if the framer has a connected socket for flushing
    */
   get canFlush(): boolean {
-    return Boolean(this.socket && !this.socket.destroyed);
+    return Boolean(this.flushHandler || (this.socket && !this.socket.destroyed));
   }
 
   /**
@@ -542,6 +570,44 @@ export class BatchFramer extends TypedEventEmitter<BatchFramerEvents> {
         this.ring[idx].inUse = false;
       }
     }
+  }
+
+  private queueRemainder(buffers: Buffer[], bytesWritten: number): void {
+    const remaining = this.consumeWritten(buffers, bytesWritten);
+    if (remaining.length === 0) return;
+    this.outBatch = remaining;
+    this.outBatchBytes = remaining.reduce((sum, buf) => sum + buf.length, 0);
+    this.outBatchSlotIndices = [];
+    this.backpressureEvents += 1;
+    this.lastBackpressureTimestamp = Date.now();
+    this.lastBackpressureBytes = this.outBatchBytes;
+    this.emit("backpressure", { queuedBytes: this.outBatchBytes });
+    if (!this.flushTimer && this.flushIntervalMs > 0) {
+      this.flushTimer = setTimeout(() => {
+        this.flushTimer = undefined;
+        void this.flushBatch();
+      }, this.flushIntervalMs);
+    }
+  }
+
+  private consumeWritten(buffers: Buffer[], bytesWritten: number): Buffer[] {
+    if (bytesWritten <= 0) return buffers.map(buf => Buffer.from(buf));
+    let remaining = bytesWritten;
+    let idx = 0;
+    while (idx < buffers.length && remaining >= buffers[idx].length) {
+      remaining -= buffers[idx].length;
+      idx += 1;
+    }
+    if (idx >= buffers.length) return [];
+    const remainder: Buffer[] = [];
+    if (remaining > 0) {
+      remainder.push(Buffer.from(buffers[idx].subarray(remaining)));
+      idx += 1;
+    }
+    for (; idx < buffers.length; idx++) {
+      remainder.push(Buffer.from(buffers[idx]));
+    }
+    return remainder;
   }
 }
 

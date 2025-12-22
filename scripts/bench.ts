@@ -19,6 +19,7 @@ import path from "node:path";
 import { shutdownFlowControllerMonitors } from "../src/core/flow-controller";
 import { isNativeServerAvailable } from "../src/core/native-server";
 import { BatchFramer } from "../src/core/batch-framer";
+import { LengthPrefixedFramer } from "../src/core/framing";
 import { KcpServer } from "../src/transports/kcp/kcp-server";
 import { KcpSession } from "../src/transports/kcp/kcp-session";
 import type {
@@ -762,6 +763,19 @@ async function runQuicScenario(): Promise<ScenarioResult> {
   const QUIC_HANDSHAKE_TAGS = parseHandshakeTags(
     process.env.QWORMHOLE_HANDSHAKE_TAGS,
   );
+  const QUIC_MAX_FRAME_LENGTH =
+    envNumber("QW_QUIC_MAX_FRAME_LENGTH") ?? 16 * 1024 * 1024;
+  const QUIC_STREAMS = Math.max(
+    1,
+    Number(process.env.QW_QUIC_STREAMS ?? "8") || 8,
+  );
+  const QUIC_BATCH_SIZE = Number(process.env.QW_QUIC_BATCH_SIZE ?? "32") || 32;
+  const QUIC_BATCH_BYTES =
+    Number(process.env.QW_QUIC_BATCH_BYTES ?? String(96 * 1024)) ||
+    96 * 1024;
+  const QUIC_STATS = ENABLE_DIAGNOSTICS || process.env.QW_QUIC_STATS === "1";
+  const quicUseFraming = BENCH_FRAMING !== "none";
+  const quicStreamFraming = quicUseFraming ? "length-prefixed" : "none";
 
   if (!isQuicAvailable()) {
     return {
@@ -790,6 +804,8 @@ async function runQuicScenario(): Promise<ScenarioResult> {
     pollIntervalMs: 1,
     protocolVersion: QUIC_PROTOCOL_VERSION,
     useMux: true,
+    maxFrameLength: QUIC_MAX_FRAME_LENGTH,
+    streamFraming: quicStreamFraming,
   });
   server.on("error", err => {
     // eslint-disable-next-line no-console
@@ -820,6 +836,11 @@ async function runQuicScenario(): Promise<ScenarioResult> {
       // echo
       conn.send(data);
     });
+    conn.on("rawStream", (stream: any) => {
+      stream.onData((data: Uint8Array) => {
+        stream.send(data);
+      });
+    });
   });
 
   const client = new QuicTransport({
@@ -832,6 +853,8 @@ async function runQuicScenario(): Promise<ScenarioResult> {
     protocolVersion: QUIC_PROTOCOL_VERSION,
     handshakeTags: QUIC_HANDSHAKE_TAGS,
     useMux: true,
+    maxFrameLength: QUIC_MAX_FRAME_LENGTH,
+    streamFraming: quicStreamFraming,
   });
   client.on("error", err => {
     // eslint-disable-next-line no-console
@@ -842,17 +865,159 @@ async function runQuicScenario(): Promise<ScenarioResult> {
   });
   await client.connect();
   await connected;
-  client.onData(data => {
-    bytesReceived += data.length;
-    messagesReceived += Math.floor(data.length / PAYLOAD.length);
-  });
+
+  const framedPayload =
+    quicUseFraming && quicStreamFraming === "none"
+      ? encodeLengthPrefixed(PAYLOAD)
+      : PAYLOAD;
+  const useFlowFraming = quicStreamFraming === "length-prefixed";
+  const streams: Array<{
+    id: number;
+    send: (data: Uint8Array) => number | void;
+    sendMany?: (frames: Uint8Array[]) => number;
+    onData: (cb: (data: Uint8Array) => void) => void;
+  }> = [];
+  const pendingByStream = new Map<number, Uint8Array[]>();
+  let streamIndex = 0;
+  let jsToNativeCalls = 0;
+  let jsToNativeBytes = 0;
+  let pendingMaxBytes = 0;
+
+  const consumeWritten = (
+    frames: Uint8Array[],
+    bytesWritten: number,
+  ): Uint8Array[] => {
+    if (bytesWritten <= 0) return frames;
+    let remainingBytes = bytesWritten;
+    let idx = 0;
+    while (idx < frames.length && remainingBytes >= frames[idx].length) {
+      remainingBytes -= frames[idx].length;
+      idx += 1;
+    }
+    if (idx >= frames.length) return [];
+    const remainder: Uint8Array[] = [];
+    if (remainingBytes > 0) {
+      remainder.push(frames[idx].subarray(remainingBytes));
+      idx += 1;
+    }
+    for (; idx < frames.length; idx++) remainder.push(frames[idx]);
+    return remainder;
+  };
+
+  const sendFramesOnStream = (
+    stream: (typeof streams)[number],
+    frames: Uint8Array[],
+  ) => {
+    const pending = pendingByStream.get(stream.id);
+    const toSend =
+      pending && pending.length > 0 ? pending.concat(frames) : frames;
+    if (toSend.length === 0) return;
+    let written = 0;
+    if (typeof stream.sendMany === "function") {
+      written = stream.sendMany(toSend);
+      jsToNativeCalls += 1;
+    } else {
+      for (const frame of toSend) {
+        const res = stream.send(frame);
+        const sent = typeof res === "number" ? res : frame.length;
+        written += sent;
+        if (typeof res === "number" && sent < frame.length) {
+          break;
+        }
+      }
+      jsToNativeCalls += toSend.length;
+    }
+    jsToNativeBytes += toSend.reduce((sum, frame) => sum + frame.length, 0);
+    const remaining = consumeWritten(toSend, written);
+    if (remaining.length > 0) {
+      pendingByStream.set(stream.id, remaining);
+      const pendingBytes = remaining.reduce(
+        (sum, frame) => sum + frame.length,
+        0,
+      );
+      pendingMaxBytes = Math.max(pendingMaxBytes, pendingBytes);
+    } else {
+      pendingByStream.delete(stream.id);
+    }
+  };
+
+  for (let i = 0; i < QUIC_STREAMS; i++) {
+    const stream = await client.openStream({ framing: quicStreamFraming });
+    streams.push(stream);
+    if (quicUseFraming && quicStreamFraming === "none") {
+      const framer = new LengthPrefixedFramer({
+        maxFrameLength: QUIC_MAX_FRAME_LENGTH,
+      });
+      framer.on("message", frame => {
+        bytesReceived += frame.length;
+        messagesReceived += 1;
+      });
+      stream.onData(chunk => framer.push(Buffer.from(chunk)));
+    } else {
+      stream.onData(chunk => {
+        bytesReceived += chunk.length;
+        if (quicUseFraming) {
+          messagesReceived += 1;
+        } else {
+          messagesReceived = Math.floor(bytesReceived / PAYLOAD.length);
+        }
+      });
+    }
+  }
+
+  let statsTimer: NodeJS.Timeout | null = null;
+  if (QUIC_STATS) {
+    statsTimer = setInterval(() => {
+      // eslint-disable-next-line no-console
+      console.log("quic stats", client.getStats?.());
+    }, 1000);
+    statsTimer.unref?.();
+  }
 
   const start = performance.now();
   try {
-    for (let i = 0; i < TOTAL_MESSAGES; i++) {
-      client.send(PAYLOAD);
-      // Yield periodically so recv/acks progress and prevent JS from hogging loop.
-      if (QUIC_YIELD_EVERY > 0 && i % QUIC_YIELD_EVERY === 0) {
+    if (useFlowFraming) {
+      for (let i = 0; i < TOTAL_MESSAGES; i++) {
+        const stream = streams[streamIndex++ % streams.length];
+        stream.send(PAYLOAD);
+        jsToNativeCalls += 1;
+        jsToNativeBytes += PAYLOAD.length;
+        if (QUIC_YIELD_EVERY > 0 && i % QUIC_YIELD_EVERY === 0) {
+          await sleep(0);
+        }
+      }
+    } else {
+      let batch: Uint8Array[] = [];
+      let batchBytes = 0;
+      for (let i = 0; i < TOTAL_MESSAGES; i++) {
+        batch.push(framedPayload);
+        batchBytes += framedPayload.length;
+        if (batch.length >= QUIC_BATCH_SIZE || batchBytes >= QUIC_BATCH_BYTES) {
+          const stream = streams[streamIndex++ % streams.length];
+          sendFramesOnStream(stream, batch);
+          batch = [];
+          batchBytes = 0;
+        }
+        // Yield periodically so recv/acks progress and prevent JS from hogging loop.
+        if (QUIC_YIELD_EVERY > 0 && i % QUIC_YIELD_EVERY === 0) {
+          await sleep(0);
+        }
+      }
+      if (batch.length > 0) {
+        const stream = streams[streamIndex++ % streams.length];
+        sendFramesOnStream(stream, batch);
+      }
+
+      const drainStart = performance.now();
+      while (
+        pendingByStream.size > 0 &&
+        performance.now() - drainStart < QUIC_TIMEOUT_MS
+      ) {
+        for (const stream of streams) {
+          if (pendingByStream.has(stream.id)) {
+            sendFramesOnStream(stream, []);
+          }
+        }
         await sleep(0);
       }
     }
@@ -863,6 +1028,10 @@ async function runQuicScenario(): Promise<ScenarioResult> {
     );
   } finally {
     // eslint-disable-next-line no-console
+    if (statsTimer) {
+      clearInterval(statsTimer);
+    }
+    // eslint-disable-next-line no-console
     console.log("quic stats", client.getStats?.());
     await client.close();
     server.close();
@@ -870,6 +1039,10 @@ async function runQuicScenario(): Promise<ScenarioResult> {
 
   const duration = performance.now() - start;
   const seconds = duration / 1000;
+  const quicCallsPerSec =
+    seconds > 0 && jsToNativeCalls > 0 ? jsToNativeCalls / seconds : 0;
+  const quicAvgPayloadBytes =
+    jsToNativeCalls > 0 ? jsToNativeBytes / jsToNativeCalls : 0;
   const msgsPerSec =
     seconds > 0 && messagesReceived > 0
       ? messagesReceived / seconds
@@ -910,6 +1083,12 @@ async function runQuicScenario(): Promise<ScenarioResult> {
             maxBytes: 0,
           },
           sendBlocks: undefined,
+          quic: {
+            jsToNativeCalls,
+            callsPerSec: quicCallsPerSec,
+            avgPayloadBytes: quicAvgPayloadBytes,
+            pendingMaxBytes,
+          },
         }
       : undefined,
   };

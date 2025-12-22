@@ -17,7 +17,7 @@ export interface QWormholeTransport extends EventEmitter {
 
   // QUIC / WebTransport streams
   openStream?(
-    opts?: { bidirectional?: boolean }
+    opts?: { bidirectional?: boolean; framing?: "none" | "length-prefixed" }
   ): Promise<{
     id: number;
     send(data: Uint8Array): void | Promise<void>;

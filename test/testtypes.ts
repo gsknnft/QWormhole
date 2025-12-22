@@ -96,6 +96,12 @@ type ScenarioDiagnostics = {
     maxBytes: number;
   };
   sendBlocks?: SendBlockStats;
+  quic?: {
+    jsToNativeCalls: number;
+    callsPerSec: number;
+    avgPayloadBytes: number;
+    pendingMaxBytes: number;
+  };
 };
 
 type DiagnosticsExtras = {

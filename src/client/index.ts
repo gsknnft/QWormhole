@@ -12,6 +12,11 @@ import {
   createFlowController,
   type FlowController,
 } from "../core/flow-controller";
+import {
+  attachCoherenceAdapter,
+  type CoherenceAdapterHandle,
+  type CoherenceAdapterOptions,
+} from "../coherence/adapter";
 import type { EntropyMetrics } from "../handshake/entropy-policy";
 import type {
   QWormholeClientEvents,
@@ -46,6 +51,7 @@ type InternalOptions<TMessage> = Omit<
   handshakeSigner?: () => Record<string, unknown>;
   heartbeatIntervalMs?: number;
   heartbeatPayload?: Payload;
+  coherence?: CoherenceAdapterOptions;
 };
 
 type TrustSnapshotReason = "close" | "error" | "disconnect" | "entropy-related" | "handshake";
@@ -62,6 +68,7 @@ export class QWormholeClient<TMessage = Buffer> extends TypedEventEmitter<
   private readonly framer?: LengthPrefixedFramer;
   private readonly outboundFramer?: BatchFramer;
   private flowController?: FlowController;
+  private coherenceAdapter?: CoherenceAdapterHandle;
   private readonly entropyMetrics: EntropyMetrics;
   private readonly peerIsNative: boolean;
   private connectTimer?: NodeJS.Timeout;
@@ -364,6 +371,7 @@ export class QWormholeClient<TMessage = Buffer> extends TypedEventEmitter<
       tls: options.tls,
       entropyMetrics: options.entropyMetrics,
       peerIsNative: options.peerIsNative,
+      coherence: options.coherence ?? undefined,
     };
   }
 
@@ -383,9 +391,20 @@ export class QWormholeClient<TMessage = Buffer> extends TypedEventEmitter<
 
   private attachOutboundFramer(socket: net.Socket): void {
     this.outboundFramer?.attachSocket(socket);
+    this.coherenceAdapter?.stop();
+    this.coherenceAdapter = undefined;
+    if (!this.outboundFramer || !this.flowController) return;
+    if (!this.shouldEnableCoherence()) return;
+    this.coherenceAdapter = attachCoherenceAdapter(
+      this.outboundFramer,
+      this.flowController,
+      this.options.coherence,
+    );
   }
 
   private detachOutboundFramer(): void {
+    this.coherenceAdapter?.stop();
+    this.coherenceAdapter = undefined;
     this.outboundFramer?.detachSocket();
   }
 
@@ -547,6 +566,13 @@ export class QWormholeClient<TMessage = Buffer> extends TypedEventEmitter<
   private recordNegentropicSample(payload: Payload): void {
     if (!this.flowController) return;
     this.flowController.recordMessageType(inferMessageType(payload));
+  }
+
+  private shouldEnableCoherence(): boolean {
+    if (this.options.coherence?.enabled !== undefined) {
+      return this.options.coherence.enabled;
+    }
+    return process.env.QWORMHOLE_COHERENCE === "1";
   }
 
   private buildTlsHandshakeTags(): Record<string, string | number> | undefined {

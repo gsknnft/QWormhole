@@ -64,6 +64,12 @@ export interface QuicBinding {
     buf: Uint8Array,
     fin?: boolean
   ): number;
+  writeManyStream?(
+    conn: unknown,
+    streamId: number,
+    bufs: Uint8Array[],
+    fin?: boolean
+  ): number;
   readStream(conn: unknown, streamId: number): Uint8Array | null;
   readable?(conn: unknown): number[];
   closeStream?(conn: unknown, streamId: number, fin?: boolean): void;
@@ -78,6 +84,7 @@ export interface QuicBinding {
 
   // Driving timers + IO
   poll(endpoint: unknown, nowMs: number): PollResult;
+  flush?(conn: unknown): number;
 
   // Errors
   lastError?(conn?: unknown): {

@@ -1,6 +1,7 @@
 //@preserve
 import type net from "node:net";
 import type { EntropyMetrics } from "../handshake/entropy-policy";
+import type { CoherenceConfig, CouplingParams } from "../coherence/types";
 import type { FlowControllerDiagnostics } from "../core/flow-controller";
 import type { BatchFramerStats } from "../core/batch-framer";
 
@@ -176,6 +177,14 @@ export interface QWormholeCommonOptions<TMessage = unknown> {
    * Called when a connection closes so downstream systems can persist flow diagnostics for trust weighting.
    */
   onTrustSnapshot?: (snapshot: FlowTrustSnapshot) => void | Promise<void>;
+  /**
+   * Optional coherence loop configuration for adaptive coupling.
+   */
+  coherence?: {
+    enabled?: boolean;
+    config?: CoherenceConfig;
+    coupling?: Partial<CouplingParams>;
+  };
 }
 
 export interface QWormholeClientOptions<
