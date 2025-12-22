@@ -8,6 +8,11 @@ import {
   createFlowController,
   type FlowController,
 } from "../../core/flow-controller";
+import {
+  attachCoherenceAdapter,
+  type CoherenceAdapterHandle,
+  type CoherenceAdapterOptions,
+} from "../../coherence/adapter";
 import type { EntropyMetrics } from "../../handshake/entropy-policy";
 import type {
   QuicBinding,
@@ -39,12 +44,13 @@ export interface QuicServerOptions extends Omit<QuicEndpointOptions, "port"> {
   protocolVersion?: string;
   verifyHandshake?: (payload: HandshakePayload) => boolean | Promise<boolean>;
   emitHandshakeMessages?: boolean;
+  coherence?: CoherenceAdapterOptions;
 }
 
 export interface QuicServerStream {
   id: number;
   send: (data: Uint8Array, fin?: boolean) => void;
-  sendMany?: (frames: Uint8Array[], fin?: boolean) => number;
+  sendMany?: (frames: Uint8Array[], fin?: boolean) => void;
   onData: (cb: (data: Uint8Array) => void) => void;
   close: () => void;
 }
@@ -70,6 +76,7 @@ class QuicServerConnection extends EventEmitter implements QWormholeTransport {
     number,
     { framer: BatchFramer; flow: FlowController; decoder?: LengthPrefixedFramer }
   >();
+  private coherenceAdapter: CoherenceAdapterHandle | null = null;
   private readonly streamFraming: "none" | "length-prefixed";
   private readonly maxFrameLength: number;
   private readonly handshakeConfig: {
@@ -79,7 +86,6 @@ class QuicServerConnection extends EventEmitter implements QWormholeTransport {
   };
   constructor(
     private binding: QuicBinding,
-    private endpoint: unknown,
     public readonly handle: unknown,
     handshakeConfig: {
       protocolVersion?: string;
@@ -89,6 +95,7 @@ class QuicServerConnection extends EventEmitter implements QWormholeTransport {
     useMux: boolean,
     maxFrameLength: number,
     streamFraming: "none" | "length-prefixed",
+    private coherence?: CoherenceAdapterOptions,
   ) {
     super();
     this.useMux = useMux;
@@ -203,6 +210,7 @@ class QuicServerConnection extends EventEmitter implements QWormholeTransport {
       this.flushBuffersOnStream(streamId, buffers),
     );
     this.bindFlowToFramer(flow, framer);
+    this.maybeAttachCoherence(flow, framer);
     if (!withDecoder) return { framer, flow };
     const decoder = new LengthPrefixedFramer({ maxFrameLength: this.maxFrameLength });
     decoder.on("message", frame => this.emitStreamPayload(streamId, frame));
@@ -226,6 +234,19 @@ class QuicServerConnection extends EventEmitter implements QWormholeTransport {
     });
     flow.on("sliceDrift", tune);
     tune();
+  }
+
+  private maybeAttachCoherence(flow: FlowController, framer: BatchFramer): void {
+    if (this.coherenceAdapter) return;
+    const enabled =
+      this.coherence?.enabled ?? process.env.QWORMHOLE_COHERENCE === "1";
+    if (!enabled) return;
+    const rttSampler =
+      this.coherence?.rttSampler ?? (() => this.getStats()?.rtt_ms);
+    this.coherenceAdapter = attachCoherenceAdapter(framer, flow, {
+      ...this.coherence,
+      rttSampler,
+    });
   }
 
   private buildFlowController(metrics: EntropyMetrics): FlowController {
@@ -312,8 +333,8 @@ class QuicServerConnection extends EventEmitter implements QWormholeTransport {
     framing?: "none" | "length-prefixed";
   }): Promise<{
     id: number;
-    send: (data: Uint8Array) => void | Promise<void>;
-    sendMany?: (frames: Uint8Array[]) => number;
+    send: (data: Uint8Array) => void;
+    sendMany?: (frames: Uint8Array[], fin?: boolean) => void;
     onData: (cb: (data: Uint8Array) => void) => void;
     close?: () => void | Promise<void>;
   }> {
@@ -330,53 +351,50 @@ class QuicServerConnection extends EventEmitter implements QWormholeTransport {
       send: (data: Uint8Array) => {
         if (pipeline) {
           void pipeline.flow.enqueue(Buffer.from(data), pipeline.framer);
-          return data.length;
+          return;
         }
         try {
-          const written = this.binding.writeStream(this.handle, id, data, false);
+          this.binding.writeStream(this.handle, id, data, false);
           if (typeof this.binding.flush === "function") {
             this.binding.flush(this.handle);
           }
-          return written;
+          return;
         } catch (err) {
           this.emit("error", err instanceof Error ? err : new Error(String(err)));
-          return 0;
+          return;
         }
       },
       sendMany: (frames: Uint8Array[]) => {
-        if (!frames.length) return 0;
+        if (!frames.length) return;
         if (pipeline) {
-          let total = 0;
           for (const frame of frames) {
-            total += frame.length;
             pipeline.framer.encodeToBatch(Buffer.from(frame));
           }
           void pipeline.flow.flushPending(pipeline.framer);
-          return total;
+          return;
         }
         try {
           if (typeof this.binding.writeManyStream === "function") {
-            const written = this.binding.writeManyStream(this.handle, id, frames, false);
+            this.binding.writeManyStream(this.handle, id, frames, false);
             if (typeof this.binding.flush === "function") {
               this.binding.flush(this.handle);
             }
-            return written;
+            return;
           }
-          let total = 0;
           for (const frame of frames) {
-            total += this.binding.writeStream(this.handle, id, frame, false);
+            this.binding.writeStream(this.handle, id, frame, false);
           }
           if (typeof this.binding.flush === "function") {
             this.binding.flush(this.handle);
           }
-          return total;
+          return;
         } catch (err) {
           const msg = err instanceof Error ? err.message : String(err);
           if (msg.includes("Done") || msg.includes("StreamLimit")) {
-            return 0;
+            return;
           }
           this.emit("error", err instanceof Error ? err : new Error(msg));
-          return 0;
+          return;
         }
       },
       onData: (cb: (data: Uint8Array) => void) => {
@@ -434,6 +452,8 @@ class QuicServerConnection extends EventEmitter implements QWormholeTransport {
     } catch {
       /* ignore */
     }
+    this.coherenceAdapter?.stop();
+    this.coherenceAdapter = null;
     this.rawStreamHandlers.clear();
     this.rawStreams.clear();
     this.rawPendingWrites.clear();
@@ -855,7 +875,7 @@ export class QuicServer extends EventEmitter {
     if (this.pollTimer) return;
     this.pollTimer = setInterval(() => {
       try {
-        const res = this.binding!.poll(this.endpoint!, Date.now());
+        this.binding!.poll(this.endpoint!, Date.now());
         this.emit("poll");
         this.processAccepts();
         this.drainReads();
@@ -877,11 +897,11 @@ export class QuicServer extends EventEmitter {
     while (true) {
       const res = this.binding.accept(this.endpoint as number);
       if (!res) break;
-      const conn = new QuicServerConnection(this.binding, this.endpoint, res.handle, {
+      const conn = new QuicServerConnection(this.binding, res.handle, {
         protocolVersion: this.opts.protocolVersion,
         verifyHandshake: this.opts.verifyHandshake,
         emitHandshakeMessages: this.opts.emitHandshakeMessages,
-      }, this.opts.useMux, this.opts.maxFrameLength, this.opts.streamFraming);
+      }, this.opts.useMux, this.opts.maxFrameLength, this.opts.streamFraming, this.opts.coherence);
       this.connections.set(res.handle as number, conn);
       this.emit("connection", conn);
     }

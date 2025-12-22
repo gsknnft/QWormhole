@@ -116,6 +116,38 @@ export class BatchFramer extends TypedEventEmitter<BatchFramerEvents> {
   private lastBackpressureBytes?: number;
   private lastBackpressureTimestamp?: number;
 
+  private computeFlushCut(buffers: Buffer[]): { cut: number; bytes: number } {
+    if (buffers.length === 0) return { cut: 0, bytes: 0 };
+    let count = 0;
+    let bytes = 0;
+    let cut = 0;
+    while (cut < buffers.length) {
+      const next = buffers[cut];
+      if (
+        count >= this.maxBuffersPerFlush ||
+        bytes + next.length > this.maxBytesPerFlush
+      ) {
+        break;
+      }
+      bytes += next.length;
+      count += 1;
+      cut += 1;
+    }
+    if (cut === 0) {
+      cut = 1;
+      bytes = buffers[0].length;
+    }
+    return { cut, bytes };
+  }
+
+  /**
+   * Preview the next flush size without mutating state.
+   */
+  getFlushPreview(): { bufferCount: number; totalBytes: number } {
+    const { cut, bytes } = this.computeFlushCut(this.outBatch);
+    return { bufferCount: cut, totalBytes: bytes };
+  }
+
   constructor(options?: BatchFramerOptions) {
     super();
     this.maxFrameLength = options?.maxFrameLength ?? DEFAULT_MAX_FRAME_LENGTH;
@@ -252,16 +284,33 @@ export class BatchFramer extends TypedEventEmitter<BatchFramerEvents> {
     this.outBatchBytes = 0;
     this.outBatchSlotIndices = [];
 
-    this.emit("flush", { bufferCount: buffers.length, totalBytes });
+    let flushBuffers = buffers;
+    let flushSlotIndices = slotIndices;
+    let flushBytes = totalBytes;
+
+    if (
+      buffers.length > this.maxBuffersPerFlush ||
+      totalBytes > this.maxBytesPerFlush
+    ) {
+      const { cut, bytes } = this.computeFlushCut(buffers);
+      flushBuffers = buffers.slice(0, cut);
+      flushSlotIndices = slotIndices.slice(0, cut);
+      flushBytes = bytes;
+      this.outBatch = buffers.slice(cut);
+      this.outBatchSlotIndices = slotIndices.slice(cut);
+      this.outBatchBytes = Math.max(0, totalBytes - bytes);
+    }
+
+    this.emit("flush", { bufferCount: flushBuffers.length, totalBytes: flushBytes });
     this.totalFlushes += 1;
-    this.totalBytes += totalBytes;
+    this.totalBytes += flushBytes;
     this.lastFlushTimestamp = Date.now();
 
     if (this.flushHandler) {
       try {
-        const written = this.flushHandler(buffers);
-        if (written < totalBytes) {
-          this.queueRemainder(buffers, written);
+        const written = this.flushHandler(flushBuffers);
+        if (written < flushBytes) {
+          this.queueRemainder(flushBuffers, written);
         } else if (this.draining) {
           this.draining = false;
           this.emit("drain", undefined as never);
@@ -269,26 +318,26 @@ export class BatchFramer extends TypedEventEmitter<BatchFramerEvents> {
       } catch (err) {
         this.emit("error", err instanceof Error ? err : new Error(String(err)));
       } finally {
-        this.releaseSlots(slotIndices);
+        this.releaseSlots(flushSlotIndices);
       }
       return;
     }
 
     if (!this.socket || this.socket.destroyed) {
-      this.releaseSlots(slotIndices);
+      this.releaseSlots(flushSlotIndices);
       return;
     }
 
     try {
-      if (this.enableWritev && buffers.length > 1) {
+      if (this.enableWritev && flushBuffers.length > 1) {
         // chunk by caps (buffers and bytes) to avoid overruns/backpressure storms
         let idx = 0;
-        while (idx < buffers.length) {
+        while (idx < flushBuffers.length) {
           let count = 0;
           let bytes = 0;
           const chunk: Buffer[] = [];
-          while (idx < buffers.length) {
-            const next = buffers[idx];
+          while (idx < flushBuffers.length) {
+            const next = flushBuffers[idx];
             const nextBytes = bytes + next.length;
             if (
               count >= this.maxBuffersPerFlush ||
@@ -303,17 +352,24 @@ export class BatchFramer extends TypedEventEmitter<BatchFramerEvents> {
           }
           // safety: ensure progress even if a single buffer exceeds cap
           if (chunk.length === 0) {
-            chunk.push(buffers[idx]);
+            chunk.push(flushBuffers[idx]);
             idx += 1;
           }
           await this.writevBatch(chunk);
         }
       } else {
-        const combined = Buffer.concat(buffers);
+        const combined = Buffer.concat(flushBuffers);
         await this.writeBuffer(combined);
       }
     } finally {
-      this.releaseSlots(slotIndices);
+      this.releaseSlots(flushSlotIndices);
+    }
+
+    if (this.outBatch.length > 0 && !this.flushTimer && this.flushIntervalMs >= 0) {
+      this.flushTimer = setTimeout(() => {
+        this.flushTimer = undefined;
+        void this.flushBatch();
+      }, this.flushIntervalMs);
     }
   }
 
@@ -422,8 +478,13 @@ export class BatchFramer extends TypedEventEmitter<BatchFramerEvents> {
       this.lastBackpressureTimestamp = Date.now();
       this.lastBackpressureBytes = queuedBytes;
       this.draining = true;
+      this.emit("backpressure", { queuedBytes });
+      return;
     }
-    this.emit("backpressure", { queuedBytes });
+    this.lastBackpressureBytes = Math.max(
+      this.lastBackpressureBytes ?? 0,
+      queuedBytes,
+    );
   }
 
   /**

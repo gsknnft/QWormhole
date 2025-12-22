@@ -1,7 +1,11 @@
 //@preserve
 import type net from "node:net";
 import type { EntropyMetrics } from "../handshake/entropy-policy";
-import type { CoherenceConfig, CouplingParams } from "../coherence/types";
+import type {
+  CoherenceConfig,
+  CoherenceMode,
+  CouplingParams,
+} from "../coherence/types";
 import type { FlowControllerDiagnostics } from "../core/flow-controller";
 import type { BatchFramerStats } from "../core/batch-framer";
 
@@ -10,7 +14,7 @@ export type Payload = string | Buffer | Uint8Array | Record<string, unknown>;
 export type Serializer = (payload: Payload) => Buffer;
 export type Deserializer<TMessage = unknown> = (data: Buffer) => TMessage;
 
-export type FramingMode = "length-prefixed" | "kcp-arq" | "none";
+export type FramingMode = "length-prefixed" | "kcp-arq" | "quic-stream" | "none";
 export type TransportMode = "ts" | "native-lws" | "native-libsocket";
 export type NativeBackend = "lws" | "libsocket";
 
@@ -136,6 +140,11 @@ export interface QWormholeCommonOptions<TMessage = unknown> {
    */
   rateLimitBurstBytes?: number;
   /**
+   * Disable FlowController orchestration (BatchFramer only).
+   * Bench-only sanity toggle.
+   */
+  disableFlowController?: boolean;
+  /**
    * Optional protocol version string to send/expect during handshake.
    */
   protocolVersion?: string;
@@ -184,6 +193,10 @@ export interface QWormholeCommonOptions<TMessage = unknown> {
     enabled?: boolean;
     config?: CoherenceConfig;
     coupling?: Partial<CouplingParams>;
+    mode?: CoherenceMode;
+    rttSampler?: () => number | undefined;
+    eluSampler?: () => number | undefined;
+    minUpdateMs?: number;
   };
 }
 
@@ -198,6 +211,8 @@ export interface QWormholeClientOptions<
   entropyMetrics?: EntropyMetrics;
   /** Hint indicating whether the peer transport is native (enables macro batches) */
   peerIsNative?: boolean;
+  /** Optional override for client socket writable highWaterMark (bytes). */
+  socketHighWaterMark?: number;
 }
 
 export interface QWormholeServerOptions<

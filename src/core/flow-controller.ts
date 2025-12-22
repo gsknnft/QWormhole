@@ -131,9 +131,15 @@ export const FLOW_DEFAULTS = {
   /** Drift step when adjusting slice size */
   DRIFT_STEP: 2,
   /** TS peer max slice clamp (to reduce GC pressure) - low trust */
-  TS_PEER_MAX_SLICE: 64,
+  TS_PEER_MAX_SLICE: 24,
   /** TS peer max slice for high-trust peers (negIndex >= 0.85) */
-  TS_PEER_HIGH_TRUST_MAX_SLICE: 96,
+  TS_PEER_HIGH_TRUST_MAX_SLICE: 48,
+  /** TS framer caps to keep batching in the micro-batch envelope */
+  TS_FRAMER_MAX_BUFFERS: 32,
+  /** TS framer cap to avoid large buffer residency (bytes) */
+  TS_FRAMER_MAX_BYTES: 32 * 1024,
+  /** TS framer minimum bytes target for writev */
+  TS_FRAMER_MIN_BYTES: 8 * 1024,
   /** Upper bound on token bucket induced delay */
   MAX_RESERVE_DELAY_MS: 200,
 } as const;
@@ -354,6 +360,7 @@ export class TokenBucket {
     // Deduct what we can now, rest will be refilled
     this.tokens = 0;
 
+    if (waitMs < 1) return 0;
     return Math.ceil(waitMs);
   }
 
@@ -602,10 +609,20 @@ export class FlowController extends TypedEventEmitter<FlowControllerEvents> {
   /**
    * Enqueue a payload for batched sending
    */
-  async enqueue(payload: Buffer, framer: BatchFramer): Promise<void> {
+  enqueue(payload: Buffer, framer: BatchFramer): Promise<void> | void {
     framer.encodeToBatch(payload);
-    const pending = this.scheduleFlush(framer, false);
-    if (pending) await pending;
+    const caps = this.resolveFramerCaps(this.policy.peerIsNative);
+    const backlogFrames = framer.pendingBatchSize;
+    const backlogBytes = framer.pendingBatchBytes;
+    const shouldForce =
+      backlogFrames >= this.sliceSize || backlogBytes >= caps.maxBytes;
+    const pending = this.scheduleFlush(framer, shouldForce);
+
+    // Only apply backpressure when backlog exceeds the intended flush envelope.
+    const needsWait =
+      backlogFrames >= caps.maxBuffers * 8 ||
+      backlogBytes >= caps.maxBytes * 8;
+    return needsWait ? pending : undefined;
   }
 
   async flushPending(framer: BatchFramer): Promise<void> {
@@ -619,8 +636,12 @@ export class FlowController extends TypedEventEmitter<FlowControllerEvents> {
    */
   async flush(framer: BatchFramer): Promise<void> {
     // Note: flushing state is managed by scheduleFlush, not here
-    const frameCount = framer.pendingBatchSize;
-    const projectedBytes = framer.pendingBatchBytes;
+    const preview =
+      typeof framer.getFlushPreview === "function"
+        ? framer.getFlushPreview()
+        : undefined;
+    const frameCount = preview?.bufferCount ?? framer.pendingBatchSize;
+    const projectedBytes = preview?.totalBytes ?? framer.pendingBatchBytes;
     const delayMs = this.bucket.reserve(projectedBytes);
 
     if (delayMs > 0) {
@@ -705,12 +726,17 @@ export class FlowController extends TypedEventEmitter<FlowControllerEvents> {
 
     const bounds = peerIsNative
       ? { minBuf: 8, maxBuf: 96, minBytes: 16 * 1024, maxBytes: 128 * 1024 }
-      : { minBuf: 8, maxBuf: 96, minBytes: 16 * 1024, maxBytes: 96 * 1024 };
+      : {
+          minBuf: 8,
+          maxBuf: FLOW_DEFAULTS.TS_FRAMER_MAX_BUFFERS,
+          minBytes: FLOW_DEFAULTS.TS_FRAMER_MIN_BYTES,
+          maxBytes: FLOW_DEFAULTS.TS_FRAMER_MAX_BYTES,
+        };
 
     // Start near slice*2, but allow expansion toward the trust envelope.
     let maxBuffers = Math.min(bounds.maxBuf, Math.max(bounds.minBuf, this.sliceSize * 2));
     let maxBytes = Math.min(bounds.maxBytes, Math.max(bounds.minBytes, bounds.maxBytes * trust));
-    let flushMs = peerIsNative ? 1 : 2;
+    let flushMs = peerIsNative ? 1 : 1;
 
     const adaptive = this.adaptive;
     if (adaptive) {

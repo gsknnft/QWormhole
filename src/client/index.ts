@@ -98,30 +98,32 @@ export class QWormholeClient<TMessage = Buffer> extends TypedEventEmitter<
     this.entropyMetrics = this.options.entropyMetrics ?? { negIndex: 0.5 };
     if (this.options.framing === "length-prefixed") {
       this.outboundFramer = new BatchFramer();
-      this.flowController = createFlowController(this.entropyMetrics, {
-        peerIsNative: this.peerIsNative,
-      });
-      const tuneFramer = () => {
-        if (!this.outboundFramer || !this.flowController) return;
-        const slice = this.flowController.currentSliceSize;
-        const caps = this.flowController.resolveFramerCaps(this.peerIsNative);
-        this.outboundFramer.setBatchTiming(slice, caps.flushMs);
-        this.outboundFramer.setFlushCaps(caps.maxBuffers, caps.maxBytes);
-      };
-      this.outboundFramer.on("backpressure", ({ queuedBytes }) => {
-        this.flowController?.onBackpressure(queuedBytes);
+      if (!this.options.disableFlowController) {
+        this.flowController = createFlowController(this.entropyMetrics, {
+          peerIsNative: this.peerIsNative,
+        });
+        const tuneFramer = () => {
+          if (!this.outboundFramer || !this.flowController) return;
+          const slice = this.flowController.currentSliceSize;
+          const caps = this.flowController.resolveFramerCaps(this.peerIsNative);
+          this.outboundFramer.setBatchTiming(slice, caps.flushMs);
+          this.outboundFramer.setFlushCaps(caps.maxBuffers, caps.maxBytes);
+        };
+        this.outboundFramer.on("backpressure", ({ queuedBytes }) => {
+          this.flowController?.onBackpressure(queuedBytes);
+          tuneFramer();
+        });
+        this.outboundFramer.on("drain", () => {
+          this.flowController?.onDrain();
+          tuneFramer();
+        });
+        this.outboundFramer.on("flush", ({ bufferCount, totalBytes }) => {
+          this.flowController?.handleFlushMetrics(bufferCount, totalBytes);
+          tuneFramer();
+        });
+        this.flowController.on("sliceDrift", tuneFramer);
         tuneFramer();
-      });
-      this.outboundFramer.on("drain", () => {
-        this.flowController?.onDrain();
-        tuneFramer();
-      });
-      this.outboundFramer.on("flush", ({ bufferCount, totalBytes }) => {
-        this.flowController?.handleFlushMetrics(bufferCount, totalBytes);
-        tuneFramer();
-      });
-      this.flowController.on("sliceDrift", tuneFramer);
-      tuneFramer();
+      }
     }
     if (this.options.rateLimitBytesPerSec) {
       this.limiter = new TokenBucket(
@@ -214,6 +216,25 @@ export class QWormholeClient<TMessage = Buffer> extends TypedEventEmitter<
       }
       if (this.options.idleTimeoutMs) {
         socket.setTimeout(this.options.idleTimeoutMs);
+      }
+      const socketHighWaterMark = this.options.socketHighWaterMark;
+      if (
+        typeof socketHighWaterMark === "number" &&
+        Number.isFinite(socketHighWaterMark) &&
+        socketHighWaterMark > 0
+      ) {
+        const writableState = (
+          socket as net.Socket & {
+            _writableState?: { highWaterMark?: number };
+          }
+        )._writableState;
+        if (
+          writableState &&
+          typeof writableState.highWaterMark === "number" &&
+          writableState.highWaterMark < socketHighWaterMark
+        ) {
+          writableState.highWaterMark = socketHighWaterMark;
+        }
       }
 
       socket.on("data", chunk => this.handleData(chunk));
@@ -368,10 +389,12 @@ export class QWormholeClient<TMessage = Buffer> extends TypedEventEmitter<
       handshakeSigner: options.handshakeSigner ?? undefined,
       heartbeatIntervalMs: options.heartbeatIntervalMs ?? undefined,
       heartbeatPayload: options.heartbeatPayload ?? undefined,
+      socketHighWaterMark: options.socketHighWaterMark ?? undefined,
       tls: options.tls,
       entropyMetrics: options.entropyMetrics,
       peerIsNative: options.peerIsNative,
       coherence: options.coherence ?? undefined,
+      disableFlowController: options.disableFlowController ?? false,
     };
   }
 
@@ -472,7 +495,19 @@ export class QWormholeClient<TMessage = Buffer> extends TypedEventEmitter<
         }
       }
       if (this.outboundFramer && this.flowController) {
-        await this.flowController.enqueue(next, this.outboundFramer);
+        const pending = this.flowController.enqueue(next, this.outboundFramer);
+        if (pending) {
+          pending.catch(err => {
+            this.emit(
+              "error",
+              err instanceof Error ? err : new Error(String(err)),
+            );
+          });
+        }
+        continue;
+      }
+      if (this.outboundFramer) {
+        this.outboundFramer.encodeToBatch(next);
         continue;
       }
       const framed =

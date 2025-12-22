@@ -275,7 +275,7 @@ describe("deriveSessionFlowPolicy", () => {
 
     expect(policy.preferredBatchSize).toBe(64);
     expect(policy.coherence).toBeGreaterThanOrEqual(0.8);
-    expect(policy.maxSlice).toBe(96);
+    expect(policy.maxSlice).toBe(FLOW_DEFAULTS.TS_PEER_HIGH_TRUST_MAX_SLICE);
   });
 
   it("derives low-trust policy from chaos metrics", () => {

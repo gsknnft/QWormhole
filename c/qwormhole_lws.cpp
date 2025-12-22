@@ -19,6 +19,7 @@
 #include <cmath>
 #include <cctype>
 #include <condition_variable>
+#include <cstdlib>
 #include <cstdint>
 #include <cstring>
 #include <deque>
@@ -42,6 +43,28 @@ constexpr const char kDefaultVhostName[] = "default";
 
 constexpr size_t kFrameHeaderBytes = 4;
 constexpr size_t kDefaultMaxFrameLength = 4 * 1024 * 1024;
+constexpr size_t kMaxWritesPerWritable = 16;
+constexpr size_t kDefaultPtServBufSize = 16 * 1024;
+constexpr size_t kMaxPtServBufSize = 512 * 1024;
+
+size_t ResolvePtServBufSize() {
+  const char* raw = std::getenv("QWORMHOLE_LWS_PT_SERV_BUF");
+  if (!raw || !*raw) {
+    raw = std::getenv("QW_LWS_PT_SERV_BUF");
+  }
+  if (!raw || !*raw) {
+    return kDefaultPtServBufSize;
+  }
+  char* end = nullptr;
+  unsigned long value = std::strtoul(raw, &end, 10);
+  if (!end || end == raw || value == 0) {
+    return kDefaultPtServBufSize;
+  }
+  if (value > kMaxPtServBufSize) {
+    return kMaxPtServBufSize;
+  }
+  return static_cast<size_t>(value);
+}
 
 enum class JsonType { Null, Boolean, Number, String, Object, Array };
 
@@ -913,7 +936,7 @@ Napi::Value LwsClientWrapper::Connect(const Napi::CallbackInfo& info) {
   cinfo.port = CONTEXT_PORT_NO_LISTEN;
   cinfo.protocols = kProtocols;
   cinfo.options = LWS_SERVER_OPTION_DO_SSL_GLOBAL_INIT;
-  cinfo.pt_serv_buf_size = 16 * 1024;
+  cinfo.pt_serv_buf_size = ResolvePtServBufSize();
 
   context_ = lws_create_context(&cinfo);
   if (!context_) {
@@ -1123,17 +1146,23 @@ int LwsClientWrapper::Callback(struct lws* wsi,
 
     case LWS_CALLBACK_RAW_WRITEABLE:
       if (self) {
-        PendingSend next;
-        {
-          std::lock_guard<std::mutex> lock(self->mutex_);
-          if (self->send_queue_.empty()) {
-            break;
+        size_t writes = 0;
+        while (writes < kMaxWritesPerWritable) {
+          PendingSend next;
+          {
+            std::lock_guard<std::mutex> lock(self->mutex_);
+            if (self->send_queue_.empty()) {
+              break;
+            }
+            next = std::move(self->send_queue_.front());
+            self->send_queue_.pop_front();
           }
-          next = std::move(self->send_queue_.front());
-          self->send_queue_.pop_front();
-        }
 
-        if (!next.data.empty()) {
+          if (next.data.empty()) {
+            writes++;
+            continue;
+          }
+
           std::vector<uint8_t> buffer(LWS_PRE + next.data.size());
           std::memcpy(buffer.data() + LWS_PRE, next.data.data(), next.data.size());
           ssize_t written =
@@ -1142,7 +1171,23 @@ int LwsClientWrapper::Callback(struct lws* wsi,
           if (written < 0) {
             self->closing_ = true;
             lws_cancel_service(self->context_);
-          } else if (!self->send_queue_.empty()) {
+            break;
+          }
+          if (static_cast<size_t>(written) < next.data.size()) {
+            PendingSend remainder;
+            remainder.data.assign(next.data.begin() + written, next.data.end());
+            {
+              std::lock_guard<std::mutex> lock(self->mutex_);
+              self->send_queue_.push_front(std::move(remainder));
+            }
+            lws_callback_on_writable(wsi);
+            break;
+          }
+          writes++;
+        }
+        {
+          std::lock_guard<std::mutex> lock(self->mutex_);
+          if (!self->send_queue_.empty()) {
             lws_callback_on_writable(wsi);
           }
         }
@@ -1489,7 +1534,7 @@ Napi::Value LwsServerWrapper::Listen(const Napi::CallbackInfo& info) {
                   LWS_SERVER_OPTION_ADOPT_APPLY_LISTEN_ACCEPT_CONFIG;
   cinfo.listen_accept_role = "raw-skt";
   cinfo.listen_accept_protocol = "qwormhole-server";
-  cinfo.pt_serv_buf_size = 16 * 1024;
+  cinfo.pt_serv_buf_size = ResolvePtServBufSize();
   cinfo.vhost_name = kServerVhostName;
 
   if (!options_.host.empty() && options_.host != "0.0.0.0") {
@@ -2154,10 +2199,23 @@ int LwsServerWrapper::ServerCallback(struct lws* wsi,
         return -1;
       }
 
-      if (!conn->send_queue.empty()) {
-        auto data = conn->send_queue.front();
-        conn->send_queue.pop_front();
-        conn->queued_bytes -= data.size();
+      bool should_emit_drain = false;
+      size_t writes = 0;
+      while (writes < kMaxWritesPerWritable) {
+        std::vector<uint8_t> data;
+        {
+          std::lock_guard<std::mutex> lock(self->mutex_);
+          if (conn->send_queue.empty()) {
+            break;
+          }
+          data = std::move(conn->send_queue.front());
+          conn->send_queue.pop_front();
+        }
+
+        if (data.empty()) {
+          writes++;
+          continue;
+        }
 
         std::vector<uint8_t> buffer(LWS_PRE + data.size());
         std::memcpy(buffer.data() + LWS_PRE, data.data(), data.size());
@@ -2165,16 +2223,46 @@ int LwsServerWrapper::ServerCallback(struct lws* wsi,
                                     data.size(), LWS_WRITE_RAW);
 
         if (written < 0) {
-          // Write failed, close connection
           return -1;
         }
 
+        size_t sent = static_cast<size_t>(written);
+        if (sent > data.size()) {
+          sent = data.size();
+        }
+
+        {
+          std::lock_guard<std::mutex> lock(self->mutex_);
+          if (conn->queued_bytes >= sent) {
+            conn->queued_bytes -= sent;
+          } else {
+            conn->queued_bytes = 0;
+          }
+
+          if (sent < data.size()) {
+            std::vector<uint8_t> remainder(data.begin() + sent, data.end());
+            conn->send_queue.push_front(std::move(remainder));
+          }
+        }
+
+        if (sent < data.size()) {
+          lws_callback_on_writable(wsi);
+          break;
+        }
+        writes++;
+      }
+
+      {
+        std::lock_guard<std::mutex> lock(self->mutex_);
         if (!conn->send_queue.empty()) {
           lws_callback_on_writable(wsi);
         } else if (conn->backpressured) {
           conn->backpressured = false;
-          self->EmitDrain(conn->id);
+          should_emit_drain = true;
         }
+      }
+      if (should_emit_drain) {
+        self->EmitDrain(conn->id);
       }
       break;
     }

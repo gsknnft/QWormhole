@@ -30,7 +30,7 @@ const externalDeps = [
   "node:crypto",
   "node:child_process",
   "node:readline",
-  
+  "node:module",
   "node:perf_hooks",
   "worker_threads",
   "worker",

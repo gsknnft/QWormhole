@@ -8,6 +8,8 @@ import { isNativeServerAvailable } from "../src/core/native-server";
 import { BatchFramer } from "../src/core/batch-framer";
 import { KcpServer } from "../src/transports/kcp/kcp-server";
 import { KcpSession } from "../src/transports/kcp/kcp-session";
+import type { FlowControllerDiagnostics } from "../src/core/flow-controller";
+import type { BatchFramerStats } from "../src/core/batch-framer";
 import type {
   FramingMode,
   NativeBackend,
@@ -16,7 +18,7 @@ import type {
   Serializer,
 } from "../src/types/types";
 
-type Mode = "ts" | "native-lws" | "native-libsocket" | "kcp" | "kcp-arq";
+type Mode = "ts" | "native-lws" | "native-libsocket" | "kcp" | "kcp-arq" | "quic";
 
 
 interface Scenario {
@@ -102,10 +104,16 @@ type ScenarioDiagnostics = {
     avgPayloadBytes: number;
     pendingMaxBytes: number;
   };
+  flow?: FlowControllerDiagnostics;
+  clientFlow?: FlowControllerDiagnostics;
+  clientBatch?: BatchFramerStats;
 };
 
 type DiagnosticsExtras = {
   sendBlocks?: SendBlockStats;
+  flowDiagnostics?: FlowControllerDiagnostics;
+  clientFlowDiagnostics?: FlowControllerDiagnostics;
+  clientBatchStats?: BatchFramerStats;
 };
 
 type DiagnosticsScope = {

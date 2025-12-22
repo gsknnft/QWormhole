@@ -28,6 +28,8 @@ export interface CoherenceState {
   confidence?: number;
 }
 
+export type CoherenceMode = "observe" | "enforce";
+
 export interface CoherenceConfig {
   Hmin: number;
   maxDelta: Partial<CouplingParams>;

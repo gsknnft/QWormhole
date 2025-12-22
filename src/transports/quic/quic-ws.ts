@@ -17,7 +17,7 @@ export class QuicWebTransport extends EventEmitter implements QWormholeTransport
 
   private reading = false;
 
-  constructor(private url: string) {
+  constructor(url: string) {
     super();
     this.wt = new WebTransport(url);
   }

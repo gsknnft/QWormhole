@@ -75,6 +75,7 @@ type InternalServerOptions<TMessage> = Omit<
   tls?: QWTlsOptions;
   emitHandshakeMessages?: boolean;
   coherence?: CoherenceAdapterOptions;
+  disableFlowController?: boolean;
 };
 
 // const resolveFramerCaps = (sliceSize: number, peerIsNative: boolean) => {
@@ -415,6 +416,7 @@ export class QWormholeServer<TMessage = Buffer> extends TypedEventEmitter<
     connection.coherenceAdapter?.stop();
     connection.coherenceAdapter = undefined;
     if (!this.shouldEnableCoherence()) return;
+    if (connection.peerIsNative) return;
     if (!connection.outboundFramer || !connection.flowController) return;
     connection.coherenceAdapter = attachCoherenceAdapter(
       connection.outboundFramer,
@@ -426,13 +428,16 @@ export class QWormholeServer<TMessage = Buffer> extends TypedEventEmitter<
   private createConnection(socket: net.Socket): ManagedConnection {
     const id = randomId();
     const entropyMetrics = computeEntropyMetrics(0.5);
+    const disableFlow = this.options.disableFlowController === true;
     const outboundFramer =
       this.options.framing === "length-prefixed"
         ? new BatchFramer()
         : undefined;
     outboundFramer?.attachSocket(socket);
     const flowController = outboundFramer
-      ? createFlowController(entropyMetrics)
+      ? disableFlow
+        ? undefined
+        : createFlowController(entropyMetrics)
       : undefined;
     let connection: ManagedConnection;
     const tuneFramer = () => {
@@ -553,10 +558,22 @@ export class QWormholeServer<TMessage = Buffer> extends TypedEventEmitter<
           connection.socket.destroy(err);
           throw err;
         }
-        await connection.flowController.enqueue(
+        const pending = connection.flowController.enqueue(
           next,
           connection.outboundFramer,
         );
+        if (pending) {
+          pending.catch(err => {
+            this.emit(
+              "error",
+              err instanceof Error ? err : new Error(String(err)),
+            );
+          });
+        }
+        continue;
+      }
+      if (connection.outboundFramer) {
+        connection.outboundFramer.encodeToBatch(next);
         continue;
       }
 
@@ -670,6 +687,7 @@ export class QWormholeServer<TMessage = Buffer> extends TypedEventEmitter<
       verifyHandshake: options.verifyHandshake,
       tls: options.tls,
       coherence: options.coherence ?? undefined,
+      disableFlowController: options.disableFlowController ?? false,
     };
   }
 

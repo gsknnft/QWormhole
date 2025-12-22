@@ -87,7 +87,7 @@ export function defaultSimulationConfig(): CoherenceSimulationConfig {
       paceMs: 1,
     },
     coherence: {
-      Hmin: 4,
+      Hmin: 2,
       maxDelta: { batchSize: 16, concurrency: 2, redundancy: 0.1, paceMs: 5 },
       floors: { batchSize: 1, concurrency: 1, redundancy: 0, paceMs: 0 },
       ceilings: { batchSize: 256, concurrency: 64, redundancy: 1, paceMs: 50 },
