@@ -19,8 +19,8 @@ export class CoherenceController {
   private hysteresis: number = 0.05; // Margin hysteresis for mode switching
   private lastMode: CoherenceMode = "BALANCED";
   private lastMargin: number = 0.5;
-  private lastVelocity: number = 0;
-  private lastReserve: number = 1;
+  lastVelocity: number = 0;
+  lastReserve: number = 1;
 
   // Main decision function with explicit thresholds
   // Margin (M): 0..1, Velocity (V): change in margin per block, Reserve (R): 0..1
