@@ -76,6 +76,7 @@ type InternalServerOptions<TMessage> = Omit<
   emitHandshakeMessages?: boolean;
   coherence?: CoherenceAdapterOptions;
   disableFlowController?: boolean;
+  flowFastPath?: boolean;
 };
 
 // const resolveFramerCaps = (sliceSize: number, peerIsNative: boolean) => {
@@ -437,16 +438,20 @@ export class QWormholeServer<TMessage = Buffer> extends TypedEventEmitter<
     const flowController = outboundFramer
       ? disableFlow
         ? undefined
-        : createFlowController(entropyMetrics)
+        : createFlowController(entropyMetrics, {
+            fastPath: this.options.flowFastPath,
+          })
       : undefined;
     let connection: ManagedConnection;
     const tuneFramer = () => {
       if (!outboundFramer || !flowController) return;
-      const slice = flowController.currentSliceSize;
+      const batchSize = flowController.resolveBatchSize(
+        connection?.peerIsNative ?? false,
+      );
       const caps = flowController.resolveFramerCaps(
         connection?.peerIsNative ?? false,
       );
-      outboundFramer.setBatchTiming(slice, caps.flushMs);
+      outboundFramer.setBatchTiming(batchSize, caps.flushMs);
       outboundFramer.setFlushCaps(caps.maxBuffers, caps.maxBytes);
     };
     connection = {
@@ -688,6 +693,7 @@ export class QWormholeServer<TMessage = Buffer> extends TypedEventEmitter<
       tls: options.tls,
       coherence: options.coherence ?? undefined,
       disableFlowController: options.disableFlowController ?? false,
+      flowFastPath: options.flowFastPath ?? false,
     };
   }
 

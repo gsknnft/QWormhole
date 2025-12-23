@@ -1,3 +1,5 @@
+// --- Coherence Trace Types ---
+
 import {
   performance,
   PerformanceObserver,
@@ -24,6 +26,7 @@ import type {
   FlowController,
   FlowControllerDiagnostics,
 } from "../src/core/flow-controller";
+import { CoherenceController } from "../src/core/CoherenceController";
 import type { BatchFramerStats } from "../src/core/batch-framer";
 import { LengthPrefixedFramer } from "../src/core/framing";
 import { KcpServer } from "../src/transports/kcp/kcp-server";
@@ -36,8 +39,41 @@ import type {
   Serializer,
 } from "../src/types/types";
 import * as dotenv from "dotenv";
-import { ScenarioDiagnostics, Scenario, GcTotals, BatchFlushStats, DiagnosticsScope, SendBlockStats, ScenarioResult, DiagnosticsExtras } from "../test/testtypes";
+import {
+  ScenarioDiagnostics,
+  Scenario,
+  GcTotals,
+  BatchFlushStats,
+  DiagnosticsScope,
+  SendBlockStats,
+  ScenarioResult,
+  DiagnosticsExtras,
+  CoherenceDecisionSample,
+} from "../test/testtypes";
 dotenv.config();
+interface TrustSnapshot {
+  flowDiagnostics?: FlowControllerDiagnostics;
+  batchStats?: BatchFramerStats;
+}
+
+interface EntropyMetrics {
+  negIndex: number;
+  coherence: "high" | "medium" | "low" | "chaos";
+  entropyVelocity: string;
+}
+
+interface QWormholeClientOptions {
+  host: string;
+  port: number;
+  framing: FramingMode;
+  serializer: Serializer;
+  deserializer: (data: Buffer) => Buffer;
+  entropyMetrics: EntropyMetrics;
+  onTrustSnapshot: (snapshot: TrustSnapshot) => void;
+  peerIsNative: boolean;
+  socketHighWaterMark?: number;
+  coherence?: { enabled: boolean; mode: string };
+}
 
 const BENCH_COHERENCE = process.env.QWORMHOLE_BENCH_COHERENCE === "1";
 const BENCH_COHERENCE_MODE =
@@ -118,7 +154,13 @@ const getCsvPath = () => {
   return undefined;
 };
 
-type Mode = "ts" | "native-lws" | "native-libsocket" | "kcp" | "kcp-arq" | "quic";
+type Mode =
+  | "ts"
+  | "native-lws"
+  | "native-libsocket"
+  | "kcp"
+  | "kcp-arq"
+  | "quic";
 
 interface BenchResult {
   scenario: string;
@@ -189,6 +231,7 @@ const BENCH_SOCKET_HWM = envNumber("QWORMHOLE_BENCH_HWM");
 const BENCH_FRAMING: FramingMode =
   process.env.QWORMHOLE_BENCH_FRAMING === "none" ? "none" : "length-prefixed";
 const BENCH_DISABLE_FLOW = process.env.QWORMHOLE_BENCH_NO_FLOW === "1";
+const BENCH_FLOW_FAST = process.env.QWORMHOLE_BENCH_FLOW_FAST === "1";
 const BENCH_NEG_INDEX = (() => {
   const raw = process.env.QWORMHOLE_BENCH_NEG_INDEX;
   if (!raw) return 0.9;
@@ -224,7 +267,6 @@ const detectNativeBackend = (backend: "lws" | "libsocket") => {
 
 const availableLws = detectNativeBackend("lws");
 const availableLibsocket = detectNativeBackend("libsocket");
-
 
 const serverBackends: NativeBackend[] = [];
 if (isNativeServerAvailable("lws")) {
@@ -293,8 +335,6 @@ const deriveBenchCoherence = (): "high" | "medium" | "low" | "chaos" => {
   if (BENCH_NEG_INDEX >= 0.4) return "low";
   return "chaos";
 };
-
-
 
 const GC_KIND_LABELS: Record<number, string> = {
   [perfConstants.NODE_PERFORMANCE_GC_MAJOR]: "major",
@@ -461,19 +501,19 @@ const startDiagnostics = (
         maxQueuedBytes,
       };
 
-    return {
-      gc,
-      eventLoop,
-      eventLoopDelay,
-      backpressure,
-      batching,
-      flow: extras?.flowDiagnostics,
-      clientFlow: extras?.clientFlowDiagnostics,
-      clientBatch: extras?.clientBatchStats,
-      sendBlocks: extras?.sendBlocks,
-    };
-  },
-};
+      return {
+        gc,
+        eventLoop,
+        eventLoopDelay,
+        backpressure,
+        batching,
+        flow: extras?.flowDiagnostics,
+        clientFlow: extras?.clientFlowDiagnostics,
+        clientBatch: extras?.clientBatchStats,
+        sendBlocks: extras?.sendBlocks,
+      };
+    },
+  };
 };
 
 const buildLoopDelayStats = (
@@ -593,8 +633,9 @@ async function childMain(): Promise<void> {
   const trustSnapshotWaiter = new Promise<void>(resolve => {
     trustSnapshotResolve = resolve;
   });
-  let serverInstance: ReturnType<typeof createQWormholeServer>["server"] | null =
-    null;
+  let serverInstance:
+    | ReturnType<typeof createQWormholeServer>["server"]
+    | null = null;
   let onMessage: ((payload: { data: Buffer }) => void) | null = null;
   let finished = false;
   let doneSent = false;
@@ -670,6 +711,7 @@ async function childMain(): Promise<void> {
         preferNative: msg.scenario.preferNativeServer,
         preferredNativeBackend: msg.scenario.serverBackend,
         disableFlowController: BENCH_DISABLE_FLOW,
+        flowFastPath: BENCH_FLOW_FAST,
         coherence: msg.benchCoherence
           ? { enabled: true, mode: BENCH_COHERENCE_MODE }
           : undefined,
@@ -818,7 +860,8 @@ async function runScenarioForked({
   const child = forkBenchChild();
   let serverMode: Mode = preferNativeServer ? "native-lws" : "ts";
 
-  let readyResolve: ((msg: BenchChildReady | BenchChildSkip) => void) | null = null;
+  let readyResolve: ((msg: BenchChildReady | BenchChildSkip) => void) | null =
+    null;
   let readyReject: ((err: Error) => void) | null = null;
   const readyPromise = new Promise<BenchChildReady | BenchChildSkip>(
     (resolve, reject) => {
@@ -908,16 +951,16 @@ async function runScenarioForked({
   if (clientMode === "ts") {
     tsClient = new QWormholeClient<Buffer>({
       host: "127.0.0.1",
-      port: ready.port,
+      port: (ready as BenchChildReady).port,
       framing: BENCH_FRAMING,
       serializer: toBytes,
-      deserializer: (data: Buffer) => data,
+      deserializer: (data: Buffer): Buffer => data,
       entropyMetrics: {
         negIndex: BENCH_NEG_INDEX,
         coherence: deriveBenchCoherence(),
         entropyVelocity: "low",
       },
-      onTrustSnapshot: snapshot => {
+      onTrustSnapshot: (snapshot: TrustSnapshot) => {
         clientFlowDiagnostics = snapshot.flowDiagnostics;
         clientBatchStats = snapshot.batchStats;
         clientSnapshotResolve?.();
@@ -927,7 +970,7 @@ async function runScenarioForked({
       coherence: BENCH_COHERENCE
         ? { enabled: true, mode: BENCH_COHERENCE_MODE }
         : undefined,
-    });
+    } as QWormholeClientOptions);
     attachBenchClientErrorHandler(tsClient);
     await tsClient.connect();
   } else {
@@ -1019,7 +1062,9 @@ async function runScenarioForked({
   const bytesReceived = done?.bytesReceived ?? 0;
   const seconds = duration / 1000;
   const msgsPerSec =
-    seconds > 0 && messagesReceived > 0 ? messagesReceived / seconds : undefined;
+    seconds > 0 && messagesReceived > 0
+      ? messagesReceived / seconds
+      : undefined;
   const mbPerSec =
     seconds > 0 && bytesReceived > 0
       ? bytesReceived / seconds / (1024 * 1024)
@@ -1048,6 +1093,11 @@ async function runScenario({
   clientMode,
   serverBackend,
 }: Scenario): Promise<ScenarioResult> {
+  // --- Coherence Trace Setup ---
+  const coherenceTrace: CoherenceDecisionSample[] = [];
+  let lastCoherenceMode: string | undefined = undefined;
+  const traceInterval = 10; // ms, minimum interval between samples
+  let lastTraceTime = 0;
   if (BENCH_FORK && !BENCH_CHILD) {
     return runScenarioForked({
       id,
@@ -1114,6 +1164,7 @@ async function runScenario({
     preferNative: preferNativeServer,
     preferredNativeBackend: serverBackend,
     disableFlowController: BENCH_DISABLE_FLOW,
+    flowFastPath: BENCH_FLOW_FAST,
     coherence: BENCH_COHERENCE
       ? { enabled: true, mode: BENCH_COHERENCE_MODE }
       : undefined,
@@ -1149,6 +1200,9 @@ async function runScenario({
 
   let tsClient: QWormholeClient<Buffer> | null = null;
   let nativeClient: NativeTcpClient | null = null;
+  let coherenceController: CoherenceController | null = null;
+  let flowController: FlowController | null = null;
+  let batchFramer: BatchFramer | null = null;
   if (clientMode === "ts") {
     tsClient = new QWormholeClient<Buffer>({
       host: "127.0.0.1",
@@ -1161,7 +1215,7 @@ async function runScenario({
         coherence: deriveBenchCoherence(),
         entropyVelocity: "low",
       },
-      onTrustSnapshot: (snapshot) => {
+      onTrustSnapshot: (snapshot: TrustSnapshot) => {
         clientFlowDiagnostics = snapshot.flowDiagnostics;
         clientBatchStats = snapshot.batchStats;
         clientSnapshotResolve?.();
@@ -1169,12 +1223,20 @@ async function runScenario({
       peerIsNative: serverMode !== "ts",
       socketHighWaterMark: BENCH_SOCKET_HWM,
       disableFlowController: BENCH_DISABLE_FLOW,
+      flowFastPath: BENCH_FLOW_FAST,
       coherence: BENCH_COHERENCE
         ? { enabled: true, mode: BENCH_COHERENCE_MODE }
         : undefined,
     });
     attachBenchClientErrorHandler(tsClient);
     await tsClient.connect();
+    // Extract FlowController and BatchFramer for coherence loop
+    const internal = tsClient as any;
+    flowController = internal.flowController ?? null;
+    batchFramer = internal.outboundFramer ?? null;
+    if (flowController && batchFramer) {
+      coherenceController = new CoherenceController();
+    }
   } else {
     const backend = clientMode === "native-lws" ? "lws" : "libsocket";
     nativeClient = new NativeTcpClient(backend);
@@ -1215,6 +1277,8 @@ async function runScenario({
 
   try {
     const start = performance.now();
+    const benchStart = performance.now();
+    const traceEvery = 1000; // log every 1000 messages
     for (let i = 0; i < TOTAL_MESSAGES; i++) {
       if (tsClient) {
         tsClient.send(PAYLOAD);
@@ -1228,10 +1292,56 @@ async function runScenario({
           sendBlockDurations.push(now - blockStart);
           blockStart = now;
           blockCount = 0;
+          // After each block flush, update coherence control and sample trace
+          if (coherenceController && flowController && batchFramer) {
+            const diag = flowController.getDiagnostics();
+            const framerStats = batchFramer.getStats();
+            const tMs = now - benchStart;
+            const metrics = {
+              bytesSent: diag.totalBytes,
+              bytesAcked: 0,
+              messagesSent: framerStats.totalFrames,
+              messagesAcked: 0,
+              batchSize: flowController.currentSliceSize * 1024,
+              batchMessages: flowController.currentSliceSize,
+              batchIntervalMs: diag.adaptive?.flushIntervalAvgMs ?? 0,
+              bufferedBytes: framerStats.pendingBytes,
+              bufferedMessages: framerStats.pendingFrames,
+              socketBackpressure: (diag.backpressureEvents ?? 0) > 0,
+              eventLoopJitterMs: diag.adaptive?.flushIntervalAvgMs ?? 0,
+              gcPauseMs: diag.adaptive?.gcPauseMaxMs ?? 0,
+              marginEstimate: diag.policy.coherence,
+              reserveEstimate: 1.0,
+              rttMs: undefined,
+              timestamp: Date.now(),
+            };
+            const decision = coherenceController.decide(metrics);
+            flowController.setExternalSliceSize(
+              Math.floor(decision.batchTarget / 1024),
+            );
+            batchFramer.setBatchTiming(
+              Math.floor(decision.batchTarget / 1024),
+              decision.flushIntervalMs,
+            );
+            batchFramer.setFlushCaps(undefined, decision.maxBufferedBytes);
+            // Always log a sample after every block flush
+            coherenceTrace.push({
+              tMs,
+              mode: decision.mode,
+              margin: metrics.marginEstimate,
+              velocity: metrics.batchIntervalMs,
+              reserve: metrics.reserveEstimate,
+              batchTarget: decision.batchTarget,
+              flushIntervalMs: decision.flushIntervalMs,
+              maxBufferedBytes: decision.maxBufferedBytes,
+              reason: decision.reason,
+            });
+            lastCoherenceMode = decision.mode;
+            lastTraceTime = tMs;
+          }
         }
       }
     }
-
     await waitForCompletion(
       () => messagesReceived >= TOTAL_MESSAGES,
       TIMEOUT_MS,
@@ -1286,7 +1396,7 @@ async function runScenario({
     framing: BENCH_FRAMING,
     msgsPerSec,
     mbPerSec,
-    diagnostics,
+    diagnostics: diagnostics ? { ...diagnostics, coherenceTrace } : undefined,
   };
 }
 
@@ -1305,19 +1415,23 @@ async function runKcpScenario(): Promise<ScenarioResult> {
   let serverPort = 0;
   let messagesReceived = 0;
   let bytesReceived = 0;
-  let lastKcpMetrics: { rttMs?: number; lossRate?: number; pending?: number } = {};
+  let lastKcpMetrics: { rttMs?: number; lossRate?: number; pending?: number } =
+    {};
 
   server.on("session", ({ mux }) => {
-    mux.on("stream", (stream: { 
-      on: (event: "data", listener: (data: Uint8Array) => void) => void; 
-      write: (data: Uint8Array) => void; 
-    }) => {
-      stream.on("data", (data: Uint8Array) => {
-      messagesReceived += 1;
-      bytesReceived += data?.byteLength ?? 0;
-      stream.write(data ?? new Uint8Array());
-      });
-    });
+    mux.on(
+      "stream",
+      (stream: {
+        on: (event: "data", listener: (data: Uint8Array) => void) => void;
+        write: (data: Uint8Array) => void;
+      }) => {
+        stream.on("data", (data: Uint8Array) => {
+          messagesReceived += 1;
+          bytesReceived += data?.byteLength ?? 0;
+          stream.write(data ?? new Uint8Array());
+        });
+      },
+    );
   });
 
   serverPort = await server.start();
@@ -1361,10 +1475,9 @@ async function runKcpScenario(): Promise<ScenarioResult> {
     stream.close();
     client.close();
     server.stop();
-  } catch(e) {
+  } catch (e) {
     console.error("Error during KCP cleanup:", e);
   }
-
 
   const seconds = duration / 1000;
   const msgsPerSec =
@@ -1395,8 +1508,7 @@ async function runKcpScenario(): Promise<ScenarioResult> {
 async function runQuicScenario(): Promise<ScenarioResult> {
   const QUIC_TIMEOUT_MS =
     Number(process.env.QW_QUIC_TIMEOUT_MS ?? "20000") || 20000;
-  const QUIC_YIELD_EVERY =
-    Number(process.env.QW_QUIC_YIELD_EVERY ?? "50") || 0;
+  const QUIC_YIELD_EVERY = Number(process.env.QW_QUIC_YIELD_EVERY ?? "50") || 0;
   const QUIC_PROTOCOL_VERSION = process.env.QWORMHOLE_PROTOCOL_VERSION;
   const QUIC_HANDSHAKE_TAGS = parseHandshakeTags(
     process.env.QWORMHOLE_HANDSHAKE_TAGS,
@@ -1409,8 +1521,7 @@ async function runQuicScenario(): Promise<ScenarioResult> {
   );
   const QUIC_BATCH_SIZE = Number(process.env.QW_QUIC_BATCH_SIZE ?? "32") || 32;
   const QUIC_BATCH_BYTES =
-    Number(process.env.QW_QUIC_BATCH_BYTES ?? String(96 * 1024)) ||
-    96 * 1024;
+    Number(process.env.QW_QUIC_BATCH_BYTES ?? String(96 * 1024)) || 96 * 1024;
   const QUIC_STATS = ENABLE_DIAGNOSTICS || process.env.QW_QUIC_STATS === "1";
   const quicUseFraming = BENCH_FRAMING !== "none";
   const quicStreamFraming = quicUseFraming ? "length-prefixed" : "none";
@@ -1429,8 +1540,20 @@ async function runQuicScenario(): Promise<ScenarioResult> {
     };
   }
 
-  const certPath = path.resolve(__dirname, "..", "libwebsockets", "build", "libwebsockets-test-server.pem");
-  const keyPath = path.resolve(__dirname, "..", "libwebsockets", "build", "libwebsockets-test-server.key.pem");
+  const certPath = path.resolve(
+    __dirname,
+    "..",
+    "libwebsockets",
+    "build",
+    "libwebsockets-test-server.pem",
+  );
+  const keyPath = path.resolve(
+    __dirname,
+    "..",
+    "libwebsockets",
+    "build",
+    "libwebsockets-test-server.key.pem",
+  );
   const alpn = ["h3"];
 
   const server = new QuicServer({
@@ -1876,12 +1999,7 @@ if (BENCH_CHILD) {
     });
 }
 
-export type {
-  Scenario,
-  ScenarioResult,
-  ScenarioDiagnostics,
-  BenchResult,
-};
+export type { Scenario, ScenarioResult, ScenarioDiagnostics, BenchResult };
 
 export {
   runScenario,

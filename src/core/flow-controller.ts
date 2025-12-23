@@ -31,6 +31,8 @@ import {
   NegentropicDiagnostics,
   type NegentropicSnapshot,
 } from "../utils/negentropic-diagnostics";
+import { TransportMetrics } from "src/types/TransportMetrics";
+import { CoherenceController } from "./CoherenceController";
 
 /**
  * Session flow policy derived during handshake negotiation
@@ -114,6 +116,7 @@ interface FlowControllerInitOptions {
   adaptiveConfig?: Partial<AdaptiveConfig>;
   forceSliceSize?: number;
   forceRateBytesPerSec?: number;
+  fastPath?: boolean;
 }
 
 /**
@@ -140,6 +143,9 @@ export const FLOW_DEFAULTS = {
   TS_FRAMER_MAX_BYTES: 32 * 1024,
   /** TS framer minimum bytes target for writev */
   TS_FRAMER_MIN_BYTES: 8 * 1024,
+  /** TS fast-path caps (bench throughput sanity) */
+  TS_FAST_MAX_BUFFERS: 64,
+  TS_FAST_MAX_BYTES: 96 * 1024,
   /** Upper bound on token bucket induced delay */
   MAX_RESERVE_DELAY_MS: 200,
 } as const;
@@ -172,6 +178,7 @@ const disableMonitors = (): void => {
       // ignore
     }
   }
+
   activeLoopMonitors.clear();
 };
 
@@ -396,6 +403,7 @@ export class FlowController extends TypedEventEmitter<FlowControllerEvents> {
   private readonly forceSliceSize?: number;
   private externalSliceSize?: number;
   private readonly effectiveRateBytesPerSec: number;
+  private readonly fastPath: boolean;
   private flushing = false;
   public runtimeMetrics: Record<string, () => number> = {};
   private flushPromise: Promise<void> | null = null;
@@ -427,6 +435,7 @@ export class FlowController extends TypedEventEmitter<FlowControllerEvents> {
       initOptions?.forceRateBytesPerSec ?? envForceRateBytes(),
     );
     this.effectiveRateBytesPerSec = forcedRateBytes ?? policy.rateBytesPerSec;
+    this.fastPath = initOptions?.fastPath ?? false;
     const elu = monitorEventLoopDelay({ resolution: 20 });
     elu.enable();
     trackMonitor(elu);
@@ -606,11 +615,56 @@ export class FlowController extends TypedEventEmitter<FlowControllerEvents> {
     this.emit("drain", { sliceSize: this.sliceSize });
   }
 
+
+  /**
+   * Closed-loop coherence control: update batch/flush policy based on CoherenceController decision.
+   * Call after each flush or on a telemetry interval.
+   * @param framer BatchFramer instance
+   * @param coherenceController CoherenceController instance
+   */
+  updateCoherenceControl(framer: BatchFramer, coherenceController: CoherenceController): void {
+    // Gather metrics from FlowController and BatchFramer
+    const diag = this.getDiagnostics();
+    const framerStats = framer.getStats();
+    const now = Date.now();
+    // Compose TransportMetrics
+    const metrics = {
+      bytesSent: diag.totalBytes,
+      bytesAcked: 0, // Fill in from receiver if available
+      messagesSent: framerStats.totalFrames,
+      messagesAcked: 0, // Fill in from receiver if available
+      batchSize: this.sliceSize * 1024, // Approximate: sliceSize in frames, adjust as needed
+      batchMessages: this.sliceSize,
+      batchIntervalMs: diag.adaptive?.flushIntervalAvgMs ?? 0,
+      bufferedBytes: framerStats.pendingBytes,
+      bufferedMessages: framerStats.pendingFrames,
+      socketBackpressure: this.isPressureActive(),
+      eventLoopJitterMs: diag.adaptive?.flushIntervalAvgMs ?? 0, // Approximate, or use ELU if available
+      gcPauseMs: diag.adaptive?.gcPauseMaxMs ?? 0,
+      marginEstimate: diag.policy.coherence, // Use coherence as margin proxy
+      reserveEstimate: 1.0, // TODO: compute from available tokens or buffer margin
+      rttMs: undefined,
+      timestamp: now,
+    };
+    // Get decision from CoherenceController
+    const decision = coherenceController.decide(metrics as TransportMetrics);
+    // Apply recommendations
+    this.setExternalSliceSize(Math.floor(decision.batchTarget / 1024)); // Convert bytes to frames if needed
+    framer.setBatchTiming(Math.floor(decision.batchTarget / 1024), decision.flushIntervalMs);
+    framer.setFlushCaps(undefined, decision.maxBufferedBytes);
+    // Optionally: log or emit decision for diagnostics
+    console.debug("[Coherence] mode=", decision.mode, decision.reason);
+  }
+
+
   /**
    * Enqueue a payload for batched sending
    */
   enqueue(payload: Buffer, framer: BatchFramer): Promise<void> | void {
     framer.encodeToBatch(payload);
+    if (this.isFastPathActive()) {
+      return;
+    }
     const caps = this.resolveFramerCaps(this.policy.peerIsNative);
     const backlogFrames = framer.pendingBatchSize;
     const backlogBytes = framer.pendingBatchBytes;
@@ -669,6 +723,20 @@ export class FlowController extends TypedEventEmitter<FlowControllerEvents> {
     return this.sliceSize;
   }
 
+  private isPressureActive(): boolean {
+    if (this.backpressureCount > 0) return true;
+    if (!this.adaptive) return false;
+    const { state, config } = this.adaptive;
+    if (state.backpressureCount > 0) return true;
+    if (state.gcPauseMaxMs > config.gcBudgetMs) return true;
+    if (state.eluIdleRatioAvg < config.idleTarget) return true;
+    return false;
+  }
+
+  private isFastPathActive(): boolean {
+    return this.fastPath && !this.isPressureActive();
+  }
+
   /**
    * Apply an external slice size override (e.g., coherence loop).
    */
@@ -716,6 +784,7 @@ export class FlowController extends TypedEventEmitter<FlowControllerEvents> {
     maxBytes: number;
     flushMs: number;
   } {
+    const fastPathActive = this.isFastPathActive();
     // Trust-scaled envelope: native peers get the widest caps, TS peers scale with negIndex/coherence.
     const trust = peerIsNative
       ? 1
@@ -726,7 +795,14 @@ export class FlowController extends TypedEventEmitter<FlowControllerEvents> {
 
     const bounds = peerIsNative
       ? { minBuf: 8, maxBuf: 96, minBytes: 16 * 1024, maxBytes: 128 * 1024 }
-      : {
+      : fastPathActive
+        ? {
+            minBuf: 16,
+            maxBuf: FLOW_DEFAULTS.TS_FAST_MAX_BUFFERS,
+            minBytes: 16 * 1024,
+            maxBytes: FLOW_DEFAULTS.TS_FAST_MAX_BYTES,
+          }
+        : {
           minBuf: 8,
           maxBuf: FLOW_DEFAULTS.TS_FRAMER_MAX_BUFFERS,
           minBytes: FLOW_DEFAULTS.TS_FRAMER_MIN_BYTES,
@@ -739,7 +815,7 @@ export class FlowController extends TypedEventEmitter<FlowControllerEvents> {
     let flushMs = peerIsNative ? 1 : 1;
 
     const adaptive = this.adaptive;
-    if (adaptive) {
+    if (adaptive && !fastPathActive) {
       const { state, config } = adaptive;
       const idleOK = state.eluIdleRatioAvg >= config.idleTarget;
       const gcOK = state.gcPauseMaxMs <= config.gcBudgetMs;
@@ -758,6 +834,15 @@ export class FlowController extends TypedEventEmitter<FlowControllerEvents> {
     }
 
     return { maxBuffers, maxBytes, flushMs };
+  }
+
+  resolveBatchSize(peerIsNative: boolean): number {
+    if (!this.isFastPathActive()) {
+      return this.sliceSize;
+    }
+    const caps = this.resolveFramerCaps(peerIsNative);
+    const preferred = Math.max(this.sliceSize, this.policy.preferredBatchSize);
+    return Math.min(preferred, caps.maxBuffers);
   }
 
   /**
@@ -1142,6 +1227,7 @@ export function createFlowController(
     forceRateBytesPerSec?: number;
     bounds?: PolicyBounds;
     adaptiveConfig?: Partial<AdaptiveConfig>;
+    fastPath?: boolean;
   },
 ): FlowController {
   const policy = deriveSessionFlowPolicy(metrics, options);
@@ -1172,6 +1258,7 @@ export function createFlowController(
     forceRateBytesPerSec: options?.forceRateBytesPerSec,
     bounds: resolvedBounds,
     adaptiveConfig: options?.adaptiveConfig,
+    fastPath: options?.fastPath,
   });
 }
 

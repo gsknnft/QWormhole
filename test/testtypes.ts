@@ -18,8 +18,13 @@ import type {
   Serializer,
 } from "../src/types/types";
 
-type Mode = "ts" | "native-lws" | "native-libsocket" | "kcp" | "kcp-arq" | "quic";
-
+type Mode =
+  | "ts"
+  | "native-lws"
+  | "native-libsocket"
+  | "kcp"
+  | "kcp-arq"
+  | "quic";
 
 interface Scenario {
   id: string;
@@ -27,7 +32,6 @@ interface Scenario {
   clientMode: Mode;
   serverBackend?: NativeBackend;
 }
-
 
 type ScenarioResult = {
   id: string;
@@ -70,6 +74,18 @@ type SendBlockStats = {
   maxMs: number;
 };
 
+// --- Coherence Trace Types ---
+interface CoherenceDecisionSample {
+  tMs: number; // time since run start
+  mode: string;
+  margin: number;
+  velocity: number;
+  reserve: number;
+  batchTarget: number;
+  flushIntervalMs: number;
+  maxBufferedBytes: number;
+  reason: string;
+}
 type ScenarioDiagnostics = {
   gc: GcTotals;
   eventLoop: {
@@ -107,6 +123,7 @@ type ScenarioDiagnostics = {
   flow?: FlowControllerDiagnostics;
   clientFlow?: FlowControllerDiagnostics;
   clientBatch?: BatchFramerStats;
+  coherenceTrace?: CoherenceDecisionSample[];
 };
 
 type DiagnosticsExtras = {
@@ -120,8 +137,8 @@ type DiagnosticsScope = {
   stop: (extras?: DiagnosticsExtras) => ScenarioDiagnostics;
 };
 
-
 export {
+  CoherenceDecisionSample,
   Scenario,
   ScenarioResult,
   ScenarioDiagnostics,

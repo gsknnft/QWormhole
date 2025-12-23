@@ -101,14 +101,15 @@ export class QWormholeClient<TMessage = Buffer> extends TypedEventEmitter<
       if (!this.options.disableFlowController) {
         this.flowController = createFlowController(this.entropyMetrics, {
           peerIsNative: this.peerIsNative,
+          fastPath: this.options.flowFastPath,
         });
         const tuneFramer = () => {
           if (!this.outboundFramer || !this.flowController) return;
-          const slice = this.flowController.currentSliceSize;
-          const caps = this.flowController.resolveFramerCaps(this.peerIsNative);
-          this.outboundFramer.setBatchTiming(slice, caps.flushMs);
-          this.outboundFramer.setFlushCaps(caps.maxBuffers, caps.maxBytes);
-        };
+        const batchSize = this.flowController.resolveBatchSize(this.peerIsNative);
+        const caps = this.flowController.resolveFramerCaps(this.peerIsNative);
+        this.outboundFramer.setBatchTiming(batchSize, caps.flushMs);
+        this.outboundFramer.setFlushCaps(caps.maxBuffers, caps.maxBytes);
+      };
         this.outboundFramer.on("backpressure", ({ queuedBytes }) => {
           this.flowController?.onBackpressure(queuedBytes);
           tuneFramer();
@@ -395,6 +396,7 @@ export class QWormholeClient<TMessage = Buffer> extends TypedEventEmitter<
       peerIsNative: options.peerIsNative,
       coherence: options.coherence ?? undefined,
       disableFlowController: options.disableFlowController ?? false,
+      flowFastPath: options.flowFastPath ?? false,
     };
   }
 

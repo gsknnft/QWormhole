@@ -145,6 +145,10 @@ export interface QWormholeCommonOptions<TMessage = unknown> {
    */
   disableFlowController?: boolean;
   /**
+   * Enable FlowController fast path (BatchFramer-driven when safe).
+   */
+  flowFastPath?: boolean;
+  /**
    * Optional protocol version string to send/expect during handshake.
    */
   protocolVersion?: string;
