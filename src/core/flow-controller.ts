@@ -22,8 +22,6 @@ import {
 import type { BatchFramer } from "./batch-framer";
 import type {
   EntropyMetrics,
-  EntropyVelocity,
-  CoherenceLevel,
 } from "../handshake/entropy-policy";
 import { deriveEntropyPolicy } from "../handshake/entropy-policy";
 import { TypedEventEmitter } from "../utils/typedEmitter";
@@ -33,6 +31,8 @@ import {
 } from "../utils/negentropic-diagnostics";
 import { TransportMetrics } from "src/types/TransportMetrics";
 import { CoherenceController } from "./CoherenceController";
+import { TokenBucket } from "./qos";
+import { CoherenceLevel, EntropyVelocity } from "src/schema/scp";
 
 /**
  * Session flow policy derived during handshake negotiation
@@ -136,7 +136,7 @@ export const FLOW_DEFAULTS = {
   /** TS peer max slice clamp (to reduce GC pressure) - low trust */
   TS_PEER_MAX_SLICE: 24,
   /** TS peer max slice for high-trust peers (negIndex >= 0.85) */
-  TS_PEER_HIGH_TRUST_MAX_SLICE: 48,
+  TS_PEER_HIGH_TRUST_MAX_SLICE: 64,
   /** TS framer caps to keep batching in the micro-batch envelope */
   TS_FRAMER_MAX_BUFFERS: 32,
   /** TS framer cap to avoid large buffer residency (bytes) */
@@ -333,64 +333,6 @@ interface FlowControllerEvents {
   drain: { sliceSize: number };
 }
 
-/**
- * Simple token bucket rate limiter
- */
-export class TokenBucket {
-  private tokens: number;
-  private lastRefill: number;
-
-  constructor(
-    private readonly rateBytes: number,
-    private readonly burstBytes: number,
-  ) {
-    this.tokens = burstBytes;
-    this.lastRefill = Date.now();
-  }
-
-  /**
-   * Reserve bytes from the bucket.
-   * Returns the delay in ms before the bytes can be sent (0 if immediate).
-   */
-  reserve(bytes: number): number {
-    this.refill();
-
-    if (this.tokens >= bytes) {
-      this.tokens -= bytes;
-      return 0;
-    }
-
-    // Calculate wait time until enough tokens are available
-    const deficit = bytes - this.tokens;
-    const waitMs = (deficit / this.rateBytes) * 1000;
-
-    // Deduct what we can now, rest will be refilled
-    this.tokens = 0;
-
-    if (waitMs < 1) return 0;
-    return Math.ceil(waitMs);
-  }
-
-  /**
-   * Refill tokens based on elapsed time
-   */
-  private refill(): void {
-    const now = Date.now();
-    const elapsed = now - this.lastRefill;
-    const refillAmount = (elapsed / 1000) * this.rateBytes;
-
-    this.tokens = Math.min(this.burstBytes, this.tokens + refillAmount);
-    this.lastRefill = now;
-  }
-
-  /**
-   * Get current token count (for diagnostics)
-   */
-  get availableTokens(): number {
-    this.refill();
-    return this.tokens;
-  }
-}
 
 /**
  * FlowController manages adaptive batch sizing per connection

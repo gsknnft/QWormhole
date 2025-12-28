@@ -16,7 +16,7 @@ import {
   isNativeAvailable,
   QuicTransport,
   QuicServer,
-  isQuicAvailable,
+  quicAvailable,
 } from "../src/index";
 import path from "node:path";
 import { shutdownFlowControllerMonitors } from "../src/core/flow-controller";
@@ -317,7 +317,7 @@ const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
 const clientModeAvailable = (mode: Mode): boolean => {
   if (mode === "ts") return true;
   if (mode === "native-lws") return availableLws && isNativeAvailable();
-  if (mode === "quic") return isQuicAvailable();
+  if (mode === "quic") return quicAvailable();
   return availableLibsocket && isNativeAvailable();
 };
 
@@ -1526,7 +1526,7 @@ async function runQuicScenario(): Promise<ScenarioResult> {
   const quicUseFraming = BENCH_FRAMING !== "none";
   const quicStreamFraming = quicUseFraming ? "length-prefixed" : "none";
 
-  if (!isQuicAvailable()) {
+  if (!quicAvailable()) {
     return {
       id: "quic-server+quic",
       serverMode: "quic",

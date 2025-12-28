@@ -1,4 +1,5 @@
-export * from "./negentropic-hash";
-export * from "./negentropic-handshake";
-export * from "./handshake-policy";
-export * from "./entropy-policy";
+// Auto-generated index for handshake
+export * from './entropy-policy';
+export * from './handshake-policy';
+export * from './negentropic-handshake';
+export * from './negentropic-hash';

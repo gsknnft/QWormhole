@@ -5,12 +5,12 @@
  * communication primitive in the Signal Fabric ecosystem.
  */
 
+import { SigilDefinition } from "./sigilnet.types";
+
 /**
  * Sigil - A symbolic identifier representing intent, state, or phase
  * Examples: Φ-open, Δ-lock, Σ-Vera, ☉Sol
  */
-export type Sigil = string;
-
 export type JsonPrimitive = string | number | boolean | null;
 export type JsonValue =
   | JsonPrimitive
@@ -21,112 +21,6 @@ export type JsonValue =
  * Origin - A unique identifier for a device, process, or entity
  * Can be a UUID, hostname, or any unique identifier
  */
-export type Origin = string;
-
-/**
- * Metrics captured in a sigil event
- * These represent quantum-inspired measurements of system state
- */
-export interface SigilMetrics {
-  /** Entropy level (0-2+), measures system randomness/disorder */
-  entropy: number;
-
-  /** Coherence level (0-1), measures system synchronization */
-  coherence: number;
-
-  /** Phase velocity (optional), measures signal propagation speed */
-  phaseVelocity?: number;
-
-  /** Signal strength (optional), measures connection quality */
-  signalStrength?: number;
-
-  /** Latency in milliseconds (optional) */
-  latency?: number;
-
-  /** Custom metrics (extensible) */
-  [key: string]: number | undefined;
-}
-
-/**
- * Intent - Semantic description of the action or purpose
- * Examples: "establish-field-lock", "relay-packet", "session-handshake"
- */
-export type Intent = string;
-
-/**
- * Core Sigil Event - The fundamental message structure
- */
-export interface SigilEvent {
-  /** Symbolic identifier - the sigil itself */
-  sigil: Sigil;
-
-  /** Origin identifier - who generated this event */
-  origin: Origin;
-
-  /** Timestamp in Unix milliseconds */
-  ts: number;
-
-  /** Metrics associated with this event */
-  metrics: SigilMetrics;
-
-  /** Semantic intent - what this event means */
-  intent: Intent;
-
-  /** Ed25519 signature (base64 encoded) - optional but recommended */
-  signature?: string;
-
-  /** Optional payload - can be any JSON-serializable data */
-  payload?: JsonValue;
-
-  /** Optional encrypted payload for secure communication */
-  encryptedPayload?: EncryptedPayload;
-
-  /** Target origin for directed messages */
-  targetOrigin?: Origin;
-
-  /** Session identifier for multi-message exchanges */
-  sessionId?: string;
-
-  /** Message sequence number within a session */
-  sequence?: number;
-}
-
-/**
- * Encrypted payload structure for secure peer-to-peer communication
- */
-export interface EncryptedPayload {
-  /** Base64 encoded encrypted data */
-  ciphertext: string;
-
-  /** Base64 encoded nonce for encryption */
-  nonce: string;
-
-  /** Encryption algorithm used (default: "X25519-XSalsa20-Poly1305") */
-  algorithm?: string;
-}
-
-/**
- * Sigil Registry Entry - Metadata about a sigil type
- */
-export interface SigilDefinition {
-  /** The sigil symbol */
-  sigil: Sigil;
-
-  /** Human-readable name */
-  name: string;
-
-  /** Description of purpose and usage */
-  description: string;
-
-  /** Typical intent values for this sigil */
-  intents: Intent[];
-
-  /** Expected metrics (for validation) */
-  expectedMetrics?: (keyof SigilMetrics)[];
-
-  /** Whether signature is required */
-  requiresSignature?: boolean;
-}
 
 /**
  * Standard intents used across the Signal Fabric
@@ -261,10 +155,10 @@ export interface ValidationResult {
  */
 export interface QuantumIdentity {
   /** Origin sigil from canonical manifest */
-  origin: Sigil;
+  origin: string;
 
   /** This deployment's unique sigil */
-  sigil: Sigil;
+  sigil: string;
 
   /** Role or purpose of this deployment */
   role: string;
@@ -287,7 +181,7 @@ export interface QuantumIdentity {
  */
 export interface Lineage {
   /** Parent sigil */
-  parent: Sigil;
+  parent: string;
 
   /** Version or commit at fork point */
   forkVersion: string;

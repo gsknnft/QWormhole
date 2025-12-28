@@ -1,13 +1,17 @@
 import { createQWormholeClient, createQWormholeServer } from "./factory";
 import { bufferDeserializer, defaultSerializer } from "./codecs";
-import {
-  QWormholeClient,
-  QWormholeServer,
-  QWormholeClientOptions,
-  QWormholeServerOptions,
-  NativeQWormholeServer,
-  NativeTcpClient,
-} from "../index";
+import { QWormholeClient } from "../client";
+import { QWormholeServer } from "../server";
+import { QWormholeClientOptions, NativeTcpClient, QWormholeServerOptions } from "../types";
+import { NativeQWormholeServer } from "./native-server";
+// import {
+//   QWormholeClient,
+//   QWormholeServer,
+//   QWormholeClientOptions,
+//   QWormholeServerOptions,
+//   NativeQWormholeServer,
+//   NativeTcpClient,
+// } from "../index";
 
 export interface QWormholeRuntimeOptions<TMessage = unknown> {
   protocolVersion?: string;

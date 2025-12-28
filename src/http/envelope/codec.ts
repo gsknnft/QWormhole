@@ -1,10 +1,10 @@
 import type {
   Deserializer,
+  QWEnvelope,
   QWormholeRequest,
   QWormholeResponse,
   Serializer,
-} from "src/types/types";
-import type { QWEnvelope } from "./index";
+} from "../../types/types";
 
 type EncodedEnvelope =
   | { kind: "request"; v: 1; id: string; req: QWormholeRequest; body?: string }

@@ -43,6 +43,19 @@ type QWEnvelopeBase = {
   id: string;
 };
 
+export type QWEnvelope =
+  | QWEnvelopeBase & {
+      kind: "request";
+      req: QWormholeRequest;
+      body?: Uint8Array;
+    }
+  | QWEnvelopeBase & {  
+      kind: "response";
+      status: QWormholeResponse;
+      body?: Uint8Array;
+      error?: string;
+    };
+
 export type QRequest<P = unknown> = QWEnvelopeBase & {
   method: string;
   params?: P;

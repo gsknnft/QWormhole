@@ -1,5 +1,7 @@
 // QWormhole/src/node/peer-types.ts
 
+import { PeerSeal } from "src/types/sigilnet.types";
+
 /**
  * Peer metadata and keys
  */
@@ -47,21 +49,21 @@ interface PeerBase {
 }
 
 
-export interface CoreSeal {
-  sigil: string;
-  origin: string;
-  pubkey: string;
-  issuedAt: number;
-  manifestHash: string;
-  signature: string;
-}
+// export interface CoreSeal {
+//   sigil: string;
+//   origin: string;
+//   pubkey: string;
+//   issuedAt: number;
+//   manifestHash: string;
+//   signature: string;
+// }
 
-export interface SovereignSeal extends CoreSeal {
-  expiresAt: number;
-  sealed: boolean;
-}
+// export interface SovereignSeal extends CoreSeal {
+//   expiresAt: number;
+//   sealed: boolean;
+// }
 
-export interface PeerSeal extends SovereignSeal {
-  peerSeal: SovereignSeal;
-}
+// export interface PeerSeal extends SovereignSeal {
+//   peerSeal: SovereignSeal;
+// }
 

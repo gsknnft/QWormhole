@@ -19,9 +19,10 @@
     "noFallthroughCasesInSwitch": true,
     "skipLibCheck": true,
     "typeRoots": [
-      "src/types/types"
+      "src/types/types",
+      "../../src/types"
     ]
   },
-  "include": ["src", "../scripts"],
+  "include": ["src", "../scripts", "test/commitment-detector.test.ts"],
   "exclude": ["node_modules", "dist", "**/dist", "**/test"]
 }

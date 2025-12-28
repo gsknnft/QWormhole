@@ -2,12 +2,11 @@
 // Coherence-driven control module for QWormhole
 // Consumes TransportMetrics, emits mode/coupling decisions
 
+import { CoherenceSet } from "src/coherence";
 import { TransportMetrics } from "../types/TransportMetrics";
 
-export type CoherenceMode = "MACRO_BATCH" | "PROTECT" | "BALANCED";
-
 export interface CoherenceDecision {
-  mode: CoherenceMode;
+  mode: CoherenceSet;
   batchTarget: number; // Recommended batch size (bytes)
   flushIntervalMs: number; // Recommended flush interval (ms)
   maxBufferedBytes: number; // Recommended max buffered bytes
@@ -17,7 +16,7 @@ export interface CoherenceDecision {
 export class CoherenceController {
   // --- Thresholds for mode switching ---
   private hysteresis: number = 0.05; // Margin hysteresis for mode switching
-  private lastMode: CoherenceMode = "BALANCED";
+  private lastMode: CoherenceSet = "BALANCED";
   private lastMargin: number = 0.5;
   lastVelocity: number = 0;
   lastReserve: number = 1;
@@ -28,7 +27,7 @@ export class CoherenceController {
   // BALANCED: 0.4 < M <= 0.7, -0.2 < V <= -0.05, 0.2 < R <= 0.5
   // PROTECT: M <= 0.4, V <= -0.2, R <= 0.2
   decide(metrics: TransportMetrics): CoherenceDecision {
-    let mode: CoherenceMode = "BALANCED";
+    let mode: CoherenceSet = "BALANCED";
     let reason = "";
 
     // Compute velocity (change in margin per block)
@@ -80,15 +79,15 @@ export class CoherenceController {
     this.lastReserve = reserve;
 
     // Coupling recommendations
-    let batchTarget =
+    const batchTarget =
       mode === "MACRO_BATCH"
         ? 128 * 1024
         : mode === "PROTECT"
           ? 8 * 1024
           : 32 * 1024;
-    let flushIntervalMs =
+    const flushIntervalMs =
       mode === "MACRO_BATCH" ? 1 : mode === "PROTECT" ? 10 : 4;
-    let maxBufferedBytes = mode === "PROTECT" ? 128 * 1024 : 512 * 1024;
+    const maxBufferedBytes = mode === "PROTECT" ? 128 * 1024 : 512 * 1024;
 
     return {
       mode,

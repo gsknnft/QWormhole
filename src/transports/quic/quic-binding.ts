@@ -23,7 +23,7 @@ const bindingCandidates = [
   // node-gyp-build style resolution (mirrors lws scripts)
   () => {
     try {
-      // eslint-disable-next-line @typescript-eslint/no-var-requires
+       
       const resolve = requireFn("node-gyp-build");
       const root = path.resolve(__dirname, "..", "..", "..");
       return resolve(root);
@@ -43,7 +43,7 @@ export function loadQuicBinding(): QuicBinding | null {
     const resolved = typeof candidate === "function" ? candidate() : candidate;
     if (!resolved) continue;
     try {
-      // eslint-disable-next-line @typescript-eslint/no-var-requires
+       
       const mod = requireFn(resolved) as QuicBinding;
       if (mod && typeof mod.createEndpoint === "function") {
         cachedBinding = mod;

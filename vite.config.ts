@@ -24,6 +24,7 @@ const externalDeps = [
   "node:http",
   "node:https",
   "node:stream",
+  "node:url",
   "node:zlib",
   "node:buffer",
   "node:util",
@@ -43,6 +44,7 @@ const externalDeps = [
   "cluster",
   "dgram",
   "fs/promises",
+  "json2csv",
   // keep only runtime externals here
 ];
 

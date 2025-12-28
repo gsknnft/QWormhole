@@ -1,5 +1,5 @@
 import type { WireGuardAdapter } from "../adapters/wireguard-adapter";
-import type { Sigil, Origin, Intent, JsonValue } from "./sigil.types";
+import type { JsonValue } from "./sigil.types";
 import type { PeerSeal, SovereignSeal } from "../utils/seal";
 
 interface Runtime {
@@ -14,15 +14,20 @@ interface Runtime {
 interface EncryptedPayload {
   ciphertext: string; // Base64 encoded encrypted data
   nonce: string; // Base64 encoded nonce
+  /** Encryption algorithm used (default: "X25519-XSalsa20-Poly1305") */
+  algorithm?: string;
 }
 
+
+/**
+ * Core string Event - The fundamental message structure
+ */
 interface SigilEvent {
   /** Symbolic identifier - the sigil itself */
-  // symbolic name  Δ-lock, Φ-open …
-  sigil: Sigil;
+  sigil: string;
 
-  /** Origin identifier - who generated this event // device or process id */
-  origin: Origin;
+  /** string identifier - who generated this event */
+  origin: string;
 
   /** Timestamp in Unix milliseconds */
   ts: number;
@@ -31,7 +36,7 @@ interface SigilEvent {
   metrics: SigilMetrics;
 
   /** Semantic intent - what this event means */
-  intent: Intent;
+  intent: string;
 
   /** Ed25519 signature (base64 encoded) - optional but recommended */
   signature?: string;
@@ -43,7 +48,7 @@ interface SigilEvent {
   encryptedPayload?: EncryptedPayload;
 
   /** Target origin for directed messages */
-  targetOrigin?: Origin;
+  targetOrigin?: string;
 
   /** Session identifier for multi-message exchanges */
   sessionId?: string;
@@ -51,6 +56,7 @@ interface SigilEvent {
   /** Message sequence number within a session */
   sequence?: number;
 }
+
 
 interface RuntimeConfig {
   /** Node identifier */
@@ -87,6 +93,10 @@ interface RuntimeStats {
 type ResolvedRuntimeConfig = Required<Omit<RuntimeConfig, "adapters">> &
   Pick<RuntimeConfig, "adapters">;
 
+/*
+ * Metrics captured in a sigil event
+ * These represent quantum-inspired measurements of system state
+ */
 interface SigilMetrics {
   /** Entropy level (0-2+), measures system randomness/disorder */
   entropy: number;
@@ -100,13 +110,11 @@ interface SigilMetrics {
   /** Signal strength (optional), measures connection quality */
   signalStrength?: number;
 
-  trustLevel?: number;
-
   /** Latency in milliseconds (optional) */
   latency?: number;
 
   /** Custom metrics (extensible) */
-  [key: string]: number | number[] | undefined;
+  [key: string]: number | undefined;
 }
 
 /**
@@ -221,7 +229,32 @@ interface Session {
   lastActivity: number;
 }
 
+
+/**
+ * string Registry Entry - Metadata about a sigil type
+ */
+interface SigilDefinition {
+  /** The sigil symbol */
+  sigil: string;
+
+  /** Human-readable name */
+  name: string;
+
+  /** Description of purpose and usage */
+  description: string;
+
+  /** Typical intent values for this sigil */
+  intents: string[];
+
+  /** Expected metrics (for validation) */
+  expectedMetrics?: (keyof SigilMetrics)[];
+
+  /** Whether signature is required */
+  requiresSignature?: boolean;
+}
+
 export type {
+  SigilDefinition,
   PeerBase,
   PeerSeal,
   SovereignSeal,

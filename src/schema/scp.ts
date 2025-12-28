@@ -47,6 +47,17 @@ export const handshakeTagsSchema = z.record(
   z.union([z.string(), z.number()]),
 );
 
+
+/**
+ * Entropy velocity indicator
+ */
+// export type EntropyVelocity = "low" | "stable" | "rising" | "spiking";
+
+/**
+ * Coherence level indicator
+ */
+// export type CoherenceLevel = "high" | "medium" | "low" | "chaos";
+
 /**
  * Entropy velocity indicator for adaptive transport policy
  */

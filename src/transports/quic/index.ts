@@ -1,11 +1,6 @@
-export { QuicTransport, type QuicTransportOptions } from "./quic-transport";
-export { quicAvailable, loadQuicBinding } from "./quic-binding";
-export { QuicWebTransport } from "./quic-ws";
-export { QuicServer, type QuicServerOptions, type QuicServerStream } from "./quic-server";
-export type {
-  QuicBinding,
-  QuicConnectionStats,
-  QuicConnectOptions,
-  QuicEndpointOptions,
-  QuicStreamOptions,
-} from "./types";
+// Auto-generated index for quic
+export * from './quic-binding';
+export * from './quic-server';
+export * from './quic-transport';
+export * from './quic-ws';
+export * from './types';

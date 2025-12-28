@@ -1,9 +1,7 @@
 import { randomUUID } from "node:crypto";
 import type { QWormholeClient } from "../client";
 import type { QWormholeServer } from "../server";
-import type { QWormholeServerConnection } from "src/types/types";
-import type { QWEnvelope } from "./envelope";
-import type { QWormholeRequest, QWormholeResponse } from "src/types/types";
+import type { QWEnvelope, QWormholeServerConnection, QWormholeRequest, QWormholeResponse } from "../types/types";
 
 export interface RpcResponse {
   status: QWormholeResponse;

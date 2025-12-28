@@ -12,10 +12,7 @@
  * - Paranoia:    N < 0.40, chaos → checksum + ACK + tiny batches
  */
 
-/**
- * Handshake mode based on negentropic index
- */
-export type HandshakeMode = "trust-zero" | "trust-light" | "immune" | "paranoia";
+import { CoherenceLevel, EntropyVelocity, HandshakeMode } from "src/schema";
 
 /**
  * Framing mode for the transport
@@ -35,15 +32,6 @@ export type CodecRecommendation =
   | "messagepack"
   | "json-compressed";
 
-/**
- * Entropy velocity indicator
- */
-export type EntropyVelocity = "low" | "stable" | "rising" | "spiking";
-
-/**
- * Coherence level indicator
- */
-export type CoherenceLevel = "high" | "medium" | "low" | "chaos";
 
 /**
  * Entropy metrics for handshake payload
