@@ -6,7 +6,7 @@ import type {
   CouplingParams,
   FieldSample,
 } from "./types";
-import { clamp01, computeHorizonSec, isUnsafe } from "./invariants";
+import { clamp01, computeHorizonSec, isUnsafe } from "./invariants-lite";
 
 export class CoherenceLoop {
   private history: FieldSample[] = [];

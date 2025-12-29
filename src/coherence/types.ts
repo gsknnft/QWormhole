@@ -1,5 +1,5 @@
-
 export interface FieldSample {
+  [key: string]: unknown;
   t: number;
   latencyP50: number;
   latencyP95: number;
@@ -30,14 +30,25 @@ export interface CoherencePrimitives {
   getCurrentCoupling: () => CouplingParams;
   estimate: (params: Partial<CouplingParams>) => CoherenceState;
   estimateMargin: (signal: number[]) => number;
-  adapt: (M: number, V: number, R: number, C?: CoherenceState) => CouplingParams;
+  adapt: (
+    M: number,
+    V: number,
+    R: number,
+    C?: CoherenceState,
+  ) => CouplingParams;
   estimateDrift: (signal: number[]) => number;
   estimateResponsiveness: (signal: number[]) => number;
-};
+}
 
 export type CoherenceMode = "observe" | "enforce";
 
-export type CoherenceSet = "BALANCED" | "PROTECT" | "MACRO_BATCH" | "CUSTOM" | "OFF" | "SAFE";
+export type CoherenceSet =
+  | "BALANCED"
+  | "PROTECT"
+  | "MACRO_BATCH"
+  | "CUSTOM"
+  | "OFF"
+  | "SAFE";
 
 export interface CoherenceConfig {
   Hmin: number;

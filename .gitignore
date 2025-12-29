@@ -8,6 +8,7 @@ yarn.lock
 build-linux/
 build/
 .rollup.cache/
+logs/
 .venv/
 __pycache__/
 src/something.ts

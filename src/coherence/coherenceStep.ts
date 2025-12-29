@@ -1,4 +1,6 @@
-import { cosineSimilarity, characterizeNoise, sigAnalysis } from './invariants';
+import { cosineSimilarity, characterizeNoise } from './invariants';
+import { sigAnalysis } from './qvariants';
+
 import { CommitmentDetector } from './commitment-detector';
 import type { CoherencePrimitives, CouplingParams } from './types';
 import * as tf from '@tensorflow/tfjs';
