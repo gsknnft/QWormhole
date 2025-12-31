@@ -471,7 +471,7 @@ export class QWormholeServer<TMessage = Buffer> extends TypedEventEmitter<
       limiter: this.options.rateLimitBytesPerSec
         ? new TokenBucket(
             this.options.rateLimitBytesPerSec,
-            this.options.rateLimitBurstBytes,
+            this.options.rateLimitBurstBytes ?? this.options.rateLimitBytesPerSec,
           )
         : undefined,
       handshakePending: Boolean(this.options.protocolVersion),

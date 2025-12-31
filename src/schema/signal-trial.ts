@@ -2,6 +2,12 @@ import { z } from "zod";
 import { entropyMetricsSchema } from "./scp";
 
 export const signalTrialTierSchema = z.enum(["arena", "instrument", "system"]);
+export const signalTrialProfileSchema = z.enum([
+  "balanced",
+  "precision",
+  "endurance",
+  "chase",
+]);
 export const signalTrialDifficultySchema = z.enum([
   "easy",
   "standard",
@@ -63,6 +69,54 @@ export const signalTrialDerivedSchema = z.object({
   resonance: z.number(),
 });
 
+export const signalTrialResolutionObserverSchema = z.object({
+  confidence: z.number(),
+  resolved: z.boolean(),
+  residual: z.number(),
+  latencyStd: z.number(),
+  vMeanAbs: z.number(),
+  mStd: z.number(),
+  dmDt: z.number(),
+  m: z.number(),
+  v: z.number(),
+});
+
+export const signalTrialPhaseSchema = z.enum([
+  "approaching",
+  "tracking",
+  "overshoot",
+  "oscillating",
+  "diverging",
+]);
+
+export const signalTrialTargetBandAxisSchema = z.object({
+  center: z.number(),
+  width: z.number(),
+  delta: z.number(),
+  inBand: z.boolean().optional(),
+});
+
+export const signalTrialTargetBandSchema = z.object({
+  M: signalTrialTargetBandAxisSchema,
+  V: signalTrialTargetBandAxisSchema,
+  R: signalTrialTargetBandAxisSchema,
+});
+
+export const signalTrialGatesSchema = z.object({
+  uptimeMs: z.number(),
+  minUptimeMs: z.number(),
+  uptimeRemainingMs: z.number(),
+  actions: z.number(),
+  minActions: z.number(),
+  actionsRemaining: z.number(),
+  holdMs: z.number(),
+  holdRequiredMs: z.number(),
+  holdRemainingMs: z.number(),
+  quietMs: z.number(),
+  quietRequiredMs: z.number(),
+  quietRemainingMs: z.number(),
+});
+
 export const signalTrialTelemetrySchema = z
   .object({
     type: z.literal("telemetry"),
@@ -70,12 +124,17 @@ export const signalTrialTelemetrySchema = z
     at: z.number().int().nonnegative(),
     tier: signalTrialTierSchema.optional(),
     difficulty: signalTrialDifficultySchema.optional(),
+    profile: signalTrialProfileSchema.optional(),
     state: coherenceStateSchema,
     coupling: couplingParamsSchema.optional(),
     sample: fieldSampleSchema.optional(),
     transport: transportMetricsSchema.optional(),
     entropy: entropyMetricsSchema.optional(),
     derived: signalTrialDerivedSchema.optional(),
+    observer: signalTrialResolutionObserverSchema.optional(),
+    targetBand: signalTrialTargetBandSchema.optional(),
+    gates: signalTrialGatesSchema.optional(),
+    phase: signalTrialPhaseSchema.optional(),
     note: z.string().optional(),
   })
   .catchall(z.unknown());
@@ -111,6 +170,20 @@ export const signalTrialResolutionSchema = z
   })
   .catchall(z.unknown());
 
+export const signalTrialResolutionAttemptSchema = z
+  .object({
+    type: z.literal("resolution_attempt"),
+    sessionId: z.string().min(1),
+    at: z.number().int().nonnegative(),
+    target: z.enum(["stable", "collapsed"]),
+    missing: z.array(z.string()).optional(),
+    hints: z.array(z.string()).optional(),
+    phase: signalTrialPhaseSchema.optional(),
+    reason: z.string().optional(),
+    state: coherenceStateSchema.optional(),
+  })
+  .catchall(z.unknown());
+
 export const signalTrialActionSchema = z
   .object({
     type: z.literal("action"),
@@ -130,6 +203,7 @@ export const signalTrialSessionSchema = z
     mode: z.enum(["spawn", "reset", "end"]),
     tier: signalTrialTierSchema.optional(),
     difficulty: signalTrialDifficultySchema.optional(),
+    profile: signalTrialProfileSchema.optional(),
   })
   .catchall(z.unknown());
 
@@ -137,6 +211,7 @@ export const signalTrialMessageSchema = z.discriminatedUnion("type", [
   signalTrialTelemetrySchema,
   signalTrialCommitmentSchema,
   signalTrialResolutionSchema,
+  signalTrialResolutionAttemptSchema,
   signalTrialActionSchema,
   signalTrialSessionSchema,
 ]);
@@ -144,6 +219,16 @@ export const signalTrialMessageSchema = z.discriminatedUnion("type", [
 export type SignalTrialTelemetry = z.infer<typeof signalTrialTelemetrySchema>;
 export type SignalTrialCommitment = z.infer<typeof signalTrialCommitmentSchema>;
 export type SignalTrialResolution = z.infer<typeof signalTrialResolutionSchema>;
+export type SignalTrialResolutionAttempt = z.infer<
+  typeof signalTrialResolutionAttemptSchema
+>;
+export type SignalTrialProfile = z.infer<typeof signalTrialProfileSchema>;
+export type SignalTrialPhase = z.infer<typeof signalTrialPhaseSchema>;
+export type SignalTrialTargetBand = z.infer<typeof signalTrialTargetBandSchema>;
+export type SignalTrialGates = z.infer<typeof signalTrialGatesSchema>;
+export type SignalTrialResolutionObserver = z.infer<
+  typeof signalTrialResolutionObserverSchema
+>;
 export type SignalTrialResolutionTier = z.infer<
   typeof signalTrialResolutionTierSchema
 >;

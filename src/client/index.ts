@@ -129,7 +129,7 @@ export class QWormholeClient<TMessage = Buffer> extends TypedEventEmitter<
     if (this.options.rateLimitBytesPerSec) {
       this.limiter = new TokenBucket(
         this.options.rateLimitBytesPerSec,
-        this.options.rateLimitBurstBytes,
+        this.options.rateLimitBurstBytes ?? this.options.rateLimitBytesPerSec,
       );
     }
   }

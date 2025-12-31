@@ -35,7 +35,33 @@ export interface CommitmentMetrics {
   v: number;
   m: number;
 }
+export interface CoherenceEnvelope {
+  // Transport metrics
+  transportVector: number[];     // [p50, p99, bpClient, bpServer, thr, ...]
+  transportPCA: {
+    eigenvalues: number[];
+    eigenvectors: number[][];
+  };
 
+  // Harmonic field metrics
+  harmonicVector: number[];      // [dominantHz, entropy, h1, h2, h3]
+  harmonicPCA: {
+    eigenvalues: number[];
+    eigenvectors: number[][];
+  };
+
+  // Stability metrics
+  lyapunovEnergy: number;        // from CommitmentDetector
+  resonance: number;             // from perturbation decay
+  drift: number;                 // V(t)
+  margin: number;                // M(t)
+
+  // Combined PCA (meta‑field)
+  metaEigen: {
+    eigenvalues: number[];
+    eigenvectors: number[][];
+  };
+}
 export class CommitmentDetector {
   private history: Array<{ m: number; v: number; sample: Record<string, number>; timestamp: number }> = [];
   private events: CommitmentEvent[] = [];

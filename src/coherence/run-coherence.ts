@@ -2,6 +2,7 @@ import WebSocket, { WebSocketServer } from "ws";
 import { resolve } from "path";
 import { CoherenceLoop } from "./loop";
 import { CommitmentDetector } from "./commitment-detector";
+import { ResolutionDetector } from "./resolution";
 import type { CoherenceConfig, CouplingParams, FieldSample } from "./types";
 import { WSTransport, WSTransportServer } from "../transports/ws/ws-transport";
 import type { MuxStream } from "../transports/mux/mux-stream";
@@ -10,6 +11,8 @@ import {
   type SignalTrialAction,
   type SignalTrialDifficulty,
   type SignalTrialMessage,
+  type SignalTrialPhase,
+  type SignalTrialProfile,
   type SignalTrialTelemetry,
   type SignalTrialResolutionTier,
   type SignalTrialTier,
@@ -46,11 +49,19 @@ const sampleJitter = {
   corrSpike: 0.12,
 };
 
-const difficultyGates: Record<SignalTrialDifficulty, { minUptimeMs: number; minActions: number; holdMs: number }> = {
-  easy: { minUptimeMs: 8000, minActions: 1, holdMs: 3000 },
-  standard: { minUptimeMs: 12000, minActions: 2, holdMs: 5000 },
-  hard: { minUptimeMs: 16000, minActions: 3, holdMs: 7000 },
-  chaos: { minUptimeMs: 20000, minActions: 4, holdMs: 9000 },
+type GateConfig = {
+  minUptimeMs: number;
+  minActions: number;
+  holdMs: number;
+  quietHoldMs: number;
+  collapseHoldMs: number;
+};
+
+const difficultyGates: Record<SignalTrialDifficulty, GateConfig> = {
+  easy: { minUptimeMs: 8000, minActions: 1, holdMs: 3000, quietHoldMs: 3000, collapseHoldMs: 700 },
+  standard: { minUptimeMs: 12000, minActions: 2, holdMs: 5000, quietHoldMs: 5000, collapseHoldMs: 900 },
+  hard: { minUptimeMs: 16000, minActions: 3, holdMs: 7000, quietHoldMs: 7000, collapseHoldMs: 1100 },
+  chaos: { minUptimeMs: 20000, minActions: 4, holdMs: 9000, quietHoldMs: 9000, collapseHoldMs: 1300 },
 };
 
 const clamp01 = (value: number) => Math.min(1, Math.max(0, value));
@@ -60,6 +71,54 @@ const readNumber = (value: unknown, fallback: number) => {
   const num = typeof value === "number" ? value : Number(value);
   return Number.isFinite(num) ? num : fallback;
 };
+
+const observerDefaults = {
+  historyWindow: 12,
+  vEps: 0.02,
+  mMin: 0.8,
+  mStdMax: 0.02,
+  latencyStdMax: 0.08,
+  residualMax: 1.1,
+  minEventGapSteps: 12,
+  falsifyAfterSteps: 200,
+  vScale: 0.02,
+  dmDtScale: 0.02,
+};
+
+const buildObserverConfig = (tickMs: number) => ({
+  historyWindow: Math.max(
+    4,
+    readNumber(process.env.SIGNAL_TRIAL_OBSERVER_WINDOW, observerDefaults.historyWindow),
+  ),
+  vEps: readNumber(process.env.SIGNAL_TRIAL_OBSERVER_V_EPS, observerDefaults.vEps),
+  mMin: readNumber(process.env.SIGNAL_TRIAL_OBSERVER_M_MIN, observerDefaults.mMin),
+  mStdMax: readNumber(process.env.SIGNAL_TRIAL_OBSERVER_M_STD_MAX, observerDefaults.mStdMax),
+  latencyStdMax: readNumber(
+    process.env.SIGNAL_TRIAL_OBSERVER_LAT_STD_MAX,
+    observerDefaults.latencyStdMax,
+  ),
+  residualMax: readNumber(
+    process.env.SIGNAL_TRIAL_OBSERVER_RES_MAX,
+    observerDefaults.residualMax,
+  ),
+  minEventGapSteps: Math.max(
+    1,
+    readNumber(
+      process.env.SIGNAL_TRIAL_OBSERVER_EVENT_GAP,
+      observerDefaults.minEventGapSteps,
+    ),
+  ),
+  falsifyAfterSteps: Math.max(
+    1,
+    readNumber(
+      process.env.SIGNAL_TRIAL_OBSERVER_FALSIFY_AFTER,
+      observerDefaults.falsifyAfterSteps,
+    ),
+  ),
+  dtSeconds: tickMs / 1000,
+  vScale: readNumber(process.env.SIGNAL_TRIAL_OBSERVER_V_SCALE, observerDefaults.vScale),
+  dmDtScale: readNumber(process.env.SIGNAL_TRIAL_OBSERVER_DMDT_SCALE, observerDefaults.dmDtScale),
+});
 
 const makeId = () => Math.random().toString(36).slice(2, 10);
 const makeSessionId = () => `ST-${Math.random().toString(36).slice(2, 8).toUpperCase()}`;
@@ -478,6 +537,236 @@ const mapDerived = (state: { M: number; V: number; R: number }, sample: FieldSam
   };
 };
 
+type ProfilePreset = {
+  bandWidthScale: number;
+  bandDriftScale: number;
+  bandSpeedScale: number;
+  holdScale: number;
+  quietScale: number;
+};
+
+const profilePresets: Record<SignalTrialProfile, ProfilePreset> = {
+  balanced: {
+    bandWidthScale: 1,
+    bandDriftScale: 1,
+    bandSpeedScale: 1,
+    holdScale: 1,
+    quietScale: 1,
+  },
+  precision: {
+    bandWidthScale: 0.8,
+    bandDriftScale: 1,
+    bandSpeedScale: 1,
+    holdScale: 1.2,
+    quietScale: 1.2,
+  },
+  endurance: {
+    bandWidthScale: 1.15,
+    bandDriftScale: 0.9,
+    bandSpeedScale: 0.85,
+    holdScale: 1.3,
+    quietScale: 1.1,
+  },
+  chase: {
+    bandWidthScale: 0.95,
+    bandDriftScale: 1.25,
+    bandSpeedScale: 1.2,
+    holdScale: 0.9,
+    quietScale: 0.9,
+  },
+};
+
+const resolveProfile = (value: unknown): SignalTrialProfile => {
+  if (value === "precision" || value === "endurance" || value === "chase" || value === "balanced") {
+    return value;
+  }
+  return "balanced";
+};
+
+const loadProfileOverrides = (): Partial<Record<SignalTrialProfile, Partial<ProfilePreset>>> => {
+  const raw = process.env.SIGNAL_TRIAL_PROFILE_OVERRIDES;
+  if (!raw) {
+    return {};
+  }
+  try {
+    const parsed = JSON.parse(raw) as Record<string, Partial<ProfilePreset>>;
+    const overrides: Partial<Record<SignalTrialProfile, Partial<ProfilePreset>>> = {};
+    for (const key of Object.keys(profilePresets) as SignalTrialProfile[]) {
+      if (parsed[key]) {
+        overrides[key] = parsed[key];
+      }
+    }
+    return overrides;
+  } catch {
+    return {};
+  }
+};
+
+const applyProfilePreset = (
+  base: ProfilePreset,
+  override?: Partial<ProfilePreset>,
+): ProfilePreset => ({
+  bandWidthScale: readNumber(override?.bandWidthScale, base.bandWidthScale),
+  bandDriftScale: readNumber(override?.bandDriftScale, base.bandDriftScale),
+  bandSpeedScale: readNumber(override?.bandSpeedScale, base.bandSpeedScale),
+  holdScale: readNumber(override?.holdScale, base.holdScale),
+  quietScale: readNumber(override?.quietScale, base.quietScale),
+});
+
+// Moving target band keeps stability from being a static threshold.
+const targetBandBase = { M: 0.84, V: 0, R: 0.76 };
+const targetBandDrift = { M: 0.05, V: 0.015, R: 0.06 };
+const targetBandWidth = { M: 0.06, V: 0.02, R: 0.08 };
+
+const targetBandDriftScale: Record<SignalTrialDifficulty, number> = {
+  easy: 0.85,
+  standard: 1,
+  hard: 1.1,
+  chaos: 1.2,
+};
+
+const targetBandWidthScale: Record<SignalTrialDifficulty, number> = {
+  easy: 1.1,
+  standard: 1,
+  hard: 0.9,
+  chaos: 0.8,
+};
+
+const targetBandSpeed: Record<SignalTrialDifficulty, number> = {
+  easy: 0.05,
+  standard: 0.07,
+  hard: 0.09,
+  chaos: 0.12,
+};
+
+type TargetBand = {
+  center: { M: number; V: number; R: number };
+  width: { M: number; V: number; R: number };
+};
+
+const targetBandAt = (
+  now: number,
+  sessionStart: number,
+  difficulty: SignalTrialDifficulty,
+  phaseOffset: number,
+  profilePreset: ProfilePreset,
+): TargetBand => {
+  const elapsed = Math.max(0, (now - sessionStart) / 1000);
+  const driftScale = targetBandDriftScale[difficulty] * profilePreset.bandDriftScale;
+  const widthScale = targetBandWidthScale[difficulty] * profilePreset.bandWidthScale;
+  const phase =
+    elapsed * targetBandSpeed[difficulty] * profilePreset.bandSpeedScale + phaseOffset;
+
+  return {
+    center: {
+      M: clamp01(targetBandBase.M + Math.sin(phase * 1.1) * targetBandDrift.M * driftScale),
+      V: clampRange(
+        targetBandBase.V + Math.sin(phase * 0.9 + 1.1) * targetBandDrift.V * driftScale,
+        -0.06,
+        0.06,
+      ),
+      R: clamp01(targetBandBase.R + Math.cos(phase * 1.3 + 0.4) * targetBandDrift.R * driftScale),
+    },
+    width: {
+      M: targetBandWidth.M * widthScale,
+      V: targetBandWidth.V * widthScale,
+      R: targetBandWidth.R * widthScale,
+    },
+  };
+};
+
+// const isInTargetBand = (state: { M: number; V: number; R: number }, band: TargetBand) =>
+//   Math.abs(state.M - band.center.M) <= band.width.M &&
+//   Math.abs(state.V - band.center.V) <= band.width.V &&
+//   Math.abs(state.R - band.center.R) <= band.width.R;
+
+type TargetBandTelemetry = {
+  M: { center: number; width: number; delta: number; inBand: boolean };
+  V: { center: number; width: number; delta: number; inBand: boolean };
+  R: { center: number; width: number; delta: number; inBand: boolean };
+};
+
+const buildTargetBandTelemetry = (
+  state: { M: number; V: number; R: number },
+  band: TargetBand,
+): TargetBandTelemetry => ({
+  M: {
+    center: band.center.M,
+    width: band.width.M,
+    delta: state.M - band.center.M,
+    inBand: Math.abs(state.M - band.center.M) <= band.width.M,
+  },
+  V: {
+    center: band.center.V,
+    width: band.width.V,
+    delta: state.V - band.center.V,
+    inBand: Math.abs(state.V - band.center.V) <= band.width.V,
+  },
+  R: {
+    center: band.center.R,
+    width: band.width.R,
+    delta: state.R - band.center.R,
+    inBand: Math.abs(state.R - band.center.R) <= band.width.R,
+  },
+});
+
+const computeBandDistance = (band: TargetBandTelemetry) => {
+  const normM = Math.abs(band.M.delta) / Math.max(0.0001, band.M.width);
+  const normV = Math.abs(band.V.delta) / Math.max(0.0001, band.V.width);
+  const normR = Math.abs(band.R.delta) / Math.max(0.0001, band.R.width);
+  return Math.sqrt((normM ** 2 + normV ** 2 + normR ** 2) / 3);
+};
+
+const applyProfileGates = (
+  base: GateConfig,
+  profilePreset: ProfilePreset,
+  adaptiveHold?: { holdMs: number; quietHoldMs: number },
+): GateConfig => {
+  const holdBase = adaptiveHold?.holdMs ?? base.holdMs;
+  const quietBase = adaptiveHold?.quietHoldMs ?? base.quietHoldMs;
+  return {
+    minUptimeMs: base.minUptimeMs,
+    minActions: base.minActions,
+    holdMs: Math.round(holdBase * profilePreset.holdScale),
+    quietHoldMs: Math.round(quietBase * profilePreset.quietScale),
+    collapseHoldMs: Math.round(base.collapseHoldMs * profilePreset.holdScale),
+  };
+};
+
+const buildBandHints = (band: TargetBandTelemetry) => {
+  const axes = [
+    { label: "margin", delta: band.M.delta, width: band.M.width },
+    { label: "velocity", delta: band.V.delta, width: band.V.width },
+    { label: "reserve", delta: band.R.delta, width: band.R.width },
+  ];
+  const ranked = axes
+    .map(axis => ({
+      label: axis.label,
+      delta: axis.delta,
+      score: Math.abs(axis.delta) / Math.max(0.0001, axis.width),
+    }))
+    .sort((a, b) => b.score - a.score);
+
+  return ranked.slice(0, 2).map(entry => `${entry.label} ${entry.delta > 0 ? "high" : "low"}`);
+};
+
+const buildResolutionHints = (
+  target: "stable" | "collapsed",
+  missing: string[],
+  band: TargetBandTelemetry,
+) => {
+  const hints: string[] = [];
+  if (missing.includes("minUptime")) hints.push("let session run");
+  if (missing.includes("minActions")) hints.push("inject more perturbations");
+  if (missing.includes("hold")) hints.push("hold steady");
+  if (missing.includes("quiet")) hints.push("wait before acting");
+  if (missing.includes("collapseHold")) hints.push("collapse not sustained");
+  if (target === "stable" && missing.includes("targetBand")) {
+    hints.push(...buildBandHints(band));
+  }
+  return hints;
+};
+
 const isStableCandidate = (state: { M: number; V: number; R: number }) =>
   state.M > 0.78 && Math.abs(state.V) < 0.02 && state.R > 0.7;
 
@@ -513,6 +802,7 @@ export interface SignalTrialBroadcastOptions {
   tickMs?: number;
   difficulty?: SignalTrialDifficulty;
   tier?: SignalTrialTier;
+  profile?: SignalTrialProfile;
   loadMode?: LoadMode;
   loadPort?: number;
   loadClients?: number;
@@ -527,7 +817,17 @@ export function startSignalTrialBroadcast(options: SignalTrialBroadcastOptions =
   const tickMs = options.tickMs ?? Number(process.env.SIGNAL_TRIAL_TICK_MS ?? 250);
   const tier: SignalTrialTier = options.tier ?? "instrument";
   const difficulty: SignalTrialDifficulty = options.difficulty ?? "standard";
-  const gate = difficultyGates[difficulty];
+  const observerConfig = buildObserverConfig(tickMs);
+  const adaptiveHold = {
+    holdMs: Math.round(observerConfig.historyWindow * tickMs * 1.1),
+    quietHoldMs: Math.round(observerConfig.minEventGapSteps * tickMs),
+  };
+  const profileOverrides = loadProfileOverrides();
+  let profile: SignalTrialProfile = resolveProfile(
+    options.profile ?? process.env.SIGNAL_TRIAL_PROFILE,
+  );
+  let profilePreset = applyProfilePreset(profilePresets[profile], profileOverrides[profile]);
+  let gate = applyProfileGates(difficultyGates[difficulty], profilePreset, adaptiveHold);
   const rawLoadMode = options.loadMode ?? process.env.SIGNAL_TRIAL_LOAD_MODE;
   const loadMode: LoadMode =
     rawLoadMode === "traffic" || rawLoadMode === "blend" || rawLoadMode === "synthetic"
@@ -551,6 +851,7 @@ export function startSignalTrialBroadcast(options: SignalTrialBroadcastOptions =
     baseJitterMs: Math.max(2, loadJitterMs),
   };
   const loadHarness = loadMode === "synthetic" ? null : createLoadHarness(loadMode, loadConfig);
+  const nearMissConfidence = readNumber(process.env.SIGNAL_TRIAL_OBSERVER_NEAR_MISS, 0.74);
 
   // Telemetry/control channel for the UI (JSON messages), kept separate from muxed load traffic.
   const wss = new WebSocketServer({ port });
@@ -561,6 +862,7 @@ export function startSignalTrialBroadcast(options: SignalTrialBroadcastOptions =
   let loop = new CoherenceLoop(cfg);
   let coupling: CouplingParams = { ...baseCoupling };
   let detector = new CommitmentDetector();
+  let resolutionObserver = new ResolutionDetector(observerConfig);
   let effects: Effect[] = [];
   let loadEffects: LoadEffect[] = [];
   let queueDepth = { current: baseSample.queueDepth };
@@ -568,7 +870,20 @@ export function startSignalTrialBroadcast(options: SignalTrialBroadcastOptions =
   let actionsCount = 0;
   let lastActionAt = 0;
   let stableSince: number | null = null;
+  let collapseSince: number | null = null;
+  let targetPhaseOffset = rand(0, Math.PI * 2);
+  let lastStableAttemptKey: string | null = null;
+  let lastCollapseAttemptKey: string | null = null;
+  let lastBandDistance: number | null = null;
+  let lastBandIn: boolean | null = null;
+  let bandCrossings: number[] = [];
+  let phase: SignalTrialPhase = "approaching";
   let resolution: "pending" | "stable" | "collapsed" = "pending";
+  let sessionTimedOut = false;
+  const sessionTimeoutMs = readNumber(
+    process.env.SIGNAL_TRIAL_SESSION_TIMEOUT_MS,
+    120_000,
+  );
   let commitmentCount = 0;
 
   const broadcast = (message: SignalTrialMessage) => {
@@ -580,12 +895,35 @@ export function startSignalTrialBroadcast(options: SignalTrialBroadcastOptions =
     }
   };
 
+  const broadcastResolutionAttempt = (
+    target: "stable" | "collapsed",
+    missing: string[],
+    at: number,
+    state: { M: number; V: number; R: number; H: number },
+    hints: string[],
+    phaseState: SignalTrialPhase,
+    reason?: string,
+  ) => {
+    broadcast({
+      type: "resolution_attempt",
+      sessionId,
+      at,
+      target,
+      missing,
+      hints: hints.length > 0 ? hints : undefined,
+      phase: phaseState,
+      reason,
+      state,
+    });
+  };
+
   const resetSession = () => {
     sessionId = makeSessionId();
     sessionStart = Date.now();
     loop = new CoherenceLoop(cfg);
     coupling = { ...baseCoupling };
     detector = new CommitmentDetector();
+    resolutionObserver = new ResolutionDetector(observerConfig);
     effects = [];
     loadEffects = [];
     queueDepth = { current: baseSample.queueDepth };
@@ -593,7 +931,16 @@ export function startSignalTrialBroadcast(options: SignalTrialBroadcastOptions =
     actionsCount = 0;
     lastActionAt = 0;
     stableSince = null;
+    collapseSince = null;
+    targetPhaseOffset = rand(0, Math.PI * 2);
+    lastStableAttemptKey = null;
+    lastCollapseAttemptKey = null;
+    lastBandDistance = null;
+    lastBandIn = null;
+    bandCrossings = [];
+    phase = "approaching";
     resolution = "pending";
+    sessionTimedOut = false;
     commitmentCount = 0;
     loadHarness?.reset();
 
@@ -604,6 +951,7 @@ export function startSignalTrialBroadcast(options: SignalTrialBroadcastOptions =
       mode: "spawn",
       tier,
       difficulty,
+      profile,
     });
   };
 
@@ -680,6 +1028,11 @@ export function startSignalTrialBroadcast(options: SignalTrialBroadcastOptions =
         applyAction(message);
       }
       if (message.type === "session" && message.mode === "reset") {
+          if (message.profile) {
+            profile = resolveProfile(message.profile);
+            profilePreset = applyProfilePreset(profilePresets[profile], profileOverrides[profile]);
+            gate = applyProfileGates(difficultyGates[difficulty], profilePreset, adaptiveHold);
+          }
         resetSession();
       }
     });
@@ -695,6 +1048,7 @@ export function startSignalTrialBroadcast(options: SignalTrialBroadcastOptions =
         mode: "spawn",
         tier,
         difficulty,
+        profile,
       }),
     );
   });
@@ -727,13 +1081,35 @@ export function startSignalTrialBroadcast(options: SignalTrialBroadcastOptions =
     const state = loop.estimate();
     coupling = loop.adapt(state, coupling);
 
+    const observerSample = { ...sample, latency_var: latencyVariance(sample) };
     detector.detectCommitment(
       state.M,
       state.V,
-      { ...sample, latency_var: latencyVariance(sample) },
+      observerSample,
       coupling,
       now,
     );
+
+    const observation = resolutionObserver.tick(
+      state.M,
+      state.V,
+      observerSample,
+      coupling,
+      now,
+    );
+    const observerTelemetry = observation
+      ? {
+          confidence: observation.confidence,
+          resolved: observation.resolved,
+          residual: observation.residual,
+          latencyStd: observation.latencyStd,
+          vMeanAbs: observation.vMeanAbs,
+          mStd: observation.mStd,
+          dmDt: observation.dmDt,
+          m: observation.m,
+          v: observation.v,
+        }
+      : undefined;
 
     const nextCommitments = detector.getEvents();
     if (nextCommitments.length > commitmentCount) {
@@ -752,6 +1128,60 @@ export function startSignalTrialBroadcast(options: SignalTrialBroadcastOptions =
     }
 
     const derived = mapDerived(state, sample);
+    const targetBand = targetBandAt(
+      now,
+      sessionStart,
+      difficulty,
+      targetPhaseOffset,
+      profilePreset,
+    );
+    const targetBandTelemetry = buildTargetBandTelemetry(state, targetBand);
+    const targetBandOk =
+      targetBandTelemetry.M.inBand &&
+      targetBandTelemetry.V.inBand &&
+      targetBandTelemetry.R.inBand;
+    const stableCandidate = isStableCandidate(state);
+    const stableQualified = stableCandidate && targetBandOk;
+
+    const bandDistance = computeBandDistance(targetBandTelemetry);
+    if (lastBandIn !== null && lastBandIn !== targetBandOk) {
+      bandCrossings.push(now);
+    }
+    bandCrossings = bandCrossings.filter((stamp) => now - stamp < 6000);
+    const distanceTrend =
+      lastBandDistance !== null ? lastBandDistance - bandDistance : 0;
+    const trendThreshold = 0.03;
+
+    if (targetBandOk && stableCandidate) {
+      phase = "tracking";
+    } else if (lastBandIn === true && !targetBandOk) {
+      phase = "overshoot";
+    } else if (bandCrossings.length >= 3) {
+      phase = "oscillating";
+    } else if (distanceTrend > trendThreshold) {
+      phase = "approaching";
+    } else if (distanceTrend < -trendThreshold) {
+      phase = "diverging";
+    } else {
+      phase = targetBandOk ? "tracking" : "approaching";
+    }
+
+    lastBandDistance = bandDistance;
+    lastBandIn = targetBandOk;
+
+    if (resolution === "pending") {
+      if (stableQualified) {
+        if (!stableSince) {
+          stableSince = now;
+        }
+      } else {
+        stableSince = null;
+      }
+    }
+
+    const uptimeMs = now - sessionStart;
+    const holdMs = stableSince ? now - stableSince : 0;
+    const quietMs = lastActionAt ? now - lastActionAt : 0;
 
     const telemetry: SignalTrialTelemetry = {
       type: "telemetry",
@@ -759,32 +1189,90 @@ export function startSignalTrialBroadcast(options: SignalTrialBroadcastOptions =
       at: now,
       tier,
       difficulty,
+      profile,
       state,
       coupling,
       sample,
       derived,
+      observer: observerTelemetry,
+      targetBand: targetBandTelemetry,
+      gates: {
+        uptimeMs,
+        minUptimeMs: gate.minUptimeMs,
+        uptimeRemainingMs: Math.max(0, gate.minUptimeMs - uptimeMs),
+        actions: actionsCount,
+        minActions: gate.minActions,
+        actionsRemaining: Math.max(0, gate.minActions - actionsCount),
+        holdMs,
+        holdRequiredMs: gate.holdMs,
+        holdRemainingMs: Math.max(0, gate.holdMs - holdMs),
+        quietMs,
+        quietRequiredMs: gate.quietHoldMs,
+        quietRemainingMs:
+          lastActionAt === 0 && gate.minActions === 0
+            ? 0
+            : Math.max(0, gate.quietHoldMs - quietMs),
+      },
+      phase,
     };
 
     broadcast(telemetry);
 
+    if (resolution === "pending" && !sessionTimedOut && now - sessionStart >= sessionTimeoutMs) {
+      sessionTimedOut = true;
+      broadcast({
+        type: "session",
+        sessionId,
+        at: now,
+        mode: "end",
+        tier,
+        difficulty,
+        profile,
+        reason: "no_resolution",
+        durationMs: now - sessionStart,
+      });
+    }
+
     if (resolution === "pending") {
-      const stableCandidate = isStableCandidate(state);
+      const uptimeOk = uptimeMs >= gate.minUptimeMs;
+      const actionsOk = actionsCount >= gate.minActions;
+      const holdOk = holdMs >= gate.holdMs;
+      const quietOk =
+        lastActionAt === 0 ? gate.minActions === 0 : quietMs >= gate.quietHoldMs;
+
       if (stableCandidate) {
-        if (!stableSince) {
-          stableSince = now;
+        const missing: string[] = [];
+        if (!targetBandOk) missing.push("targetBand");
+        if (!uptimeOk) missing.push("minUptime");
+        if (!actionsOk) missing.push("minActions");
+        if (!holdOk) missing.push("hold");
+        if (!quietOk) missing.push("quiet");
+        if (missing.length > 0) {
+          const key = missing.join("|");
+          if (key !== lastStableAttemptKey) {
+            const hints = buildResolutionHints("stable", missing, targetBandTelemetry);
+            const observerConfident =
+              observation && observation.confidence >= nearMissConfidence;
+            if (observerConfident) {
+              hints.push(
+                observation?.resolved
+                  ? "observer sees stable pattern"
+                  : "observer sees convergence forming",
+              );
+            }
+            const reason = observerConfident ? "observer_confident" : undefined;
+            broadcastResolutionAttempt("stable", missing, now, state, hints, phase, reason);
+            lastStableAttemptKey = key;
+          }
+        } else {
+          lastStableAttemptKey = null;
         }
       } else {
-        stableSince = null;
+        lastStableAttemptKey = null;
       }
 
-      const uptimeOk = now - sessionStart >= gate.minUptimeMs;
-      const actionsOk = actionsCount >= gate.minActions;
-      const holdOk = stableSince !== null && now - stableSince >= gate.holdMs;
-      const quietOk = lastActionAt === 0 ? gate.minActions === 0 : now - lastActionAt >= gate.holdMs;
-
-      if (stableCandidate && uptimeOk && actionsOk && holdOk && quietOk) {
+      if (stableQualified && uptimeOk && actionsOk && holdOk && quietOk) {
         resolution = "stable";
-        const holdMs = stableSince ? now - stableSince : 0;
         const resolutionTier = resolveResolutionTier(state, holdMs, gate.holdMs);
         broadcast({
           type: "resolution",
@@ -795,16 +1283,52 @@ export function startSignalTrialBroadcast(options: SignalTrialBroadcastOptions =
           reason: "gated stability achieved",
           state,
         });
-      } else if (isCollapseCandidate(state, sample)) {
-        resolution = "collapsed";
-        broadcast({
-          type: "resolution",
-          sessionId,
-          at: now,
-          result: "collapsed",
-          reason: "collapse threshold reached",
-          state,
-        });
+      } else {
+        const collapseCandidate = isCollapseCandidate(state, sample);
+        if (collapseCandidate) {
+          if (!collapseSince) {
+            collapseSince = now;
+          }
+        } else {
+          collapseSince = null;
+        }
+
+        const collapseHoldOk =
+          gate.collapseHoldMs === 0 ||
+          (collapseSince !== null && now - collapseSince >= gate.collapseHoldMs);
+        const collapseUptimeOk = uptimeMs >= gate.minUptimeMs;
+        const collapseActionsOk = gate.minActions === 0 || actionsCount >= gate.minActions;
+
+        if (collapseCandidate) {
+          const missing: string[] = [];
+          if (!collapseHoldOk) missing.push("collapseHold");
+          if (!collapseUptimeOk) missing.push("minUptime");
+          if (!collapseActionsOk) missing.push("minActions");
+          if (missing.length > 0) {
+            const key = missing.join("|");
+            if (key !== lastCollapseAttemptKey) {
+              const hints = buildResolutionHints("collapsed", missing, targetBandTelemetry);
+              broadcastResolutionAttempt("collapsed", missing, now, state, hints, phase);
+              lastCollapseAttemptKey = key;
+            }
+          } else {
+            lastCollapseAttemptKey = null;
+          }
+        } else {
+          lastCollapseAttemptKey = null;
+        }
+
+        if (collapseCandidate && collapseHoldOk && collapseUptimeOk && collapseActionsOk) {
+          resolution = "collapsed";
+          broadcast({
+            type: "resolution",
+            sessionId,
+            at: now,
+            result: "collapsed",
+            reason: "collapse threshold reached",
+            state,
+          });
+        }
       }
     }
   }, tickMs);
