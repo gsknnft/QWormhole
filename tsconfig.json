@@ -23,6 +23,6 @@
       "../../src/types"
     ]
   },
-  "include": ["src", "../scripts", "test/commitment-detector.test.ts"],
+  "include": ["src"],
   "exclude": ["node_modules", "dist", "**/dist", "**/test"]
 }

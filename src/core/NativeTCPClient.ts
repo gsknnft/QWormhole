@@ -80,12 +80,24 @@ const loadNative = (preferred?: NativeBackend): LoadedBinding | null => {
   return null;
 };
 
-let nativeBinding: LoadedBinding | null = loadNative();
+let nativeBinding: LoadedBinding | null | undefined;
+
+const nativeDisabled = () => process.env.QWORMHOLE_DISABLE_NATIVE === "1";
+
+const ensureNativeBinding = (
+  preferred?: NativeBackend,
+): LoadedBinding | null => {
+  if (nativeDisabled()) return null;
+  if (nativeBinding === undefined || (preferred && nativeBinding?.kind !== preferred)) {
+    nativeBinding = loadNative(preferred);
+  }
+  return nativeBinding ?? null;
+};
 
 export const getNativeBackend = (): NativeBackend | null =>
-  nativeBinding?.kind ?? null;
+  ensureNativeBinding()?.kind ?? null;
 
-export const isNativeAvailable = (): boolean => Boolean(nativeBinding);
+export const isNativeAvailable = (): boolean => Boolean(ensureNativeBinding());
 
 /**
  * Explicit native client. Prefers libwebsockets backend when available, falls back to libsocket.
@@ -96,16 +108,7 @@ export class NativeTcpClient implements NativeBindingClient {
 
   constructor(preferred?: NativeBackend) {
     logNative(`NativeTcpClient constructor called with preferred=${preferred}`);
-    nativeBinding = nativeBinding ?? loadNative(preferred);
-
-    if (preferred && (!nativeBinding || nativeBinding.kind !== preferred)) {
-      logNative(`Preferred backend ${preferred} not loaded, retrying...`);
-      const retry = loadNative(preferred);
-      if (retry) {
-        nativeBinding = retry;
-        logNative(`Retry loaded backend: ${nativeBinding.kind}`);
-      }
-    }
+    nativeBinding = ensureNativeBinding(preferred);
 
     if (!nativeBinding?.module?.TcpClientWrapper) {
       logNative(`NativeTcpClient failed: no TcpClientWrapper in loaded module`);

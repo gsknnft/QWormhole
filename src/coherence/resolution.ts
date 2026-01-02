@@ -1,9 +1,9 @@
-import { cosineSimilarity } from "./invariants";
-import { metaObserver } from "./meta_observer";
+// import { cosineSimilarity } from "./invariants";
+// import { metaObserver } from "./meta_observer";
 
 type Sample = Record<string, number>;
 
-interface ResolutionEvent {
+export interface ResolutionEvent {
   timestamp: number;
   config: Record<string, any>;
   m: number;

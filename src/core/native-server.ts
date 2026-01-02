@@ -33,6 +33,8 @@ const DEFAULT_NATIVE_SERVER_BACKEND =
   parsePreferredBackend(process.env.QWORMHOLE_NATIVE_PREFERRED) ??
   (process.platform === "linux" ? "libsocket" : undefined);
 
+const nativeDisabled = () => process.env.QWORMHOLE_DISABLE_NATIVE === "1";
+
 type NativeServerHandle = NodeJS.EventEmitter & {
   listen(): Promise<net.AddressInfo>;
   close(): Promise<void>;
@@ -167,6 +169,7 @@ let nativeServerBinding: LoadedServerBinding<unknown> | null = null;
 const ensureNativeServerBinding = (
   preferred?: NativeBackend,
 ): LoadedServerBinding<unknown> | null => {
+  if (nativeDisabled()) return null;
   if (preferred) {
     if (!bindingCache[preferred]) {
       const loaded = loadServerBackend<unknown>(preferred);

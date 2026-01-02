@@ -26,6 +26,7 @@ export interface CreateClientOptions<
 > extends QWormholeClientOptions<TMessage> {
   preferNative?: boolean;
   forceTs?: boolean;
+  detectNative?: boolean;
 }
 
 export interface CreateClientResult<TMessage> {
@@ -41,10 +42,11 @@ export interface CreateClientResult<TMessage> {
 export function createQWormholeClient<TMessage = Buffer>(
   options: CreateClientOptions<TMessage>,
 ): CreateClientResult<TMessage> {
-  const backend = getNativeBackend();
-  const nativeReady = isNativeAvailable();
+  const detectNative = options.detectNative !== false;
+  const backend = detectNative ? getNativeBackend() : null;
+  const nativeReady = detectNative ? isNativeAvailable() : false;
 
-  if (!options.forceTs && options.preferNative && nativeReady) {
+  if (!options.forceTs && options.preferNative && nativeReady && backend) {
     const resolvedBackend = backend ?? "lws";
     return {
       client: new NativeTcpClient(resolvedBackend),
@@ -72,6 +74,7 @@ export interface CreateServerOptions<
   preferNative?: boolean;
   forceTs?: boolean;
   preferredNativeBackend?: NativeBackend;
+  detectNative?: boolean;
 }
 
 export interface CreateServerResult<TMessage> {
@@ -87,8 +90,13 @@ export interface CreateServerResult<TMessage> {
 export function createQWormholeServer<TMessage = Buffer>(
   options: CreateServerOptions<TMessage>,
 ): CreateServerResult<TMessage> {
-  const backend = getNativeServerBackend(options.preferredNativeBackend);
-  const nativeReady = isNativeServerAvailable(options.preferredNativeBackend);
+  const detectNative = options.detectNative !== false;
+  const backend = detectNative
+    ? getNativeServerBackend(options.preferredNativeBackend)
+    : null;
+  const nativeReady = detectNative
+    ? isNativeServerAvailable(options.preferredNativeBackend)
+    : false;
 
   if (!options.forceTs && options.preferNative && nativeReady && backend) {
     const resolvedBackend = backend;

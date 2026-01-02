@@ -1,4 +1,5 @@
 // Auto-generated index for core
+export * from './base-runtime';
 export * from './batch-framer';
 export * from './codecs';
 export * from './CoherenceController';

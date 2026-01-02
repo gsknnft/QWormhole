@@ -3,12 +3,19 @@
   "version": "0.2.1",
   "description": "A high-performance, extensible TypeScript socket library with native bindings for Node.js",
   "private": false,
+  "main": "./dist/index.js",
+  "module": "./dist/index.js",
+  "types": "./dist/types/index.d.ts",
   "exports": {
     ".": {
-      "import": "./dist/index.mjs",
-      "require": "./dist/index.js",
+      "import": "./dist/index.js",
+      "require": "./dist/index.cjs",
       "types": "./dist/types/index.d.ts"
     },
+    "./index.js": "./dist/index.js",
+    "./index.cjs": "./dist/index.cjs",
+    "./index.mjs": "./dist/index.js",
+    "./types": "./dist/types/index.d.ts",
     "./native": {
       "import": "./dist/native/qwormhole_lws.node"
     },

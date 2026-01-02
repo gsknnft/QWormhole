@@ -183,6 +183,14 @@ QWormhole abstracts the transport layer, selecting native or TS based on availab
   <em>QWormhole Architecture</em>
 </p>
 
+## System Context (Physical-Semantic Stack)
+
+QWormhole is the transport layer that adapts to field coherence and negentropic metrics.
+It turns N-index and coherence velocity into handshake, framing, and rate-limit policy
+so transport stays aligned with field dynamics.
+
+See [Physical-Semantic Stack Map](../../docs/PHYSICAL_SEMANTIC_STACK.md) for the full closed-loop model.
+
 
 ## Quick start
 
