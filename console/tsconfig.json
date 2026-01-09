@@ -15,7 +15,6 @@
     "esModuleInterop": true,
     "skipLibCheck": true,
     "allowSyntheticDefaultImports": true,
-    "typeRoots": ["../../node_modules/@types"],
     "lib": ["ESNext", "DOM"],
     "paths": {
       "@fonts/*": ["src/fonts/*"],

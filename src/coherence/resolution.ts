@@ -77,11 +77,11 @@ export class ResolutionDetector {
     const dmDtN = dmDt / this.p.dmDtScale;
 
     // const drift = cosineSimilarity(prevEigenvector, currentEigenvector);
-
+      // const residual = this.calculateResidual();
+      // const resonance = this.calculateResonance();
     const residual = Math.sqrt(vN * vN + dmDtN * dmDtN);
     // const eigResidual = 1 - drift; // from eigenvector drift
     // const residual = Math.sqrt(vN*vN + dmDtN*dmDtN + eigResidual*eigResidual);
-
     const resolvedNow =
       vMeanAbs < this.p.vEps &&
       M > this.p.mMin &&
@@ -150,13 +150,36 @@ export class ResolutionDetector {
     return this.lastObservation;
   }
 
-  getEvents() {
+  getEvents(): ResolutionEvent[] {
     return this.events;
   }
 
   getLastObservation() {
     return this.lastObservation;
   }
+  private mean(arr: number[]): number {
+    return arr.reduce((a, b) => a + b, 0) / arr.length;
+  }
+
+  private stdDev(arr: number[]): number {
+    const m = this.mean(arr);
+    return Math.sqrt(arr.map(x => (x - m) ** 2).reduce((a, b) => a + b, 0) / arr.length);
+  }
+
+  // private calculateResonance(): number {
+  //   // Signal tolerance: Inverse variance on key signal (e.g., latency_var)
+  //   const signals = this.history.map(h => h.sample.latency_var || 0);
+  //   return 1 / (1 + this.stdDev(signals)); // [0,1]; low var = high tolerance
+  // }
+
+  // private calculateResidual(): number {
+  //   // CoV proxy: Finite diff R(t) ~ V(t) + dM/dt (drift + margin change)
+  //   if (this.history.length < 2) return 0;
+  //   const last = this.history[this.history.length - 1];
+  //   const prev = this.history[this.history.length - 2];
+  //   const dm_dt = (last.m - prev.m) / 1; // Assume Δt=1
+  //   return last.v + dm_dt; // Simple residual; extend with more terms if needed
+  // }
 
   private computeWindowStats() {
     if (this.history.length < this.p.historyWindow) return null;
@@ -165,10 +188,10 @@ export class ResolutionDetector {
     const vs = this.history.map(h => h.v);
     const latVars = this.history.map(h => resolveLatencyVar(h.sample));
 
-    const mStd = stdDev(ms);
-    const vMeanAbs = Math.abs(mean(vs));
+    const mStd = this.stdDev(ms);
+    const vMeanAbs = Math.abs(this.mean(vs));
 
-    const latencyStd = stdDev(latVars);
+    const latencyStd = this.stdDev(latVars);
 
     // dm/dt using finite difference across last 2 points
     const last = this.history[this.history.length - 1];
@@ -181,15 +204,6 @@ export class ResolutionDetector {
 
     return { mStd, vMeanAbs, latencyStd, dmDt };
   }
-}
-
-// helpers
-function mean(a: number[]) {
-  return a.reduce((x, y) => x + y, 0) / a.length;
-}
-function stdDev(a: number[]) {
-  const m = mean(a);
-  return Math.sqrt(a.reduce((s, x) => s + (x - m) ** 2, 0) / a.length);
 }
 
 const clamp01 = (value: number) => Math.min(1, Math.max(0, value));

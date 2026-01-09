@@ -1,4 +1,15 @@
 // qwormhole/src/coherence/field-stability.ts
+// ## Field-Stability.ts - Coherence field stability analysis and fitting utilities
+
+// Fits J(s) models to coherence state trajectories for Lyapunov stability checks
+// Uses quadratic/cubic forms to model dynamics: dS/dt = -∇J(S) + U(t)
+// Provides Lyapunov stability checks based on fitted models
+// Assumes CoherenceState with M, V, R components
+// Integrates with coherence loop for real-time stability monitoring
+// and adaptation based on fitted dynamics
+// Depends on linear algebra utilities (e.g., matrix solve, dot product)
+// Ties to coherence loop: Uses M(t), V(t); adds resonance check for binding event
+
 
 import { CoherenceState } from "./types";
 
