@@ -28,9 +28,11 @@ import type {
 } from "../src/core/flow-controller";
 import { CoherenceController } from "../src/core/CoherenceController";
 import type { BatchFramerStats } from "../src/core/batch-framer";
+import type { PriorityQueueStats } from "../src/core/qos";
 import { LengthPrefixedFramer } from "../src/core/framing";
 import { KcpServer } from "../src/transports/kcp/kcp-server";
 import { KcpSession } from "../src/transports/kcp/kcp-session";
+import { inferMessageType } from "../src/utils/negentropic-diagnostics";
 import type {
   FramingMode,
   NativeBackend,
@@ -54,6 +56,7 @@ dotenv.config();
 interface TrustSnapshot {
   flowDiagnostics?: FlowControllerDiagnostics;
   batchStats?: BatchFramerStats;
+  queueStats?: PriorityQueueStats;
 }
 
 interface EntropyMetrics {
@@ -61,6 +64,28 @@ interface EntropyMetrics {
   coherence: "high" | "medium" | "low" | "chaos";
   entropyVelocity: string;
 }
+
+type PayloadSummary = {
+  count: number;
+  minBytes: number;
+  maxBytes: number;
+  avgBytes: number;
+  types: string[];
+  framing: FramingMode;
+  frameHeaderBytes: number;
+};
+
+type BenchConfigSummary = {
+  effectiveRateBytesPerSec?: number;
+  flushCapBytes?: number;
+  flushCapBuffers?: number;
+  flushIntervalMs?: number;
+  adaptiveMode?: string;
+  macroBatchTargetBytes: number;
+  yieldEvery?: number;
+  flowFastPath: boolean;
+  payload: PayloadSummary;
+};
 
 interface QWormholeClientOptions {
   host: string;
@@ -153,6 +178,8 @@ const getCsvPath = () => {
   if (process.env.QW_BENCH_CSV) return process.env.QW_BENCH_CSV;
   return undefined;
 };
+const BENCH_CSV_PATH = getCsvPath();
+const BENCH_JSONL_PATH = process.env.QWORMHOLE_BENCH_JSONL;
 
 type Mode =
   | "ts"
@@ -176,6 +203,7 @@ interface BenchResult {
   mbPerSec?: number;
   preferredServerBackend?: NativeBackend;
   diagnostics?: ScenarioDiagnostics;
+  benchConfig?: BenchConfigSummary;
   kcpRttMs?: number;
   kcpLossRate?: number;
   kcpPending?: number;
@@ -193,7 +221,10 @@ function parseModeArg(): Mode[] {
 }
 
 const PAYLOAD = Buffer.alloc(1024, 1);
-const TOTAL_MESSAGES = 10_000;
+const TOTAL_MESSAGES = Math.max(
+  1,
+  Number(process.env.QWORMHOLE_BENCH_MESSAGES ?? "10000") || 10000,
+);
 const TIMEOUT_MS = 5000;
 const KCP_TIMEOUT_MS =
   Number(process.env.QW_KCP_TIMEOUT_MS ?? "20000") || 20000;
@@ -203,6 +234,7 @@ const envNumber = (key: string): number | undefined => {
   const parsed = Number(raw);
   return Number.isFinite(parsed) && parsed > 0 ? parsed : undefined;
 };
+const BENCH_YIELD_EVERY = envNumber("QWORMHOLE_BENCH_YIELD_EVERY");
 const parseHandshakeTags = (
   raw?: string,
 ): Record<string, string | number> | undefined => {
@@ -232,6 +264,8 @@ const BENCH_FRAMING: FramingMode =
   process.env.QWORMHOLE_BENCH_FRAMING === "none" ? "none" : "length-prefixed";
 const BENCH_DISABLE_FLOW = process.env.QWORMHOLE_BENCH_NO_FLOW === "1";
 const BENCH_FLOW_FAST = process.env.QWORMHOLE_BENCH_FLOW_FAST === "1";
+const BENCH_DIVERSE_PAYLOADS =
+  process.env.QWORMHOLE_BENCH_DIVERSITY === "1";
 const BENCH_NEG_INDEX = (() => {
   const raw = process.env.QWORMHOLE_BENCH_NEG_INDEX;
   if (!raw) return 0.9;
@@ -240,9 +274,55 @@ const BENCH_NEG_INDEX = (() => {
   return Math.min(Math.max(parsed, 0), 1);
 })();
 const FRAME_HEADER_BYTES = 4;
+const MACRO_BATCH_TARGET_BYTES = 128 * 1024;
 const ENABLE_DIAGNOSTICS =
   process.argv.includes("--diagnostics") ||
   process.env.QWORMHOLE_BENCH_DIAGNOSTICS === "1";
+
+const padToBytes = (prefix: string, targetBytes: number): string => {
+  const size = Buffer.byteLength(prefix);
+  if (size >= targetBytes) return prefix.slice(0, targetBytes);
+  return prefix + "x".repeat(targetBytes - size);
+};
+
+const buildSizedObject = (
+  base: Record<string, unknown>,
+  targetBytes: number,
+): Record<string, unknown> => {
+  const payload = { ...base, payload: "" };
+  let json = JSON.stringify(payload);
+  let remaining = Math.max(0, targetBytes - Buffer.byteLength(json));
+  payload.payload = "x".repeat(remaining);
+  json = JSON.stringify(payload);
+  const extra = Buffer.byteLength(json) - targetBytes;
+  if (extra > 0) {
+    payload.payload = payload.payload.slice(
+      0,
+      Math.max(0, payload.payload.length - extra),
+    );
+  }
+  return payload;
+};
+
+const buildPayloadVariants = (): Payload[] => {
+  if (!BENCH_DIVERSE_PAYLOADS) return [PAYLOAD];
+  const size = PAYLOAD.length;
+  const textPayload = padToBytes("bench:text:", size);
+  const bytesPayload = new Uint8Array(size);
+  bytesPayload.fill(2);
+  return [
+    PAYLOAD,
+    textPayload,
+    bytesPayload,
+    buildSizedObject({ type: "signal" }, size),
+    buildSizedObject({ event: "bench" }, size),
+    buildSizedObject({ action: "ping" }, size),
+  ];
+};
+
+const BENCH_PAYLOADS = buildPayloadVariants();
+const getBenchPayload = (i: number): Payload =>
+  BENCH_PAYLOADS[i % BENCH_PAYLOADS.length];
 
 const encodeLengthPrefixed = (payload: Buffer): Buffer => {
   const framed = Buffer.allocUnsafe(FRAME_HEADER_BYTES + payload.length);
@@ -250,9 +330,6 @@ const encodeLengthPrefixed = (payload: Buffer): Buffer => {
   payload.copy(framed, FRAME_HEADER_BYTES);
   return framed;
 };
-
-const NATIVE_CLIENT_PAYLOAD =
-  BENCH_FRAMING === "length-prefixed" ? encodeLengthPrefixed(PAYLOAD) : PAYLOAD;
 
 const detectNativeBackend = (backend: "lws" | "libsocket") => {
   try {
@@ -311,6 +388,47 @@ const toBytes: Serializer = (payload: Payload): Buffer => {
   }
   return Buffer.from(String(payload ?? ""));
 };
+const benchSerializer: Serializer = (() => {
+  const cache = new Map<Payload, Buffer>();
+  return (payload: Payload): Buffer => {
+    const cached = cache.get(payload);
+    if (cached) return cached;
+    const encoded = toBytes(payload);
+    cache.set(payload, encoded);
+    return encoded;
+  };
+})();
+const summarizePayloadBytes = (): PayloadSummary => {
+  const sizes = BENCH_PAYLOADS.map(payload => benchSerializer(payload).length);
+  const count = sizes.length;
+  const minBytes = count ? Math.min(...sizes) : 0;
+  const maxBytes = count ? Math.max(...sizes) : 0;
+  const avgBytes = count
+    ? sizes.reduce((sum, value) => sum + value, 0) / count
+    : 0;
+  const types = Array.from(
+    new Set(BENCH_PAYLOADS.map(payload => inferMessageType(payload))),
+  ).filter(Boolean);
+  return {
+    count,
+    minBytes,
+    maxBytes,
+    avgBytes,
+    types,
+    framing: BENCH_FRAMING,
+    frameHeaderBytes: BENCH_FRAMING === "length-prefixed" ? FRAME_HEADER_BYTES : 0,
+  };
+};
+const PAYLOAD_SUMMARY = summarizePayloadBytes();
+
+const NATIVE_PAYLOADS = BENCH_PAYLOADS.map(payload => {
+  const bytes = toBytes(payload);
+  return BENCH_FRAMING === "length-prefixed"
+    ? encodeLengthPrefixed(bytes)
+    : bytes;
+});
+const getNativePayload = (i: number): Buffer =>
+  NATIVE_PAYLOADS[i % NATIVE_PAYLOADS.length];
 
 const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
 
@@ -334,6 +452,55 @@ const deriveBenchCoherence = (): "high" | "medium" | "low" | "chaos" => {
   if (BENCH_NEG_INDEX >= 0.65) return "medium";
   if (BENCH_NEG_INDEX >= 0.4) return "low";
   return "chaos";
+};
+
+const buildBenchConfigSummary = (
+  flowController?: FlowController | null,
+): BenchConfigSummary => {
+  const summary: BenchConfigSummary = {
+    macroBatchTargetBytes: MACRO_BATCH_TARGET_BYTES,
+    yieldEvery: BENCH_YIELD_EVERY,
+    flowFastPath: BENCH_FLOW_FAST,
+    payload: PAYLOAD_SUMMARY,
+  };
+  if (!flowController) return summary;
+  const diag = flowController.getDiagnostics();
+  const caps = flowController.resolveFramerCaps(diag.policy.peerIsNative);
+  return {
+    ...summary,
+    effectiveRateBytesPerSec: diag.effectiveRateBytesPerSec,
+    flushCapBytes: caps.maxBytes,
+    flushCapBuffers: caps.maxBuffers,
+    flushIntervalMs: caps.flushMs,
+    adaptiveMode: diag.adaptive?.mode,
+  };
+};
+
+const logBenchConfig = (label: string, summary: BenchConfigSummary): void => {
+  if (BENCH_CSV_PATH === "") return;
+  const payload = summary.payload;
+  const payloadStats = {
+    count: payload.count,
+    minBytes: payload.minBytes,
+    maxBytes: payload.maxBytes,
+    avgBytes: Number(payload.avgBytes.toFixed(2)),
+    types: payload.types,
+  };
+  const config = {
+    effectiveRateBytesPerSec: summary.effectiveRateBytesPerSec,
+    flushCapBytes: summary.flushCapBytes,
+    flushCapBuffers: summary.flushCapBuffers,
+    flushIntervalMs: summary.flushIntervalMs,
+    macroBatchTargetBytes: summary.macroBatchTargetBytes,
+    yieldEvery: summary.yieldEvery ?? 0,
+    flowFastPath: summary.flowFastPath,
+    adaptiveMode: summary.adaptiveMode,
+    framing: payload.framing,
+    frameHeaderBytes: payload.frameHeaderBytes,
+    payloadBytes: payloadStats,
+  };
+  // eslint-disable-next-line no-console
+  console.log(`[bench] ${label} config`, JSON.stringify(config));
 };
 
 const GC_KIND_LABELS: Record<number, string> = {
@@ -510,6 +677,7 @@ const startDiagnostics = (
         flow: extras?.flowDiagnostics,
         clientFlow: extras?.clientFlowDiagnostics,
         clientBatch: extras?.clientBatchStats,
+        clientQueue: extras?.clientQueueStats,
         sendBlocks: extras?.sendBlocks,
       };
     },
@@ -549,6 +717,45 @@ const summarizeBlockDurations = (
   };
 };
 
+const summarizeMemory = (usage: NodeJS.MemoryUsage) => ({
+  rss: usage.rss,
+  heapTotal: usage.heapTotal,
+  heapUsed: usage.heapUsed,
+  external: usage.external,
+  arrayBuffers: usage.arrayBuffers ?? 0,
+});
+
+const BENCH_ENV_KEYS = [
+  "NODE_OPTIONS",
+  "QWORMHOLE_BENCH_DIVERSITY",
+  "QWORMHOLE_BENCH_DIAGNOSTICS",
+  "QWORMHOLE_BENCH_MESSAGES",
+  "QWORMHOLE_BENCH_YIELD_EVERY",
+  "QWORMHOLE_BENCH_HWM",
+  "QWORMHOLE_BENCH_FLOW_FAST",
+  "QWORMHOLE_BENCH_COHERENCE",
+  "QWORMHOLE_BENCH_COHERENCE_MODE",
+  "QWORMHOLE_FORCE_RATE_BYTES",
+  "QWORMHOLE_FORCE_SLICE",
+  "QWORMHOLE_ADAPTIVE_SLICES",
+  "QWORMHOLE_TS_FRAMER_MAX_BYTES",
+  "QWORMHOLE_TS_FRAMER_MAX_BUFFERS",
+  "QWORMHOLE_TS_FAST_MAX_BYTES",
+  "QWORMHOLE_TS_FAST_MAX_BUFFERS",
+  "QWORMHOLE_TS_FLUSH_INTERVAL_MS",
+  "QW_WRITEV_FLUSH_MS",
+  "QW_WRITEV_BATCH_SIZE",
+];
+
+const pickBenchEnv = () => {
+  const out: Record<string, string> = {};
+  for (const key of BENCH_ENV_KEYS) {
+    const value = process.env[key];
+    if (value !== undefined) out[key] = value;
+  }
+  return out;
+};
+
 async function waitForCompletion(
   predicate: () => boolean,
   timeoutMs: number,
@@ -584,10 +791,12 @@ const snapshotClientDiagnostics = async (
 ): Promise<{
   flow?: FlowControllerDiagnostics;
   batch?: BatchFramerStats;
+  queue?: PriorityQueueStats;
 }> => {
   const internal = client as unknown as {
     flowController?: FlowController;
     outboundFramer?: BatchFramer;
+    queue?: { snapshot?: (options?: { reset?: boolean }) => PriorityQueueStats };
   };
   if (!internal.flowController || !internal.outboundFramer) {
     return {};
@@ -599,6 +808,7 @@ const snapshotClientDiagnostics = async (
   return {
     flow: flow ?? undefined,
     batch: batch ?? undefined,
+    queue: internal.queue?.snapshot?.() ?? undefined,
   };
 };
 
@@ -625,10 +835,16 @@ async function childMain(): Promise<void> {
   let flowDiagnostics: DiagnosticsExtras["flowDiagnostics"];
   let clientFlowDiagnostics: FlowControllerDiagnostics | undefined;
   let clientBatchStats: BatchFramerStats | undefined;
+  let clientQueueStats: PriorityQueueStats | undefined;
   let clientSnapshotResolve: (() => void) | null = null;
   const clientSnapshotWaiter = new Promise<void>(resolve => {
     clientSnapshotResolve = resolve;
   });
+  let benchConfig: BenchConfigSummary | undefined;
+  let heapStart: NodeJS.MemoryUsage | undefined;
+  let heapEnd: NodeJS.MemoryUsage | undefined;
+  let heapPeakUsed = 0;
+  let heapPeakRss = 0;
   let trustSnapshotResolve: (() => void) | null = null;
   const trustSnapshotWaiter = new Promise<void>(resolve => {
     trustSnapshotResolve = resolve;
@@ -706,7 +922,7 @@ async function childMain(): Promise<void> {
         host: "127.0.0.1",
         port: 0,
         framing: msg.framing,
-        serializer: toBytes,
+        serializer: benchSerializer,
         deserializer: (data: Buffer) => data as Buffer,
         preferNative: msg.scenario.preferNativeServer,
         preferredNativeBackend: msg.scenario.serverBackend,
@@ -941,6 +1157,7 @@ async function runScenarioForked({
 
   let clientFlowDiagnostics: FlowControllerDiagnostics | undefined;
   let clientBatchStats: BatchFramerStats | undefined;
+  let clientQueueStats: PriorityQueueStats | undefined;
   let clientSnapshotResolve: (() => void) | null = null;
   const clientSnapshotWaiter = new Promise<void>(resolve => {
     clientSnapshotResolve = resolve;
@@ -953,7 +1170,7 @@ async function runScenarioForked({
       host: "127.0.0.1",
       port: (ready as BenchChildReady).port,
       framing: BENCH_FRAMING,
-      serializer: toBytes,
+      serializer: benchSerializer,
       deserializer: (data: Buffer): Buffer => data,
       entropyMetrics: {
         negIndex: BENCH_NEG_INDEX,
@@ -963,6 +1180,7 @@ async function runScenarioForked({
       onTrustSnapshot: (snapshot: TrustSnapshot) => {
         clientFlowDiagnostics = snapshot.flowDiagnostics;
         clientBatchStats = snapshot.batchStats;
+        clientQueueStats = snapshot.queueStats;
         clientSnapshotResolve?.();
       },
       peerIsNative: serverMode !== "ts",
@@ -973,6 +1191,11 @@ async function runScenarioForked({
     } as QWormholeClientOptions);
     attachBenchClientErrorHandler(tsClient);
     await tsClient.connect();
+    const internal = tsClient as any;
+    benchConfig = buildBenchConfigSummary(internal.flowController ?? null);
+    if (benchConfig) {
+      logBenchConfig(`${id} (forked)`, benchConfig);
+    }
   } else {
     const backend = clientMode === "native-lws" ? "lws" : "libsocket";
     nativeClient = new NativeTcpClient(backend);
@@ -1006,11 +1229,20 @@ async function runScenarioForked({
   let done: BenchChildDone | null = null;
   try {
     const start = performance.now();
+    if (ENABLE_DIAGNOSTICS) {
+      heapStart = process.memoryUsage();
+      heapPeakUsed = heapStart.heapUsed;
+      heapPeakRss = heapStart.rss;
+    }
     for (let i = 0; i < TOTAL_MESSAGES; i++) {
+      if (BENCH_YIELD_EVERY && i > 0 && i % BENCH_YIELD_EVERY === 0) {
+        await sleep(0);
+      }
+      const payload = getBenchPayload(i);
       if (tsClient) {
-        tsClient.send(PAYLOAD);
+        tsClient.send(payload);
       } else if (nativeClient) {
-        nativeClient.send(NATIVE_CLIENT_PAYLOAD);
+        nativeClient.send(getNativePayload(i));
       }
       if (ENABLE_DIAGNOSTICS) {
         blockCount += 1;
@@ -1019,6 +1251,9 @@ async function runScenarioForked({
           sendBlockDurations.push(now - blockStart);
           blockStart = now;
           blockCount = 0;
+          const usage = process.memoryUsage();
+          heapPeakUsed = Math.max(heapPeakUsed, usage.heapUsed);
+          heapPeakRss = Math.max(heapPeakRss, usage.rss);
         }
       }
     }
@@ -1028,10 +1263,14 @@ async function runScenarioForked({
     child.send?.({ type: "stop" });
     done = null;
   } finally {
+    if (ENABLE_DIAGNOSTICS) {
+      heapEnd = process.memoryUsage();
+    }
     if (tsClient) {
       const clientSnapshot = await snapshotClientDiagnostics(tsClient);
       clientFlowDiagnostics = clientSnapshot.flow ?? clientFlowDiagnostics;
       clientBatchStats = clientSnapshot.batch ?? clientBatchStats;
+      clientQueueStats = clientSnapshot.queue ?? clientQueueStats;
       tsClient.disconnect();
       await Promise.race([clientSnapshotWaiter, sleep(50)]);
     }
@@ -1053,7 +1292,19 @@ async function runScenarioForked({
       sendBlocks: blockStats ?? done.diagnostics.sendBlocks,
       clientFlow: clientFlowDiagnostics,
       clientBatch: clientBatchStats,
+      clientQueue: clientQueueStats,
     };
+    if (heapStart && heapEnd) {
+      diagnostics = {
+        ...diagnostics,
+        heap: {
+          start: summarizeMemory(heapStart),
+          end: summarizeMemory(heapEnd),
+          peakHeapUsed: heapPeakUsed,
+          peakRss: heapPeakRss,
+        },
+      };
+    }
   } else {
     diagnostics = undefined;
   }
@@ -1081,6 +1332,7 @@ async function runScenarioForked({
     framing: BENCH_FRAMING,
     msgsPerSec,
     mbPerSec,
+    benchConfig,
     diagnostics,
     skipped: done ? undefined : true,
     reason: done ? undefined : "timeout",
@@ -1120,6 +1372,11 @@ async function runScenario({
   const trustSnapshotWaiter = new Promise<void>(resolve => {
     trustSnapshotResolve = resolve;
   });
+  let benchConfig: BenchConfigSummary | undefined;
+  let heapStart: NodeJS.MemoryUsage | undefined;
+  let heapEnd: NodeJS.MemoryUsage | undefined;
+  let heapPeakUsed = 0;
+  let heapPeakRss = 0;
   if (!clientModeAvailable(clientMode)) {
     return {
       id,
@@ -1159,7 +1416,7 @@ async function runScenario({
     host: "127.0.0.1",
     port: 0,
     framing: BENCH_FRAMING,
-    serializer: toBytes,
+    serializer: benchSerializer,
     deserializer: (data: Buffer) => data as Buffer,
     preferNative: preferNativeServer,
     preferredNativeBackend: serverBackend,
@@ -1208,7 +1465,7 @@ async function runScenario({
       host: "127.0.0.1",
       port,
       framing: BENCH_FRAMING,
-      serializer: toBytes,
+      serializer: benchSerializer,
       deserializer: (data: Buffer) => data,
       entropyMetrics: {
         negIndex: BENCH_NEG_INDEX,
@@ -1236,6 +1493,10 @@ async function runScenario({
     batchFramer = internal.outboundFramer ?? null;
     if (flowController && batchFramer) {
       coherenceController = new CoherenceController();
+    }
+    benchConfig = buildBenchConfigSummary(flowController);
+    if (benchConfig) {
+      logBenchConfig(id, benchConfig);
     }
   } else {
     const backend = clientMode === "native-lws" ? "lws" : "libsocket";
@@ -1279,11 +1540,20 @@ async function runScenario({
     const start = performance.now();
     const benchStart = performance.now();
     const traceEvery = 1000; // log every 1000 messages
+    if (ENABLE_DIAGNOSTICS) {
+      heapStart = process.memoryUsage();
+      heapPeakUsed = heapStart.heapUsed;
+      heapPeakRss = heapStart.rss;
+    }
     for (let i = 0; i < TOTAL_MESSAGES; i++) {
+      if (BENCH_YIELD_EVERY && i > 0 && i % BENCH_YIELD_EVERY === 0) {
+        await sleep(0);
+      }
+      const payload = getBenchPayload(i);
       if (tsClient) {
-        tsClient.send(PAYLOAD);
+        tsClient.send(payload);
       } else if (nativeClient) {
-        nativeClient.send(NATIVE_CLIENT_PAYLOAD);
+        nativeClient.send(getNativePayload(i));
       }
       if (ENABLE_DIAGNOSTICS) {
         blockCount += 1;
@@ -1292,6 +1562,11 @@ async function runScenario({
           sendBlockDurations.push(now - blockStart);
           blockStart = now;
           blockCount = 0;
+          if (ENABLE_DIAGNOSTICS) {
+            const usage = process.memoryUsage();
+            heapPeakUsed = Math.max(heapPeakUsed, usage.heapUsed);
+            heapPeakRss = Math.max(heapPeakRss, usage.rss);
+          }
           // After each block flush, update coherence control and sample trace
           if (coherenceController && flowController && batchFramer) {
             const diag = flowController.getDiagnostics();
@@ -1348,11 +1623,15 @@ async function runScenario({
     );
     duration = performance.now() - start;
   } finally {
+    if (ENABLE_DIAGNOSTICS) {
+      heapEnd = process.memoryUsage();
+    }
     serverInstance.off("message", onMessage as never);
     if (tsClient) {
       const clientSnapshot = await snapshotClientDiagnostics(tsClient);
       clientFlowDiagnostics = clientSnapshot.flow ?? clientFlowDiagnostics;
       clientBatchStats = clientSnapshot.batch ?? clientBatchStats;
+      clientQueueStats = clientSnapshot.queue ?? clientQueueStats;
       tsClient.disconnect();
     }
     if (nativeClient) {
@@ -1372,7 +1651,19 @@ async function runScenario({
       flowDiagnostics,
       clientFlowDiagnostics,
       clientBatchStats,
+      clientQueueStats,
     });
+    if (diagnostics && heapStart && heapEnd) {
+      diagnostics = {
+        ...diagnostics,
+        heap: {
+          start: summarizeMemory(heapStart),
+          end: summarizeMemory(heapEnd),
+          peakHeapUsed: heapPeakUsed,
+          peakRss: heapPeakRss,
+        },
+      };
+    }
   }
 
   const seconds = duration / 1000;
@@ -1396,6 +1687,7 @@ async function runScenario({
     framing: BENCH_FRAMING,
     msgsPerSec,
     mbPerSec,
+    benchConfig,
     diagnostics: diagnostics ? { ...diagnostics, coherenceTrace } : undefined,
   };
 }
@@ -1462,6 +1754,9 @@ async function runKcpScenario(): Promise<ScenarioResult> {
 
   const start = performance.now();
   for (let i = 0; i < TOTAL_MESSAGES; i++) {
+    if (BENCH_YIELD_EVERY && i > 0 && i % BENCH_YIELD_EVERY === 0) {
+      await sleep(0);
+    }
     stream.write(PAYLOAD);
   }
 
@@ -1866,6 +2161,87 @@ async function runQuicScenario(): Promise<ScenarioResult> {
   };
 }
 
+const buildJsonlEntry = (
+  res: ScenarioResult,
+  env: Record<string, string>,
+): Record<string, unknown> => {
+  const diag = res.diagnostics;
+  const flow = diag?.clientFlow ?? diag?.flow;
+  const payload = res.benchConfig?.payload ?? PAYLOAD_SUMMARY;
+  return {
+    timestamp: new Date().toISOString(),
+    scenario: res.id,
+    serverMode: res.serverMode,
+    clientMode: res.clientMode,
+    framing: res.framing,
+    messagesReceived: res.messagesReceived,
+    bytesReceived: res.bytesReceived,
+    durationMs: res.durationMs,
+    msgsPerSec: res.msgsPerSec,
+    mbPerSec: res.mbPerSec,
+    skipped: res.skipped ?? false,
+    reason: res.reason,
+    flags: {
+      diversity: BENCH_DIVERSE_PAYLOADS,
+      diagnostics: ENABLE_DIAGNOSTICS,
+      coherence: BENCH_COHERENCE,
+      coherenceMode: BENCH_COHERENCE_MODE,
+      flowFastPath: BENCH_FLOW_FAST,
+    },
+    limiter: {
+      effectiveRateBytesPerSec:
+        res.benchConfig?.effectiveRateBytesPerSec ??
+        flow?.effectiveRateBytesPerSec,
+      flushCapBytes: res.benchConfig?.flushCapBytes,
+      flushCapBuffers: res.benchConfig?.flushCapBuffers,
+      flushIntervalMs: res.benchConfig?.flushIntervalMs,
+      adaptiveMode: res.benchConfig?.adaptiveMode,
+      macroBatchTargetBytes: res.benchConfig?.macroBatchTargetBytes,
+      yieldEvery: res.benchConfig?.yieldEvery,
+    },
+    payload: {
+      count: payload.count,
+      minBytes: payload.minBytes,
+      maxBytes: payload.maxBytes,
+      avgBytes: payload.avgBytes,
+      types: payload.types,
+      framing: payload.framing,
+      frameHeaderBytes: payload.frameHeaderBytes,
+    },
+    latency: {
+      loopDelayP50Ms: diag?.eventLoopDelay?.p50Ms,
+      loopDelayP99Ms: diag?.eventLoopDelay?.p99Ms,
+      sendBlockAvgMs: diag?.sendBlocks?.avgMs,
+      sendBlockMinMs: diag?.sendBlocks?.minMs,
+      sendBlockMaxMs: diag?.sendBlocks?.maxMs,
+    },
+    heap: diag?.heap,
+    clientBatch: diag?.clientBatch,
+    clientQueue: diag?.clientQueue,
+    eventLoop: diag?.eventLoop,
+    eventLoopDelay: diag?.eventLoopDelay,
+    backpressure: diag?.backpressure,
+    batching: diag?.batching,
+    env,
+  };
+};
+
+const writeJsonlResults = async (results: ScenarioResult[]): Promise<void> => {
+  if (!BENCH_JSONL_PATH) return;
+  const env = pickBenchEnv();
+  const lines = results
+    .map(res => JSON.stringify(buildJsonlEntry(res, env)))
+    .join("\n")
+    .concat("\n");
+  await import("node:fs/promises").then(fs =>
+    fs.appendFile(BENCH_JSONL_PATH, lines, "utf8"),
+  );
+  if (BENCH_CSV_PATH !== "") {
+    // eslint-disable-next-line no-console
+    console.log(`[bench] jsonl appended to ${BENCH_JSONL_PATH}`);
+  }
+};
+
 async function mainBench() {
   const modes = parseModeArg();
   const results: ScenarioResult[] = [];
@@ -1885,7 +2261,9 @@ async function mainBench() {
     results.push(quicRes);
   }
 
-  const csvPath = getCsvPath();
+  await writeJsonlResults(results);
+
+  const csvPath = BENCH_CSV_PATH;
   if (csvPath !== undefined) {
     const header = formatCsvHeader();
     const rows = results.map(formatCsvRow).join("");

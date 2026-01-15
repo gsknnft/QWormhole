@@ -1,0 +1,1227 @@
+G@Soulbook MINGW64 ~/Desktop/Builds/sigilnet/packages/vera-torch (sigilnet_dev)
+$ RATES_MB=16,32,64 && CAPS_KB=96,256 && QWORMHOLE_BENCH_MESSAGES=1000 && QWORMHOLE_BENCH_YIELD_EVERY=50 && pnpm --filter @gsknnft/qwormhole run bench:sweep:ts
+
+> @gsknnft/qwormhole@0.2.1 bench:sweep:ts C:\Users\G\Desktop\Builds\sigilnet\packages\QWormhole
+> node scripts/run-bench-sweep-ts.js
+
+
+=== sweep: rate=16MB/s cap=96KB flushMs=1 ===
+(node:13036) [DEP0190] DeprecationWarning: Passing args to a child process with shell option true can lead to security vulnerabilities, as the arguments are not escaped, only concatenated.
+(Use `node --trace-deprecation ...` to show where the warning was created)
+
+> @gsknnft/qwormhole@0.2.1 bench C:\Users\G\Desktop\Builds\sigilnet\packages\QWormhole
+> tsx scripts/bench.ts "--" "--mode=ts" "--diagnostics"
+
+✅ Index files bootstrapped.
+[dotenv@17.2.3] injecting env (0) from .env -- tip: ⚙️  suppress all logs with { quiet: true }
+[bench] ts-server+ts config {"effectiveRateBytesPerSec":16777216,"flushCapBytes":92897,"flushCapBuffers":64,"flushIntervalMs":1,"macroBatchTargetBytes":131072,"yieldEvery":0,"flowFastPath":false,"adaptiveMode":"guarded","framing":"length-prefixed","frameHeaderBytes":4,"payloadBytes":{"count":1,"minBytes":1024,"maxBytes":1024,"avgBytes":1024,"types":["buffer"]}}
+[2026/01/13 16:00:53:8847] N: qwormhole-native-server: lws_create_context: LWS: 4.4.99-fbd28eb, NET CLI SRV H1 H2 WS SS-JSON-POL ConMon IPv6-absent
+[2026/01/13 16:00:53:8888] N:  Vhost 'qwormhole-native-server' using non-TLS mode
+[2026/01/13 16:00:53:8888] N: [vh|1|qwormhole-native-server|127.0.0.1|127.0.0.1|0]: lws_socket_bind: source ads 127.0.0.1
+[bench] native-server(lws)+ts config {"effectiveRateBytesPerSec":16777216,"flushCapBytes":131072,"flushCapBuffers":70,"flushIntervalMs":1,"macroBatchTargetBytes":131072,"yieldEvery":0,"flowFastPath":false,"adaptiveMode":"aggressive","framing":"length-prefixed","frameHeaderBytes":4,"payloadBytes":{"count":1,"minBytes":1024,"maxBytes":1024,"avgBytes":1024,"types":["buffer"]}}
+[bench] jsonl appended to data\bench-ts-sweep-1768338050648.jsonl
+[
+  {
+    "id": "ts-server+ts",
+    "serverMode": "ts",
+    "clientMode": "ts",
+    "durationMs": 805.7962,
+    "messagesReceived": 10000,
+    "bytesReceived": 10240000,
+    "framing": "length-prefixed",
+    "msgsPerSec": 12410.085825671555,
+    "mbPerSec": 12.119224439132378,
+    "benchConfig": {
+      "macroBatchTargetBytes": 131072,
+      "flowFastPath": false,
+      "payload": {
+        "count": 1,
+        "minBytes": 1024,
+        "maxBytes": 1024,
+        "avgBytes": 1024,
+        "types": [
+          "buffer"
+        ],
+        "framing": "length-prefixed",
+        "frameHeaderBytes": 4
+      },
+      "effectiveRateBytesPerSec": 16777216,
+      "flushCapBytes": 92897,
+      "flushCapBuffers": 64,
+      "flushIntervalMs": 1,
+      "adaptiveMode": "guarded"
+    },
+    "diagnostics": {
+      "gc": {
+        "count": 26,
+        "durationMs": 51.53699970245361,
+        "byKind": {
+          "incremental": 6,
+          "major": 6,
+          "minor": 14
+        }
+      },
+      "eventLoop": {
+        "utilization": 0.66982030296229,
+        "activeMs": 0.6383638000072478,
+        "idleMs": 0.31467359999999994
+      },
+      "eventLoopDelay": {
+        "minMs": 19.447808,
+        "maxMs": 469.237759,
+        "meanMs": 53.23257976470588,
+        "stdMs": 104.06512130394798,
+        "p50Ms": 28.770303,
+        "p99Ms": 469.237759
+      },
+      "backpressure": {
+        "events": 0,
+        "drainEvents": 0,
+        "maxQueuedBytes": 0
+      },
+      "batching": {
+        "flushes": 639,
+        "avgBuffersPerFlush": 46.00782472613459,
+        "avgBytesPerFlush": 47296.04381846635,
+        "maxBuffers": 64,
+        "maxBytes": 65792
+      },
+      "clientFlow": {
+        "currentSliceSize": 64,
+        "externalSliceSize": 64,
+        "effectiveRateBytesPerSec": 16777216,
+        "totalFlushes": 149,
+        "totalBytes": 7320388,
+        "backpressureEvents": 1247,
+        "availableTokens": 234881.024,
+        "policy": {
+          "coherence": 0.9,
+          "entropyVelocity": 0.1,
+          "preferredBatchSize": 64,
+          "peerIsNative": false
+        },
+        "sliceHistory": [
+          {
+            "timestamp": 1768338052935,
+            "size": 32
+          },
+          {
+            "timestamp": 1768338052950,
+            "size": 64
+          }
+        ],
+        "adaptive": {
+          "mode": "guarded",
+          "sliceSize": 64,
+          "flushIntervalAvgMs": 0.2013454133467652,
+          "bytesPerFlushAvg": 41568.12092372496,
+          "eluIdleRatioAvg": 0.845930938194536,
+          "gcPauseMaxMs": 1.4714007619786267
+        },
+        "negentropic": {
+          "histogram": {
+            "buffer": 512
+          },
+          "entropy": 0,
+          "negentropy": 0,
+          "neganticIndex": 0,
+          "entropyVelocity": 0,
+          "coherence": "Low",
+          "velocity": "Slow",
+          "sampleCount": 512
+        }
+      },
+      "clientBatch": {
+        "totalFrames": 10000,
+        "totalFlushes": 639,
+        "totalBytes": 30222172,
+        "pendingFrames": 0,
+        "pendingBytes": 0,
+        "maxPendingFrames": 384,
+        "maxPendingBytes": 394752,
+        "maxInBufferBytes": 0,
+        "ringSlots": 128,
+        "ringInUse": 0,
+        "ringMaxInUse": 128,
+        "ringResizeCount": 0,
+        "ringResizeBytes": 0,
+        "overflowAllocations": 6799,
+        "overflowAllocatedBytes": 6989372,
+        "copyAllocations": 19399,
+        "copyAllocatedBytes": 19942172,
+        "lastFlushTimestamp": 1768338053735,
+        "backpressureEvents": 1247,
+        "lastBackpressureBytes": 15420,
+        "lastBackpressureTimestamp": 1768338053735
+      },
+      "clientQueue": {
+        "length": 0,
+        "maxLength": 9999,
+        "totalEnqueued": 10000,
+        "totalDequeued": 10000,
+        "bytes": 0,
+        "maxBytes": 10238976,
+        "bytesEnqueued": 10240000,
+        "bytesDequeued": 10240000
+      },
+      "sendBlocks": {
+        "blockSize": 1000,
+        "samples": 10,
+        "avgMs": 45.926199999999994,
+        "minMs": 8.983600000000024,
+        "maxMs": 83.18499999999995
+      },
+      "heap": {
+        "start": {
+          "rss": 324538368,
+          "heapTotal": 242659328,
+          "heapUsed": 134728768,
+          "external": 12367103,
+          "arrayBuffers": 1220409
+        },
+        "end": {
+          "rss": 360886272,
+          "heapTotal": 252358656,
+          "heapUsed": 117001136,
+          "external": 27735851,
+          "arrayBuffers": 16589117
+        },
+        "peakHeapUsed": 188739264,
+        "peakRss": 343810048
+      },
+      "coherenceTrace": [
+        {
+          "tMs": 8.982500000000073,
+          "mode": "MACRO_BATCH",
+          "margin": 0.9,
+          "velocity": 6.377500000000055,
+          "reserve": 1,
+          "batchTarget": 131072,
+          "flushIntervalMs": 1,
+          "maxBufferedBytes": 524288,
+          "reason": "High margin, positive/flat velocity, high reserve, no backpressure/jitter"
+        },
+        {
+          "tMs": 28.720600000000104,
+          "mode": "MACRO_BATCH",
+          "margin": 0.9,
+          "velocity": 6.377500000000055,
+          "reserve": 1,
+          "batchTarget": 131072,
+          "flushIntervalMs": 1,
+          "maxBufferedBytes": 524288,
+          "reason": "High margin, positive/flat velocity, high reserve, no backpressure/jitter"
+        },
+        {
+          "tMs": 61.23840000000018,
+          "mode": "MACRO_BATCH",
+          "margin": 0.9,
+          "velocity": 6.377500000000055,
+          "reserve": 1,
+          "batchTarget": 131072,
+          "flushIntervalMs": 1,
+          "maxBufferedBytes": 524288,
+          "reason": "High margin, positive/flat velocity, high reserve, no backpressure/jitter"
+        },
+        {
+          "tMs": 93.43100000000004,
+          "mode": "MACRO_BATCH",
+          "margin": 0.9,
+          "velocity": 6.377500000000055,
+          "reserve": 1,
+          "batchTarget": 131072,
+          "flushIntervalMs": 1,
+          "maxBufferedBytes": 524288,
+          "reason": "High margin, positive/flat velocity, high reserve, no backpressure/jitter"
+        },
+        {
+          "tMs": 134.56060000000002,
+          "mode": "MACRO_BATCH",
+          "margin": 0.9,
+          "velocity": 6.377500000000055,
+          "reserve": 1,
+          "batchTarget": 131072,
+          "flushIntervalMs": 1,
+          "maxBufferedBytes": 524288,
+          "reason": "High margin, positive/flat velocity, high reserve, no backpressure/jitter"
+        },
+        {
+          "tMs": 181.3302000000001,
+          "mode": "MACRO_BATCH",
+          "margin": 0.9,
+          "velocity": 6.377500000000055,
+          "reserve": 1,
+          "batchTarget": 131072,
+          "flushIntervalMs": 1,
+          "maxBufferedBytes": 524288,
+          "reason": "High margin, positive/flat velocity, high reserve, no backpressure/jitter"
+        },
+        {
+          "tMs": 236.9775000000002,
+          "mode": "MACRO_BATCH",
+          "margin": 0.9,
+          "velocity": 6.377500000000055,
+          "reserve": 1,
+          "batchTarget": 131072,
+          "flushIntervalMs": 1,
+          "maxBufferedBytes": 524288,
+          "reason": "High margin, positive/flat velocity, high reserve, no backpressure/jitter"
+        },
+        {
+          "tMs": 302.1862000000001,
+          "mode": "MACRO_BATCH",
+          "margin": 0.9,
+          "velocity": 6.377500000000055,
+          "reserve": 1,
+          "batchTarget": 131072,
+          "flushIntervalMs": 1,
+          "maxBufferedBytes": 524288,
+          "reason": "High margin, positive/flat velocity, high reserve, no backpressure/jitter"
+        },
+        {
+          "tMs": 376.07590000000005,
+          "mode": "MACRO_BATCH",
+          "margin": 0.9,
+          "velocity": 6.377500000000055,
+          "reserve": 1,
+          "batchTarget": 131072,
+          "flushIntervalMs": 1,
+          "maxBufferedBytes": 524288,
+          "reason": "High margin, positive/flat velocity, high reserve, no backpressure/jitter"
+        },
+        {
+          "tMs": 459.2609,
+          "mode": "MACRO_BATCH",
+          "margin": 0.9,
+          "velocity": 6.377500000000055,
+          "reserve": 1,
+          "batchTarget": 131072,
+          "flushIntervalMs": 1,
+          "maxBufferedBytes": 524288,
+          "reason": "High margin, positive/flat velocity, high reserve, no backpressure/jitter"
+        }
+      ]
+    }
+  },
+  {
+    "id": "native-server(lws)+ts",
+    "serverMode": "native-lws",
+    "clientMode": "ts",
+    "preferredServerBackend": "lws",
+    "durationMs": 635.7102,
+    "messagesReceived": 10000,
+    "bytesReceived": 10240000,
+    "framing": "length-prefixed",
+    "msgsPerSec": 15730.438177647613,
+    "mbPerSec": 15.361756032858997,
+    "benchConfig": {
+      "macroBatchTargetBytes": 131072,
+      "flowFastPath": false,
+      "payload": {
+        "count": 1,
+        "minBytes": 1024,
+        "maxBytes": 1024,
+        "avgBytes": 1024,
+        "types": [
+          "buffer"
+        ],
+        "framing": "length-prefixed",
+        "frameHeaderBytes": 4
+      },
+      "effectiveRateBytesPerSec": 16777216,
+      "flushCapBytes": 131072,
+      "flushCapBuffers": 70,
+      "flushIntervalMs": 1,
+      "adaptiveMode": "aggressive"
+    },
+    "diagnostics": {
+      "gc": {
+        "count": 13,
+        "durationMs": 13.558699607849121,
+        "byKind": {
+          "incremental": 3,
+          "major": 3,
+          "minor": 7
+        }
+      },
+      "eventLoop": {
+        "utilization": 0.8008997809852322,
+        "activeMs": 0.6079953000354767,
+        "idleMs": 0.15114500000000003
+      },
+      "eventLoopDelay": {
+        "minMs": 19.185664,
+        "maxMs": 31.653887,
+        "meanMs": 26.99264,
+        "stdMs": 3.7329785381186427,
+        "p50Ms": 27.557887,
+        "p99Ms": 31.653887
+      },
+      "backpressure": {
+        "events": 0,
+        "drainEvents": 0,
+        "maxQueuedBytes": 0
+      },
+      "batching": {
+        "flushes": 626,
+        "avgBuffersPerFlush": 68.18690095846645,
+        "avgBytesPerFlush": 70096.13418530351,
+        "maxBuffers": 72,
+        "maxBytes": 74016
+      },
+      "clientFlow": {
+        "currentSliceSize": 64,
+        "externalSliceSize": 64,
+        "effectiveRateBytesPerSec": 16777216,
+        "totalFlushes": 63,
+        "totalBytes": 4450212,
+        "backpressureEvents": 1232,
+        "availableTokens": 83886.08,
+        "policy": {
+          "coherence": 0.9,
+          "entropyVelocity": 0.1,
+          "preferredBatchSize": 64,
+          "peerIsNative": true
+        },
+        "sliceHistory": [
+          {
+            "timestamp": 1768338053883,
+            "size": 32
+          },
+          {
+            "timestamp": 1768338053896,
+            "size": 64
+          }
+        ],
+        "adaptive": {
+          "mode": "aggressive",
+          "sliceSize": 64,
+          "flushIntervalAvgMs": 0.6088898082705211,
+          "bytesPerFlushAvg": 55847.04509608676,
+          "eluIdleRatioAvg": 0.863966265471723,
+          "gcPauseMaxMs": 1.3153700497210004
+        },
+        "negentropic": {
+          "histogram": {
+            "buffer": 512
+          },
+          "entropy": 0,
+          "negentropy": 0,
+          "neganticIndex": 0,
+          "entropyVelocity": 0,
+          "coherence": "Low",
+          "velocity": "Slow",
+          "sampleCount": 512
+        }
+      },
+      "clientBatch": {
+        "totalFrames": 10000,
+        "totalFlushes": 626,
+        "totalBytes": 43880180,
+        "pendingFrames": 0,
+        "pendingBytes": 0,
+        "maxPendingFrames": 576,
+        "maxPendingBytes": 592128,
+        "maxInBufferBytes": 0,
+        "ringSlots": 128,
+        "ringInUse": 0,
+        "ringMaxInUse": 128,
+        "ringResizeCount": 0,
+        "ringResizeBytes": 0,
+        "overflowAllocations": 7823,
+        "overflowAllocatedBytes": 8042044,
+        "copyAllocations": 32685,
+        "copyAllocatedBytes": 33600180,
+        "lastFlushTimestamp": 1768338054520,
+        "backpressureEvents": 1232,
+        "lastBackpressureBytes": 15420,
+        "lastBackpressureTimestamp": 1768338054520
+      },
+      "clientQueue": {
+        "length": 0,
+        "maxLength": 9999,
+        "totalEnqueued": 10000,
+        "totalDequeued": 10000,
+        "bytes": 0,
+        "maxBytes": 10238976,
+        "bytesEnqueued": 10240000,
+        "bytesDequeued": 10240000
+      },
+      "sendBlocks": {
+        "blockSize": 1000,
+        "samples": 10,
+        "avgMs": 45.90486999999998,
+        "minMs": 10.499199999999746,
+        "maxMs": 87.73340000000007
+      },
+      "heap": {
+        "start": {
+          "rss": 354521088,
+          "heapTotal": 252358656,
+          "heapUsed": 108084496,
+          "external": 11697711,
+          "arrayBuffers": 550977
+        },
+        "end": {
+          "rss": 374833152,
+          "heapTotal": 253145088,
+          "heapUsed": 113471400,
+          "external": 31457556,
+          "arrayBuffers": 20316157
+        },
+        "peakHeapUsed": 172532136,
+        "peakRss": 355344384
+      },
+      "coherenceTrace": [
+        {
+          "tMs": 10.495699999999943,
+          "mode": "MACRO_BATCH",
+          "margin": 0.9,
+          "velocity": 2.639099999999871,
+          "reserve": 1,
+          "batchTarget": 131072,
+          "flushIntervalMs": 1,
+          "maxBufferedBytes": 524288,
+          "reason": "High margin, positive/flat velocity, high reserve, no backpressure/jitter"
+        },
+        {
+          "tMs": 27.407000000000153,
+          "mode": "MACRO_BATCH",
+          "margin": 0.9,
+          "velocity": 2.639099999999871,
+          "reserve": 1,
+          "batchTarget": 131072,
+          "flushIntervalMs": 1,
+          "maxBufferedBytes": 524288,
+          "reason": "High margin, positive/flat velocity, high reserve, no backpressure/jitter"
+        },
+        {
+          "tMs": 53.33359999999993,
+          "mode": "MACRO_BATCH",
+          "margin": 0.9,
+          "velocity": 2.639099999999871,
+          "reserve": 1,
+          "batchTarget": 131072,
+          "flushIntervalMs": 1,
+          "maxBufferedBytes": 524288,
+          "reason": "High margin, positive/flat velocity, high reserve, no backpressure/jitter"
+        },
+        {
+          "tMs": 87.70510000000013,
+          "mode": "MACRO_BATCH",
+          "margin": 0.9,
+          "velocity": 2.639099999999871,
+          "reserve": 1,
+          "batchTarget": 131072,
+          "flushIntervalMs": 1,
+          "maxBufferedBytes": 524288,
+          "reason": "High margin, positive/flat velocity, high reserve, no backpressure/jitter"
+        },
+        {
+          "tMs": 127.13619999999992,
+          "mode": "MACRO_BATCH",
+          "margin": 0.9,
+          "velocity": 2.639099999999871,
+          "reserve": 1,
+          "batchTarget": 131072,
+          "flushIntervalMs": 1,
+          "maxBufferedBytes": 524288,
+          "reason": "High margin, positive/flat velocity, high reserve, no backpressure/jitter"
+        },
+        {
+          "tMs": 174.78859999999986,
+          "mode": "MACRO_BATCH",
+          "margin": 0.9,
+          "velocity": 2.639099999999871,
+          "reserve": 1,
+          "batchTarget": 131072,
+          "flushIntervalMs": 1,
+          "maxBufferedBytes": 524288,
+          "reason": "High margin, positive/flat velocity, high reserve, no backpressure/jitter"
+        },
+        {
+          "tMs": 231.61419999999998,
+          "mode": "MACRO_BATCH",
+          "margin": 0.9,
+          "velocity": 2.639099999999871,
+          "reserve": 1,
+          "batchTarget": 131072,
+          "flushIntervalMs": 1,
+          "maxBufferedBytes": 524288,
+          "reason": "High margin, positive/flat velocity, high reserve, no backpressure/jitter"
+        },
+        {
+          "tMs": 296.25340000000006,
+          "mode": "MACRO_BATCH",
+          "margin": 0.9,
+          "velocity": 2.639099999999871,
+          "reserve": 1,
+          "batchTarget": 131072,
+          "flushIntervalMs": 1,
+          "maxBufferedBytes": 524288,
+          "reason": "High margin, positive/flat velocity, high reserve, no backpressure/jitter"
+        },
+        {
+          "tMs": 371.31179999999995,
+          "mode": "MACRO_BATCH",
+          "margin": 0.9,
+          "velocity": 2.639099999999871,
+          "reserve": 1,
+          "batchTarget": 131072,
+          "flushIntervalMs": 1,
+          "maxBufferedBytes": 524288,
+          "reason": "High margin, positive/flat velocity, high reserve, no backpressure/jitter"
+        },
+        {
+          "tMs": 459.0452,
+          "mode": "MACRO_BATCH",
+          "margin": 0.9,
+          "velocity": 2.639099999999871,
+          "reserve": 1,
+          "batchTarget": 131072,
+          "flushIntervalMs": 1,
+          "maxBufferedBytes": 524288,
+          "reason": "High margin, positive/flat velocity, high reserve, no backpressure/jitter"
+        }
+      ]
+    }
+  }
+]
+
+Scenario                    Server         Client         Duration (ms)   Messages    Bytes       Msg/s       MB/s        Framing     Status
+------------------------------------------------------------------------------------------------------------------------------------------------
+ts-server+ts                ts             ts             805.80          10000       10240000    12410       12.12       length-prefixedok
+native-server(lws)+ts       native-lws     ts             635.71          10000       10240000    15730       15.36       length-prefixedok
+
+Scenario                    GC          GC ms       ELU%      BP          Drain     MaxQueued     Flushes   AvgBuf    AvgKB     MaxBuf    MaxKB
+----------------------------------------------------------------------------------------------------------------------------------------------------
+ts-server+ts                26          51.54       66.98     0           0         0             639       46.01     46.19     64        64.25
+native-server(lws)+ts       13          13.56       80.09     0           0         0             626       68.19     68.45     72        72.28
+
+=== sweep: rate=32MB/s cap=96KB flushMs=1 ===
+
+> @gsknnft/qwormhole@0.2.1 bench C:\Users\G\Desktop\Builds\sigilnet\packages\QWormhole
+> tsx scripts/bench.ts "--" "--mode=ts" "--diagnostics"
+
+✅ Index files bootstrapped.
+[dotenv@17.2.3] injecting env (0) from .env -- tip: 🗂️ backup and recover secrets: https://dotenvx.com/ops
+[bench] ts-server+ts config {"effectiveRateBytesPerSec":33554432,"flushCapBytes":92897,"flushCapBuffers":64,"flushIntervalMs":1,"macroBatchTargetBytes":131072,"yieldEvery":0,"flowFastPath":false,"adaptiveMode":"guarded","framing":"length-prefixed","frameHeaderBytes":4,"payloadBytes":{"count":1,"minBytes":1024,"maxBytes":1024,"avgBytes":1024,"types":["buffer"]}}
+[2026/01/13 16:00:57:7552] N: qwormhole-native-server: lws_create_context: LWS: 4.4.99-fbd28eb, NET CLI SRV H1 H2 WS SS-JSON-POL ConMon IPv6-absent
+[2026/01/13 16:00:57:7598] N:  Vhost 'qwormhole-native-server' using non-TLS mode
+[2026/01/13 16:00:57:7598] N: [vh|1|qwormhole-native-server|127.0.0.1|127.0.0.1|0]: lws_socket_bind: source ads 127.0.0.1
+[bench] native-server(lws)+ts config {"effectiveRateBytesPerSec":33554432,"flushCapBytes":131072,"flushCapBuffers":70,"flushIntervalMs":1,"macroBatchTargetBytes":131072,"yieldEvery":0,"flowFastPath":false,"adaptiveMode":"aggressive","framing":"length-prefixed","frameHeaderBytes":4,"payloadBytes":{"count":1,"minBytes":1024,"maxBytes":1024,"avgBytes":1024,"types":["buffer"]}}
+[bench] jsonl appended to data\bench-ts-sweep-1768338050648.jsonl
+[
+  {
+    "id": "ts-server+ts",
+    "serverMode": "ts",
+    "clientMode": "ts",
+    "durationMs": 663.9413,
+    "messagesReceived": 10000,
+    "bytesReceived": 10240000,
+    "framing": "length-prefixed",
+    "msgsPerSec": 15061.57246130042,
+    "mbPerSec": 14.708566856738692,
+    "benchConfig": {
+      "macroBatchTargetBytes": 131072,
+      "flowFastPath": false,
+      "payload": {
+        "count": 1,
+        "minBytes": 1024,
+        "maxBytes": 1024,
+        "avgBytes": 1024,
+        "types": [
+          "buffer"
+        ],
+        "framing": "length-prefixed",
+        "frameHeaderBytes": 4
+      },
+      "effectiveRateBytesPerSec": 33554432,
+      "flushCapBytes": 92897,
+      "flushCapBuffers": 64,
+      "flushIntervalMs": 1,
+      "adaptiveMode": "guarded"
+    },
+    "diagnostics": {
+      "gc": {
+        "count": 22,
+        "durationMs": 46.90089988708496,
+        "byKind": {
+          "incremental": 4,
+          "major": 4,
+          "minor": 14
+        }
+      },
+      "eventLoop": {
+        "utilization": 0.7806686014455178,
+        "activeMs": 0.6327045000167846,
+        "idleMs": 0.1777604
+      },
+      "eventLoopDelay": {
+        "minMs": 19.054592,
+        "maxMs": 533.725183,
+        "meanMs": 77.89117440000001,
+        "stdMs": 152.00941599530168,
+        "p50Ms": 30.408703,
+        "p99Ms": 533.725183
+      },
+      "backpressure": {
+        "events": 0,
+        "drainEvents": 0,
+        "maxQueuedBytes": 0
+      },
+      "batching": {
+        "flushes": 645,
+        "avgBuffersPerFlush": 45.951937984496126,
+        "avgBytesPerFlush": 47238.592248062014,
+        "maxBuffers": 64,
+        "maxBytes": 65792
+      },
+      "clientFlow": {
+        "currentSliceSize": 64,
+        "externalSliceSize": 64,
+        "effectiveRateBytesPerSec": 33554432,
+        "totalFlushes": 138,
+        "totalBytes": 6777604,
+        "backpressureEvents": 1259,
+        "availableTokens": 134217.728,
+        "policy": {
+          "coherence": 0.9,
+          "entropyVelocity": 0.1,
+          "preferredBatchSize": 64,
+          "peerIsNative": false
+        },
+        "sliceHistory": [
+          {
+            "timestamp": 1768338056957,
+            "size": 32
+          },
+          {
+            "timestamp": 1768338056987,
+            "size": 64
+          }
+        ],
+        "adaptive": {
+          "mode": "guarded",
+          "sliceSize": 64,
+          "flushIntervalAvgMs": 0.4071922267223397,
+          "bytesPerFlushAvg": 35965.24844877621,
+          "eluIdleRatioAvg": 0.7642562052723395,
+          "gcPauseMaxMs": 1.353096960067749
+        },
+        "negentropic": {
+          "histogram": {
+            "buffer": 512
+          },
+          "entropy": 0,
+          "negentropy": 0,
+          "neganticIndex": 0,
+          "entropyVelocity": 0,
+          "coherence": "Low",
+          "velocity": "Slow",
+          "sampleCount": 512
+        }
+      },
+      "clientBatch": {
+        "totalFrames": 10000,
+        "totalFlushes": 645,
+        "totalBytes": 30468892,
+        "pendingFrames": 0,
+        "pendingBytes": 0,
+        "maxPendingFrames": 384,
+        "maxPendingBytes": 394752,
+        "maxInBufferBytes": 0,
+        "ringSlots": 128,
+        "ringInUse": 0,
+        "ringMaxInUse": 128,
+        "ringResizeCount": 0,
+        "ringResizeBytes": 0,
+        "overflowAllocations": 6700,
+        "overflowAllocatedBytes": 6887600,
+        "copyAllocations": 19639,
+        "copyAllocatedBytes": 20188892,
+        "lastFlushTimestamp": 1768338057622,
+        "backpressureEvents": 1259,
+        "lastBackpressureBytes": 3084,
+        "lastBackpressureTimestamp": 1768338057622
+      },
+      "clientQueue": {
+        "length": 0,
+        "maxLength": 9999,
+        "totalEnqueued": 10000,
+        "totalDequeued": 10000,
+        "bytes": 0,
+        "maxBytes": 10238976,
+        "bytesEnqueued": 10240000,
+        "bytesDequeued": 10240000
+      },
+      "sendBlocks": {
+        "blockSize": 1000,
+        "samples": 10,
+        "avgMs": 52.36800000000001,
+        "minMs": 18.80399999999986,
+        "maxMs": 94.94799999999987
+      },
+      "heap": {
+        "start": {
+          "rss": 324984832,
+          "heapTotal": 242659328,
+          "heapUsed": 134822024,
+          "external": 12367103,
+          "arrayBuffers": 1220409
+        },
+        "end": {
+          "rss": 390918144,
+          "heapTotal": 256028672,
+          "heapUsed": 141034120,
+          "external": 63261751,
+          "arrayBuffers": 52115017
+        },
+        "peakHeapUsed": 176336304,
+        "peakRss": 338685952
+      },
+      "coherenceTrace": [
+        {
+          "tMs": 24.23090000000002,
+          "mode": "MACRO_BATCH",
+          "margin": 0.9,
+          "velocity": 7.79320000000007,
+          "reserve": 1,
+          "batchTarget": 131072,
+          "flushIntervalMs": 1,
+          "maxBufferedBytes": 524288,
+          "reason": "High margin, positive/flat velocity, high reserve, no backpressure/jitter"
+        },
+        {
+          "tMs": 43.03489999999988,
+          "mode": "MACRO_BATCH",
+          "margin": 0.9,
+          "velocity": 7.79320000000007,
+          "reserve": 1,
+          "batchTarget": 131072,
+          "flushIntervalMs": 1,
+          "maxBufferedBytes": 524288,
+          "reason": "High margin, positive/flat velocity, high reserve, no backpressure/jitter"
+        },
+        {
+          "tMs": 70.8098,
+          "mode": "MACRO_BATCH",
+          "margin": 0.9,
+          "velocity": 7.79320000000007,
+          "reserve": 1,
+          "batchTarget": 131072,
+          "flushIntervalMs": 1,
+          "maxBufferedBytes": 524288,
+          "reason": "High margin, positive/flat velocity, high reserve, no backpressure/jitter"
+        },
+        {
+          "tMs": 104.89839999999981,
+          "mode": "MACRO_BATCH",
+          "margin": 0.9,
+          "velocity": 7.79320000000007,
+          "reserve": 1,
+          "batchTarget": 131072,
+          "flushIntervalMs": 1,
+          "maxBufferedBytes": 524288,
+          "reason": "High margin, positive/flat velocity, high reserve, no backpressure/jitter"
+        },
+        {
+          "tMs": 146.50900000000001,
+          "mode": "MACRO_BATCH",
+          "margin": 0.9,
+          "velocity": 7.79320000000007,
+          "reserve": 1,
+          "batchTarget": 131072,
+          "flushIntervalMs": 1,
+          "maxBufferedBytes": 524288,
+          "reason": "High margin, positive/flat velocity, high reserve, no backpressure/jitter"
+        },
+        {
+          "tMs": 203.2340999999999,
+          "mode": "MACRO_BATCH",
+          "margin": 0.9,
+          "velocity": 7.79320000000007,
+          "reserve": 1,
+          "batchTarget": 131072,
+          "flushIntervalMs": 1,
+          "maxBufferedBytes": 524288,
+          "reason": "High margin, positive/flat velocity, high reserve, no backpressure/jitter"
+        },
+        {
+          "tMs": 268.42359999999985,
+          "mode": "MACRO_BATCH",
+          "margin": 0.9,
+          "velocity": 7.79320000000007,
+          "reserve": 1,
+          "batchTarget": 131072,
+          "flushIntervalMs": 1,
+          "maxBufferedBytes": 524288,
+          "reason": "High margin, positive/flat velocity, high reserve, no backpressure/jitter"
+        },
+        {
+          "tMs": 341.83089999999993,
+          "mode": "MACRO_BATCH",
+          "margin": 0.9,
+          "velocity": 7.79320000000007,
+          "reserve": 1,
+          "batchTarget": 131072,
+          "flushIntervalMs": 1,
+          "maxBufferedBytes": 524288,
+          "reason": "High margin, positive/flat velocity, high reserve, no backpressure/jitter"
+        },
+        {
+          "tMs": 428.7309,
+          "mode": "MACRO_BATCH",
+          "margin": 0.9,
+          "velocity": 7.79320000000007,
+          "reserve": 1,
+          "batchTarget": 131072,
+          "flushIntervalMs": 1,
+          "maxBufferedBytes": 524288,
+          "reason": "High margin, positive/flat velocity, high reserve, no backpressure/jitter"
+        },
+        {
+          "tMs": 523.6788999999999,
+          "mode": "MACRO_BATCH",
+          "margin": 0.9,
+          "velocity": 7.79320000000007,
+          "reserve": 1,
+          "batchTarget": 131072,
+          "flushIntervalMs": 1,
+          "maxBufferedBytes": 524288,
+          "reason": "High margin, positive/flat velocity, high reserve, no backpressure/jitter"
+        }
+      ]
+    }
+  },
+  {
+    "id": "native-server(lws)+ts",
+    "serverMode": "native-lws",
+    "clientMode": "ts",
+    "preferredServerBackend": "lws",
+    "durationMs": 629.9930999999997,
+    "messagesReceived": 10000,
+    "bytesReceived": 10240000,
+    "framing": "length-prefixed",
+    "msgsPerSec": 15873.18972223665,
+    "mbPerSec": 15.501161838121728,
+    "benchConfig": {
+      "macroBatchTargetBytes": 131072,
+      "flowFastPath": false,
+      "payload": {
+        "count": 1,
+        "minBytes": 1024,
+        "maxBytes": 1024,
+        "avgBytes": 1024,
+        "types": [
+          "buffer"
+        ],
+        "framing": "length-prefixed",
+        "frameHeaderBytes": 4
+      },
+      "effectiveRateBytesPerSec": 33554432,
+      "flushCapBytes": 131072,
+      "flushCapBuffers": 70,
+      "flushIntervalMs": 1,
+      "adaptiveMode": "aggressive"
+    },
+    "diagnostics": {
+      "gc": {
+        "count": 11,
+        "durationMs": 11.309300184249878,
+        "byKind": {
+          "incremental": 2,
+          "major": 2,
+          "minor": 7
+        }
+      },
+      "eventLoop": {
+        "utilization": 0.8329577034339648,
+        "activeMs": 0.6362364999660495,
+        "idleMs": 0.1275916
+      },
+      "eventLoopDelay": {
+        "minMs": 21.21728,
+        "maxMs": 42.401791,
+        "meanMs": 30.440301714285713,
+        "stdMs": 6.801537269104426,
+        "p50Ms": 31.703039,
+        "p99Ms": 42.401791
+      },
+      "backpressure": {
+        "events": 0,
+        "drainEvents": 0,
+        "maxQueuedBytes": 0
+      },
+      "batching": {
+        "flushes": 626,
+        "avgBuffersPerFlush": 68.18690095846645,
+        "avgBytesPerFlush": 70096.13418530351,
+        "maxBuffers": 72,
+        "maxBytes": 74016
+      },
+      "clientFlow": {
+        "currentSliceSize": 64,
+        "externalSliceSize": 64,
+        "effectiveRateBytesPerSec": 33554432,
+        "totalFlushes": 85,
+        "totalBytes": 6078564,
+        "backpressureEvents": 1232,
+        "availableTokens": 201326.592,
+        "policy": {
+          "coherence": 0.9,
+          "entropyVelocity": 0.1,
+          "preferredBatchSize": 64,
+          "peerIsNative": true
+        },
+        "sliceHistory": [
+          {
+            "timestamp": 1768338057760,
+            "size": 32
+          },
+          {
+            "timestamp": 1768338057773,
+            "size": 64
+          }
+        ],
+        "adaptive": {
+          "mode": "aggressive",
+          "sliceSize": 64,
+          "flushIntervalAvgMs": 0.298044114851877,
+          "bytesPerFlushAvg": 55848.854316417724,
+          "eluIdleRatioAvg": 0.8224416761026064,
+          "gcPauseMaxMs": 1.4858350870493784
+        },
+        "negentropic": {
+          "histogram": {
+            "buffer": 512
+          },
+          "entropy": 0,
+          "negentropy": 0,
+          "neganticIndex": 0,
+          "entropyVelocity": 0,
+          "coherence": "Low",
+          "velocity": "Slow",
+          "sampleCount": 512
+        }
+      },
+      "clientBatch": {
+        "totalFrames": 10000,
+        "totalFlushes": 626,
+        "totalBytes": 43880180,
+        "pendingFrames": 0,
+        "pendingBytes": 0,
+        "maxPendingFrames": 576,
+        "maxPendingBytes": 592128,
+        "maxInBufferBytes": 0,
+        "ringSlots": 128,
+        "ringInUse": 0,
+        "ringMaxInUse": 128,
+        "ringResizeCount": 0,
+        "ringResizeBytes": 0,
+        "overflowAllocations": 7823,
+        "overflowAllocatedBytes": 8042044,
+        "copyAllocations": 32685,
+        "copyAllocatedBytes": 33600180,
+        "lastFlushTimestamp": 1768338058388,
+        "backpressureEvents": 1232,
+        "lastBackpressureBytes": 15420,
+        "lastBackpressureTimestamp": 1768338058388
+      },
+      "clientQueue": {
+        "length": 0,
+        "maxLength": 9999,
+        "totalEnqueued": 10000,
+        "totalDequeued": 10000,
+        "bytes": 0,
+        "maxBytes": 10238976,
+        "bytesEnqueued": 10240000,
+        "bytesDequeued": 10240000
+      },
+      "sendBlocks": {
+        "blockSize": 1000,
+        "samples": 10,
+        "avgMs": 49.40906999999997,
+        "minMs": 10.846199999999953,
+        "maxMs": 94.41309999999976
+      },
+      "heap": {
+        "start": {
+          "rss": 354971648,
+          "heapTotal": 254455808,
+          "heapUsed": 111554456,
+          "external": 18155311,
+          "arrayBuffers": 7008577
+        },
+        "end": {
+          "rss": 370003968,
+          "heapTotal": 253931520,
+          "heapUsed": 117839936,
+          "external": 31462891,
+          "arrayBuffers": 20316157
+        },
+        "peakHeapUsed": 176125704,
+        "peakRss": 355610624
+      },
+      "coherenceTrace": [
+        {
+          "tMs": 10.845499999999902,
+          "mode": "MACRO_BATCH",
+          "margin": 0.9,
+          "velocity": 1.2937999999999192,
+          "reserve": 1,
+          "batchTarget": 131072,
+          "flushIntervalMs": 1,
+          "maxBufferedBytes": 524288,
+          "reason": "High margin, positive/flat velocity, high reserve, no backpressure/jitter"
+        },
+        {
+          "tMs": 28.485299999999825,
+          "mode": "MACRO_BATCH",
+          "margin": 0.9,
+          "velocity": 1.2937999999999192,
+          "reserve": 1,
+          "batchTarget": 131072,
+          "flushIntervalMs": 1,
+          "maxBufferedBytes": 524288,
+          "reason": "High margin, positive/flat velocity, high reserve, no backpressure/jitter"
+        },
+        {
+          "tMs": 53.76789999999983,
+          "mode": "MACRO_BATCH",
+          "margin": 0.9,
+          "velocity": 1.2937999999999192,
+          "reserve": 1,
+          "batchTarget": 131072,
+          "flushIntervalMs": 1,
+          "maxBufferedBytes": 524288,
+          "reason": "High margin, positive/flat velocity, high reserve, no backpressure/jitter"
+        },
+        {
+          "tMs": 90.7835,
+          "mode": "MACRO_BATCH",
+          "margin": 0.9,
+          "velocity": 1.2937999999999192,
+          "reserve": 1,
+          "batchTarget": 131072,
+          "flushIntervalMs": 1,
+          "maxBufferedBytes": 524288,
+          "reason": "High margin, positive/flat velocity, high reserve, no backpressure/jitter"
+        },
+        {
+          "tMs": 130.07799999999997,
+          "mode": "MACRO_BATCH",
+          "margin": 0.9,
+          "velocity": 1.2937999999999192,
+          "reserve": 1,
+          "batchTarget": 131072,
+          "flushIntervalMs": 1,
+          "maxBufferedBytes": 524288,
+          "reason": "High margin, positive/flat velocity, high reserve, no backpressure/jitter"
+        },
+        {
+          "tMs": 181.05220000000008,
+          "mode": "MACRO_BATCH",
+          "margin": 0.9,
+          "velocity": 1.2937999999999192,
+          "reserve": 1,
+          "batchTarget": 131072,
+          "flushIntervalMs": 1,
+          "maxBufferedBytes": 524288,
+          "reason": "High margin, positive/flat velocity, high reserve, no backpressure/jitter"
+        },
+        {
+          "tMs": 243.27520000000004,
+          "mode": "MACRO_BATCH",
+          "margin": 0.9,
+          "velocity": 1.2937999999999192,
+          "reserve": 1,
+          "batchTarget": 131072,
+          "flushIntervalMs": 1,
+          "maxBufferedBytes": 524288,
+          "reason": "High margin, positive/flat velocity, high reserve, no backpressure/jitter"
+        },
+        {
+          "tMs": 317.00970000000007,
+          "mode": "MACRO_BATCH",
+          "margin": 0.9,
+          "velocity": 1.2937999999999192,
+          "reserve": 1,
+          "batchTarget": 131072,
+          "flushIntervalMs": 1,
+          "maxBufferedBytes": 524288,
+          "reason": "High margin, positive/flat velocity, high reserve, no backpressure/jitter"
+        },
+        {
+          "tMs": 399.67689999999993,
+          "mode": "MACRO_BATCH",
+          "margin": 0.9,
+          "velocity": 1.2937999999999192,
+          "reserve": 1,
+          "batchTarget": 131072,
+          "flushIntervalMs": 1,
+          "maxBufferedBytes": 524288,
+          "reason": "High margin, positive/flat velocity, high reserve, no backpressure/jitter"
+        },
+        {
+          "tMs": 494.0899999999997,
+          "mode": "MACRO_BATCH",
+          "margin": 0.9,
+          "velocity": 1.2937999999999192,
+          "reserve": 1,
+          "batchTarget": 131072,
+          "flushIntervalMs": 1,
+          "maxBufferedBytes": 524288,
+          "reason": "High margin, positive/flat velocity, high reserve, no backpressure/jitter"
+        }
+      ]
+    }
+  }
+]
+
+Scenario                    Server         Client         Duration (ms)   Messages    Bytes       Msg/s       MB/s        Framing     Status
+------------------------------------------------------------------------------------------------------------------------------------------------
+ts-server+ts                ts             ts             663.94          10000       10240000    15062       14.71       length-prefixedok
+native-server(lws)+ts       native-lws     ts             629.99          10000       10240000    15873       15.50       length-prefixedok
+
+Scenario                    GC          GC ms       ELU%      BP          Drain     MaxQueued     Flushes   AvgBuf    AvgKB     MaxBuf    MaxKB
+----------------------------------------------------------------------------------------------------------------------------------------------------
+ts-server+ts                22          46.90       78.07     0           0         0             645       45.95     46.13     64        64.25
+native-server(lws)+ts       11          11.31       83.30     0           0         0             626       68.19     68.45     72        72.28
+
+=== sweep: rate=64MB/s cap=96KB flushMs=1 ===
+
+> @gsknnft/qwormhole@0.2.1 bench C:\Users\G\Desktop\Builds\sigilnet\packages\QWormhole
+> tsx scripts/bench.ts "--" "--mode=ts" "--diagnostics"
+
+✅ Index files bootstrapped.
+[dotenv@17.2.3] injecting env (0) from .env -- tip: 🔐 prevent building .env in docker: https://dotenvx.com/prebuild
+[bench] ts-server+ts config {"effectiveRateBytesPerSec":67108864,"flushCapBytes":92897,"flushCapBuffers":64,"flushIntervalMs":1,"macroBatchTargetBytes":131072,"yieldEvery":0,"flowFastPath":false,"adaptiveMode":"guarded","framing":"length-prefixed","frameHeaderBytes":4,"payloadBytes":{"count":1,"minBytes":1024,"maxBytes":1024,"avgBytes":1024,"types":["buffer"]}}
+
+<--- Last few GCs --->
+
+[9396:000001EF1CC27000]    38801 ms: Scavenge (interleaved) 4069.7 (4080.2) -> 4065.3 (4097.9) MB, pooled: 0 MB, 8.40 / 0.00 ms  (average mu = 0.176, current mu = 0.122) allocation failure;
+[9396:000001EF1CC27000]    40356 ms: Mark-Compact (reduce) 4065.6 (4097.9) -> 4065.4 (4069.2) MB, pooled: 0 MB, 1453.14 / 0.01 ms  (+ 15.1 ms in 4 steps since start of marking, biggest step 5.0 ms, walltime since start of marking 1477 ms) (average mu = 0.
+FATAL ERROR: Ineffective mark-compacts near heap limit Allocation failed - JavaScript heap out of memory
+----- Native stack trace -----
+
+ 1: 00007FF6B5691669 node::OnFatalError+1225
+ 2: 00007FF6B62D03A7 v8::Function::NewInstance+423
+ 3: 00007FF6B60D0C57 v8::base::AddressSpaceReservation::AddressSpaceReservation+322071
+ 4: 00007FF6B60D4964 v8::base::AddressSpaceReservation::AddressSpaceReservation+337700
+ 5: 00007FF6B60E38FC v8::internal::StrongRootAllocatorBase::deallocate_impl+16604
+ 6: 00007FF6B60E313B v8::internal::StrongRootAllocatorBase::deallocate_impl+14619
+ 7: 00007FF6B754ABED v8::base::UnsignedDivisionByConstant<unsigned __int64>+2791309
+ 8: 00007FF6B60CE720 v8::base::AddressSpaceReservation::AddressSpaceReservation+312544
+ 9: 00007FF6B61522A9 v8::Unlocker::~Unlocker+9273
+10: 00007FF6B5CC7F18 v8::String::Utf8Value::~Utf8Value+142680
+11: 000001EF5533733A
+ ERR_PNPM_RECURSIVE_RUN_FIRST_FAIL  @gsknnft/qwormhole@0.2.1 bench: `tsx scripts/bench.ts "--" "--mode=ts" "--diagnostics"`
+Exit status 134
+Error: pnpm exited with code 134
+    at ChildProcess.<anonymous> (C:\Users\G\Desktop\Builds\sigilnet\packages\QWormhole\scripts\run-bench-sweep-ts.js:69:19)
+    at ChildProcess.emit (node:events:508:28)
+    at ChildProcess._handle.onexit (node:internal/child_process:294:12)
+C:\Users\G\Desktop\Builds\sigilnet\packages\QWormhole:
+ ERR_PNPM_RECURSIVE_RUN_FIRST_FAIL  @gsknnft/qwormhole@0.2.1 bench:sweep:ts: `node scripts/run-bench-sweep-ts.js`
+Exit status 1

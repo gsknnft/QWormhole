@@ -8,9 +8,9 @@
   "types": "./dist/types/index.d.ts",
   "exports": {
     ".": {
+      "types": "./dist/types/index.d.ts",
       "import": "./dist/index.js",
-      "require": "./dist/index.cjs",
-      "types": "./dist/types/index.d.ts"
+      "require": "./dist/index.cjs"
     },
     "./index.js": "./dist/index.js",
     "./index.cjs": "./dist/index.cjs",
@@ -71,6 +71,7 @@
     "test:kcp": "tsx scripts/dev/kcp-mux-test.ts",
     "test:ws": "tsx scripts/dev/ws-mux-test.ts",
     "bench:sweep": "node scripts/run-bench-sweep.js",
+    "bench:sweep:ts": "node scripts/run-bench-sweep-ts.js",
     "bench:qw": "pnpm run bench -- --mode=all --diagnostics",
     "lint": "eslint . && tsc --noEmit",
     "format": "prettier . --write"

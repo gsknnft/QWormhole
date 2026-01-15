@@ -5,6 +5,7 @@
 // Falsifiable: Logs discard if no events in window
 
 import { ResolutionEvent } from "./coherence";
+import { resolveLatencyVar } from "./latency";
 // import { CoherencePrimitives } from "./types";
 
 interface ResonanceEvent extends ResolutionEvent {
@@ -18,22 +19,6 @@ function stdDev(a: number[]) {
   return Math.sqrt(a.reduce((s, x) => s + (x - m) ** 2, 0) / a.length);
 }
 
-const resolveLatencyVar = (sample: Record<string, number>) => {
-  const explicit = sample.latency_var;
-  if (typeof explicit === "number") {
-    return explicit;
-  }
-  const p50 = sample.latencyP50;
-  const p95 = sample.latencyP95;
-  if (typeof p50 === "number" && typeof p95 === "number") {
-    return Math.max(0, p95 - p50) / Math.max(1, p50);
-  }
-  const p99 = sample.latencyP99;
-  if (typeof p50 === "number" && typeof p99 === "number") {
-    return Math.max(0, p99 - p50) / Math.max(1, p50);
-  }
-  return 0;
-};
 
 export class ResonanceDetector {
   // private loop: CoherencePrimitives; // Your primitives (M, V from signals)
@@ -68,17 +53,17 @@ export class ResonanceDetector {
           latencyStd,
           residual,
           resonance,
-          reason: `Drift low (\( {current_V}), margin stable ( \){current_M}), residual low (${residual})`
+          reason: `Drift low (${current_V}), margin stable (${current_M}), residual low (${residual})`
         };
         this.events.push(event);
-        console.log('Resonance Event Detected:', event);
+        console.log("Resonance Event Detected:", event);
         // Reset no-event counter if needed
       }
     }
 
     // Falsifiability: If no events after max, log discard
     if (this.history.length >= this.max_no_event && this.events.length === 0) {
-      console.log('Falsification: No resolution events in window—discard candidate.');
+      console.log("Falsification: No resolution events in window; discard candidate.");
       // Optional: Reset or flag for new J
     }
   }
@@ -96,7 +81,7 @@ export class ResonanceDetector {
 
   private calculateResonance(): number {
     // Signal tolerance: Inverse variance on key signal (e.g., latency_var)
-    const signals = this.history.map(h => h.sample.latency_var || 0);
+    const signals = this.history.map(h => resolveLatencyVar(h.sample));
     return 1 / (1 + this.stdDev(signals)); // [0,1]; low var = high tolerance
   }
 

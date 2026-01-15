@@ -138,14 +138,34 @@ export const FLOW_DEFAULTS = {
   /** TS peer max slice for high-trust peers (negIndex >= 0.85) */
   TS_PEER_HIGH_TRUST_MAX_SLICE: 64,
   /** TS framer caps to keep batching in the micro-batch envelope */
-  TS_FRAMER_MAX_BUFFERS: 32,
+  TS_FRAMER_MAX_BUFFERS: (() => {
+    const raw = process.env.QWORMHOLE_TS_FRAMER_MAX_BUFFERS;
+    const parsed = raw ? Number.parseInt(raw, 10) : NaN;
+    return Number.isFinite(parsed) && parsed > 0 ? parsed : 32;
+  })(),
   /** TS framer cap to avoid large buffer residency (bytes) */
-  TS_FRAMER_MAX_BYTES: 32 * 1024,
+  TS_FRAMER_MAX_BYTES: (() => {
+    const raw = process.env.QWORMHOLE_TS_FRAMER_MAX_BYTES;
+    const parsed = raw ? Number.parseInt(raw, 10) : NaN;
+    return Number.isFinite(parsed) && parsed > 0 ? parsed : 32 * 1024;
+  })(),
   /** TS framer minimum bytes target for writev */
-  TS_FRAMER_MIN_BYTES: 8 * 1024,
+  TS_FRAMER_MIN_BYTES: (() => {
+    const raw = process.env.QWORMHOLE_TS_FRAMER_MIN_BYTES;
+    const parsed = raw ? Number.parseInt(raw, 10) : NaN;
+    return Number.isFinite(parsed) && parsed > 0 ? parsed : 8 * 1024;
+  })(),
   /** TS fast-path caps (bench throughput sanity) */
-  TS_FAST_MAX_BUFFERS: 64,
-  TS_FAST_MAX_BYTES: 96 * 1024,
+  TS_FAST_MAX_BUFFERS: (() => {
+    const raw = process.env.QWORMHOLE_TS_FAST_MAX_BUFFERS;
+    const parsed = raw ? Number.parseInt(raw, 10) : NaN;
+    return Number.isFinite(parsed) && parsed > 0 ? parsed : 64;
+  })(),
+  TS_FAST_MAX_BYTES: (() => {
+    const raw = process.env.QWORMHOLE_TS_FAST_MAX_BYTES;
+    const parsed = raw ? Number.parseInt(raw, 10) : NaN;
+    return Number.isFinite(parsed) && parsed > 0 ? parsed : 96 * 1024;
+  })(),
   /** Upper bound on token bucket induced delay */
   MAX_RESERVE_DELAY_MS: 200,
 } as const;
@@ -219,6 +239,12 @@ function readRecentGcPause(): number {
   recentGcPauseMs *= 0.5;
   return value;
 }
+
+const TS_FLUSH_INTERVAL_MS = (() => {
+  const raw = process.env.QWORMHOLE_TS_FLUSH_INTERVAL_MS;
+  const parsed = raw ? Number.parseFloat(raw) : NaN;
+  return Number.isFinite(parsed) && parsed >= 0 ? parsed : undefined;
+})();
 
 function tuneAdaptiveConfig(config: AdaptiveConfig, peer: PeerProfile): void {
   if (peer.isNative) {
@@ -353,6 +379,7 @@ export class FlowController extends TypedEventEmitter<FlowControllerEvents> {
   private backpressureCount = 0;
   private adaptive?: AdaptiveInternals;
   private readonly negDiagnostics = new NegentropicDiagnostics();
+  private lastEluBaseline?: ReturnType<typeof performance.eventLoopUtilization>;
 
   // Diagnostics
   private totalFlushes = 0;
@@ -378,13 +405,7 @@ export class FlowController extends TypedEventEmitter<FlowControllerEvents> {
     );
     this.effectiveRateBytesPerSec = forcedRateBytes ?? policy.rateBytesPerSec;
     this.fastPath = initOptions?.fastPath ?? false;
-    const elu = monitorEventLoopDelay({ resolution: 20 });
-    elu.enable();
-    trackMonitor(elu);
-    this.runtimeMetrics.getELU = () => {
-      const max = elu.max || 1; // avoid division by zero
-      return elu.mean / max;
-    };
+    this.runtimeMetrics.getELU = () => this.readEventLoopUtilization();
     // Initialize slice size as half of preferred, clamped to bounds
     const preferredSlice = this.clamp(
       Math.round(policy.preferredBatchSize / 2),
@@ -569,30 +590,57 @@ export class FlowController extends TypedEventEmitter<FlowControllerEvents> {
     const diag = this.getDiagnostics();
     const framerStats = framer.getStats();
     const now = Date.now();
+    const avgFrameBytes =
+      framerStats.totalFrames > 0
+        ? framerStats.totalBytes / framerStats.totalFrames
+        : framerStats.pendingFrames > 0
+          ? framerStats.pendingBytes / framerStats.pendingFrames
+          : diag.adaptive?.bytesPerFlushAvg && (diag.adaptive?.sliceSize ?? this.sliceSize) > 0
+            ? diag.adaptive.bytesPerFlushAvg /
+              Math.max(1, diag.adaptive?.sliceSize ?? this.sliceSize)
+            : 1024;
+    const frameBytes = Number.isFinite(avgFrameBytes)
+      ? Math.max(1, avgFrameBytes)
+      : 1024;
+    const burstBudget = Math.max(1, this.policy.burstBudgetBytes);
+    const availableTokens = this.bucket.availableTokens;
+    const bufferedBytes = framerStats.pendingBytes;
+    const reserveAvailable = Math.min(
+      availableTokens,
+      Math.max(0, burstBudget - bufferedBytes),
+    );
+    const reserveEstimate = Math.max(
+      0,
+      Math.min(1, reserveAvailable / burstBudget),
+    );
+    const eventLoopJitterMs = this.readEventLoopJitterMs();
+    const eventLoopUtilization = this.readEventLoopUtilization();
     // Compose TransportMetrics
     const metrics = {
       bytesSent: diag.totalBytes,
       bytesAcked: 0, // Fill in from receiver if available
       messagesSent: framerStats.totalFrames,
       messagesAcked: 0, // Fill in from receiver if available
-      batchSize: this.sliceSize * 1024, // Approximate: sliceSize in frames, adjust as needed
+      batchSize: Math.round(frameBytes * this.sliceSize),
       batchMessages: this.sliceSize,
       batchIntervalMs: diag.adaptive?.flushIntervalAvgMs ?? 0,
-      bufferedBytes: framerStats.pendingBytes,
+      bufferedBytes,
       bufferedMessages: framerStats.pendingFrames,
       socketBackpressure: this.isPressureActive(),
-      eventLoopJitterMs: diag.adaptive?.flushIntervalAvgMs ?? 0, // Approximate, or use ELU if available
+      eventLoopJitterMs,
+      eventLoopUtilization,
       gcPauseMs: diag.adaptive?.gcPauseMaxMs ?? 0,
       marginEstimate: diag.policy.coherence, // Use coherence as margin proxy
-      reserveEstimate: 1.0, // TODO: compute from available tokens or buffer margin
+      reserveEstimate,
       rttMs: undefined,
       timestamp: now,
     };
     // Get decision from CoherenceController
     const decision = coherenceController.decide(metrics as TransportMetrics);
     // Apply recommendations
-    this.setExternalSliceSize(Math.floor(decision.batchTarget / 1024)); // Convert bytes to frames if needed
-    framer.setBatchTiming(Math.floor(decision.batchTarget / 1024), decision.flushIntervalMs);
+    const targetFrames = Math.max(1, Math.round(decision.batchTarget / frameBytes));
+    this.setExternalSliceSize(targetFrames);
+    framer.setBatchTiming(targetFrames, decision.flushIntervalMs);
     framer.setFlushCaps(undefined, decision.maxBufferedBytes);
     // Optionally: log or emit decision for diagnostics
     console.debug("[Coherence] mode=", decision.mode, decision.reason);
@@ -612,12 +660,17 @@ export class FlowController extends TypedEventEmitter<FlowControllerEvents> {
     const backlogBytes = framer.pendingBatchBytes;
     const shouldForce =
       backlogFrames >= this.sliceSize || backlogBytes >= caps.maxBytes;
-    const pending = this.scheduleFlush(framer, shouldForce);
+    let pending = this.scheduleFlush(framer, shouldForce);
 
-    // Only apply backpressure when backlog exceeds the intended flush envelope.
+    // Apply backpressure as soon as we exceed caps or a flush is already in flight.
+    // This keeps backlog bounded instead of letting buffers pile up behind the token bucket.
     const needsWait =
-      backlogFrames >= caps.maxBuffers * 8 ||
-      backlogBytes >= caps.maxBytes * 8;
+      this.flushing ||
+      backlogFrames >= caps.maxBuffers ||
+      backlogBytes >= caps.maxBytes;
+    if (needsWait && !pending) {
+      pending = this.scheduleFlush(framer, true);
+    }
     return needsWait ? pending : undefined;
   }
 
@@ -677,6 +730,30 @@ export class FlowController extends TypedEventEmitter<FlowControllerEvents> {
 
   private isFastPathActive(): boolean {
     return this.fastPath && !this.isPressureActive();
+  }
+
+  private readEventLoopJitterMs(): number {
+    if (!loopDelayMonitor) return 0;
+    const jitterNs =
+      typeof loopDelayMonitor.percentile === "function"
+        ? loopDelayMonitor.percentile(99)
+        : loopDelayMonitor.mean || 0;
+    const jitterMs = jitterNs / 1e6;
+    return Number.isFinite(jitterMs) ? jitterMs : 0;
+  }
+
+  private readEventLoopUtilization(): number {
+    if (typeof performance.eventLoopUtilization !== "function") return 0;
+    const current = performance.eventLoopUtilization();
+    if (!this.lastEluBaseline) {
+      this.lastEluBaseline = current;
+      return 0;
+    }
+    const delta = performance.eventLoopUtilization(this.lastEluBaseline);
+    this.lastEluBaseline = current;
+    const utilization = delta.utilization ?? 0;
+    if (!Number.isFinite(utilization)) return 0;
+    return Math.max(0, Math.min(1, utilization));
   }
 
   /**
@@ -755,6 +832,9 @@ export class FlowController extends TypedEventEmitter<FlowControllerEvents> {
     let maxBuffers = Math.min(bounds.maxBuf, Math.max(bounds.minBuf, this.sliceSize * 2));
     let maxBytes = Math.min(bounds.maxBytes, Math.max(bounds.minBytes, bounds.maxBytes * trust));
     let flushMs = peerIsNative ? 1 : 1;
+    if (!peerIsNative && TS_FLUSH_INTERVAL_MS !== undefined) {
+      flushMs = TS_FLUSH_INTERVAL_MS;
+    }
 
     const adaptive = this.adaptive;
     if (adaptive && !fastPathActive) {

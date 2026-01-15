@@ -3,7 +3,19 @@ import { resolve } from "path";
 import { CoherenceLoop } from "./loop";
 import { CommitmentDetector } from "./commitment-detector";
 import { ResolutionDetector } from "./resolution";
-import type { CoherenceConfig, CouplingParams, FieldSample } from "./types";
+import type { CoherenceConfig, CoherenceState, CouplingParams, FieldSample } from "./types";
+import { resolveLatencyVar } from "./latency";
+import {
+  buildSamples,
+  checkLyapunov,
+  fitJ,
+  minimumSamplesForModel,
+  type FitJResult,
+  type FitModel,
+  type FitSample,
+  type LyapunovCheck,
+  type Vector3,
+} from "./field-stability";
 import { WSTransport, WSTransportServer } from "../transports/ws/ws-transport";
 import type { MuxStream } from "../transports/mux/mux-stream";
 import {
@@ -64,12 +76,103 @@ const difficultyGates: Record<SignalTrialDifficulty, GateConfig> = {
   chaos: { minUptimeMs: 20000, minActions: 4, holdMs: 9000, quietHoldMs: 9000, collapseHoldMs: 1300 },
 };
 
+const difficultyGateScale: Record<SignalTrialDifficulty, number> = {
+  easy: 0.7,
+  standard: 1,
+  hard: 1.1,
+  chaos: 1.25,
+};
+
+const actionTimingScale: Record<SignalTrialDifficulty, number> = {
+  easy: 0.65,
+  standard: 1,
+  hard: 1,
+  chaos: 1,
+};
+
 const clamp01 = (value: number) => Math.min(1, Math.max(0, value));
 const clampRange = (value: number, min: number, max: number) => Math.min(max, Math.max(min, value));
 const rand = (min: number, max: number) => min + Math.random() * (max - min);
 const readNumber = (value: unknown, fallback: number) => {
   const num = typeof value === "number" ? value : Number(value);
   return Number.isFinite(num) ? num : fallback;
+};
+const average = (values: number[]) =>
+  values.length > 0 ? values.reduce((sum, value) => sum + value, 0) / values.length : 0;
+
+type ControlMode = "closed_loop" | "open_loop";
+type StabilityConvention = "energy" | "coherence";
+
+type StabilityConfig = {
+  bufferSize: number;
+  analysisWindow: number;
+  analysisEvery: number;
+  model: FitModel;
+  regularization: number;
+  tolerance: number;
+  convention: StabilityConvention;
+};
+
+type StabilitySummary = {
+  fit: FitJResult;
+  lyapunov: LyapunovCheck;
+  dotJ: number;
+  r2: number;
+};
+
+const stabilityDefaults: StabilityConfig = {
+  bufferSize: 128,
+  analysisWindow: 64,
+  analysisEvery: 8,
+  model: "quadratic",
+  regularization: 1e-6,
+  tolerance: 0,
+  convention: "energy",
+};
+
+const resolveControlMode = (value: unknown): ControlMode =>
+  value === "open_loop" ? "open_loop" : "closed_loop";
+
+const resolveStabilityModel = (value: unknown): FitModel =>
+  value === "cubic" ? "cubic" : "quadratic";
+
+const resolveStabilityConvention = (value: unknown): StabilityConvention =>
+  value === "coherence" ? "coherence" : "energy";
+
+const buildStabilityConfig = (): StabilityConfig => ({
+  bufferSize: Math.max(
+    16,
+    readNumber(process.env.SIGNAL_TRIAL_STABILITY_BUFFER, stabilityDefaults.bufferSize),
+  ),
+  analysisWindow: Math.max(
+    8,
+    readNumber(process.env.SIGNAL_TRIAL_STABILITY_WINDOW, stabilityDefaults.analysisWindow),
+  ),
+  analysisEvery: Math.max(
+    1,
+    readNumber(process.env.SIGNAL_TRIAL_STABILITY_EVERY, stabilityDefaults.analysisEvery),
+  ),
+  model: resolveStabilityModel(process.env.SIGNAL_TRIAL_STABILITY_MODEL),
+  regularization: readNumber(
+    process.env.SIGNAL_TRIAL_STABILITY_REG,
+    stabilityDefaults.regularization,
+  ),
+  tolerance: readNumber(
+    process.env.SIGNAL_TRIAL_STABILITY_TOLERANCE,
+    stabilityDefaults.tolerance,
+  ),
+  convention: resolveStabilityConvention(process.env.SIGNAL_TRIAL_STABILITY_CONVENTION),
+});
+
+const applyStabilityConvention = (
+  samples: FitSample[],
+  convention: StabilityConvention,
+): FitSample[] => {
+  if (convention !== "coherence") return samples;
+  return samples.map(sample => ({
+    ...sample,
+    dotS: sample.dotS.map(value => -value) as Vector3,
+  }));
 };
 
 const observerDefaults = {
@@ -124,7 +227,7 @@ const makeId = () => Math.random().toString(36).slice(2, 10);
 const makeSessionId = () => `ST-${Math.random().toString(36).slice(2, 8).toUpperCase()}`;
 
 const latencyVariance = (sample: FieldSample) =>
-  Math.abs(sample.latencyP99 - sample.latencyP50) / Math.max(1, sample.latencyP50);
+  resolveLatencyVar(sample as Record<string, number>);
 
 type SampleImpact = Partial<
   Pick<
@@ -803,6 +906,7 @@ export interface SignalTrialBroadcastOptions {
   difficulty?: SignalTrialDifficulty;
   tier?: SignalTrialTier;
   profile?: SignalTrialProfile;
+  controlMode?: ControlMode;
   loadMode?: LoadMode;
   loadPort?: number;
   loadClients?: number;
@@ -816,12 +920,20 @@ export function startSignalTrialBroadcast(options: SignalTrialBroadcastOptions =
   const port = options.port ?? Number(process.env.SIGNAL_TRIAL_WS_PORT ?? 4183);
   const tickMs = options.tickMs ?? Number(process.env.SIGNAL_TRIAL_TICK_MS ?? 250);
   const tier: SignalTrialTier = options.tier ?? "instrument";
-  const difficulty: SignalTrialDifficulty = options.difficulty ?? "standard";
+  let difficulty: SignalTrialDifficulty = options.difficulty ?? "standard";
+  const controlMode = resolveControlMode(
+    options.controlMode ?? process.env.SIGNAL_TRIAL_CONTROL_MODE,
+  );
+  const stabilityConfig = buildStabilityConfig();
   const observerConfig = buildObserverConfig(tickMs);
-  const adaptiveHold = {
-    holdMs: Math.round(observerConfig.historyWindow * tickMs * 1.1),
-    quietHoldMs: Math.round(observerConfig.minEventGapSteps * tickMs),
+  const buildAdaptiveHold = (targetDifficulty: SignalTrialDifficulty) => {
+    const gateScale = difficultyGateScale[targetDifficulty];
+    return {
+      holdMs: Math.round(observerConfig.historyWindow * tickMs * 1.1 * gateScale),
+      quietHoldMs: Math.round(observerConfig.minEventGapSteps * tickMs * gateScale),
+    };
   };
+  let adaptiveHold = buildAdaptiveHold(difficulty);
   const profileOverrides = loadProfileOverrides();
   let profile: SignalTrialProfile = resolveProfile(
     options.profile ?? process.env.SIGNAL_TRIAL_PROFILE,
@@ -863,6 +975,9 @@ export function startSignalTrialBroadcast(options: SignalTrialBroadcastOptions =
   let coupling: CouplingParams = { ...baseCoupling };
   let detector = new CommitmentDetector();
   let resolutionObserver = new ResolutionDetector(observerConfig);
+  let stabilityBuffer: Array<{ t: number; state: CoherenceState }> = [];
+  let stabilitySummary: StabilitySummary | null = null;
+  let stabilityTick = 0;
   let effects: Effect[] = [];
   let loadEffects: LoadEffect[] = [];
   let queueDepth = { current: baseSample.queueDepth };
@@ -917,6 +1032,45 @@ export function startSignalTrialBroadcast(options: SignalTrialBroadcastOptions =
     });
   };
 
+  const recordStabilitySample = (now: number, state: CoherenceState) => {
+    stabilityBuffer.push({ t: now, state });
+    if (stabilityBuffer.length > stabilityConfig.bufferSize) {
+      stabilityBuffer.shift();
+    }
+    stabilityTick += 1;
+    if (stabilityTick % stabilityConfig.analysisEvery !== 0) {
+      return;
+    }
+
+    const samples = buildSamples(stabilityBuffer);
+    const window =
+      samples.length > stabilityConfig.analysisWindow
+        ? samples.slice(-stabilityConfig.analysisWindow)
+        : samples;
+    const minimumSamples = minimumSamplesForModel(stabilityConfig.model);
+    if (window.length < minimumSamples) {
+      return;
+    }
+    const effectiveWindow = applyStabilityConvention(window, stabilityConfig.convention);
+    const fit = fitJ(effectiveWindow, {
+      model: stabilityConfig.model,
+      regularization: stabilityConfig.regularization,
+    });
+    const lyapunov = checkLyapunov(fit, effectiveWindow, {
+      tolerance: stabilityConfig.tolerance,
+    });
+    const last = effectiveWindow[effectiveWindow.length - 1];
+    const grad = fit.grad(last.s);
+    const dotJ =
+      grad[0] * last.dotS[0] + grad[1] * last.dotS[1] + grad[2] * last.dotS[2];
+    stabilitySummary = {
+      fit,
+      lyapunov,
+      dotJ,
+      r2: average(fit.stats.r2),
+    };
+  };
+
   const resetSession = () => {
     sessionId = makeSessionId();
     sessionStart = Date.now();
@@ -924,6 +1078,9 @@ export function startSignalTrialBroadcast(options: SignalTrialBroadcastOptions =
     coupling = { ...baseCoupling };
     detector = new CommitmentDetector();
     resolutionObserver = new ResolutionDetector(observerConfig);
+    stabilityBuffer = [];
+    stabilitySummary = null;
+    stabilityTick = 0;
     effects = [];
     loadEffects = [];
     queueDepth = { current: baseSample.queueDepth };
@@ -960,7 +1117,10 @@ export function startSignalTrialBroadcast(options: SignalTrialBroadcastOptions =
     if (!spec) return;
 
     const now = Date.now();
-    const delayMs = rand(spec.delayRangeMs[0], spec.delayRangeMs[1]);
+    const timingScale = actionTimingScale[difficulty];
+    const minDelay = Math.max(600, Math.round(spec.delayRangeMs[0] * timingScale));
+    const maxDelay = Math.max(minDelay + 200, Math.round(spec.delayRangeMs[1] * timingScale));
+    const delayMs = rand(minDelay, maxDelay);
     const backfire = Math.random() < 0.22;
     const useSynthetic = loadMode !== "traffic";
     const useTraffic = loadMode !== "synthetic";
@@ -1028,11 +1188,15 @@ export function startSignalTrialBroadcast(options: SignalTrialBroadcastOptions =
         applyAction(message);
       }
       if (message.type === "session" && message.mode === "reset") {
-          if (message.profile) {
-            profile = resolveProfile(message.profile);
-            profilePreset = applyProfilePreset(profilePresets[profile], profileOverrides[profile]);
-            gate = applyProfileGates(difficultyGates[difficulty], profilePreset, adaptiveHold);
-          }
+        if (message.difficulty) {
+          difficulty = message.difficulty;
+          adaptiveHold = buildAdaptiveHold(difficulty);
+        }
+        if (message.profile) {
+          profile = resolveProfile(message.profile);
+          profilePreset = applyProfilePreset(profilePresets[profile], profileOverrides[profile]);
+        }
+        gate = applyProfileGates(difficultyGates[difficulty], profilePreset, adaptiveHold);
         resetSession();
       }
     });
@@ -1079,7 +1243,10 @@ export function startSignalTrialBroadcast(options: SignalTrialBroadcastOptions =
 
     loop.sense(sample);
     const state = loop.estimate();
-    coupling = loop.adapt(state, coupling);
+    if (controlMode === "closed_loop") {
+      coupling = loop.adapt(state, coupling);
+    }
+    recordStabilitySample(now, state);
 
     const observerSample = { ...sample, latency_var: latencyVariance(sample) };
     detector.detectCommitment(
@@ -1183,6 +1350,37 @@ export function startSignalTrialBroadcast(options: SignalTrialBroadcastOptions =
     const holdMs = stableSince ? now - stableSince : 0;
     const quietMs = lastActionAt ? now - lastActionAt : 0;
 
+    const stabilityTelemetry = stabilitySummary
+      ? {
+          dotJ: stabilitySummary.dotJ,
+          stable: stabilitySummary.lyapunov.stable,
+          violationRate: stabilitySummary.lyapunov.violationRate,
+          r2: stabilitySummary.r2,
+          samples: stabilitySummary.fit.stats.samples,
+          lastDotV: stabilitySummary.lyapunov.lastDotV,
+          meanDotV: stabilitySummary.lyapunov.meanDotV,
+        }
+      : undefined;
+    const lyapunovTelemetry = stabilitySummary
+      ? {
+          stable: stabilitySummary.lyapunov.stable,
+          violationRate: stabilitySummary.lyapunov.violationRate,
+          minDotV: stabilitySummary.lyapunov.minDotV,
+          maxDotV: stabilitySummary.lyapunov.maxDotV,
+          meanDotV: stabilitySummary.lyapunov.meanDotV,
+          lastDotV: stabilitySummary.lyapunov.lastDotV,
+          samples: stabilitySummary.lyapunov.samples,
+        }
+      : undefined;
+    const fitJTelemetry = stabilitySummary
+      ? {
+          model: stabilitySummary.fit.model,
+          r2: stabilitySummary.r2,
+          mse: stabilitySummary.fit.stats.mse,
+          samples: stabilitySummary.fit.stats.samples,
+        }
+      : undefined;
+
     const telemetry: SignalTrialTelemetry = {
       type: "telemetry",
       sessionId,
@@ -1190,11 +1388,15 @@ export function startSignalTrialBroadcast(options: SignalTrialBroadcastOptions =
       tier,
       difficulty,
       profile,
+      controlMode,
       state,
       coupling,
       sample,
       derived,
       observer: observerTelemetry,
+      stability: stabilityTelemetry,
+      lyapunov: lyapunovTelemetry,
+      fitJ: fitJTelemetry,
       targetBand: targetBandTelemetry,
       gates: {
         uptimeMs,

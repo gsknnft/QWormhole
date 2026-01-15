@@ -20,6 +20,8 @@ CoherenceEnvelope = {
 
 // import { CoherencePrimitives } from "./types";
 
+import { resolveLatencyVar } from "./latency";
+
 export interface CommitmentEvent {
   timestamp: number;
   config: Record<string, any>; // e.g., { batch_size: 32, pacing: 0.5 }
@@ -63,7 +65,13 @@ export interface CoherenceEnvelope {
   };
 }
 export class CommitmentDetector {
-  private history: Array<{ m: number; v: number; sample: Record<string, number>; timestamp: number }> = [];
+  private history: Array<{
+    m: number;
+    v: number;
+    sample: Record<string, number>;
+    config?: Record<string, any>;
+    timestamp: number;
+  }> = [];
   private events: CommitmentEvent[] = [];
   private resonance: number = 0;
   event_trace: CommitmentEvent[] = [];
@@ -82,13 +90,20 @@ export class CommitmentDetector {
   
 
   // Call this per loop iteration, after estimate(M, V, R)
-  detectCommitment(current_M: number, current_V: number, current_sample: Record<string, number>, current_C?: Record<string, any>, timestamp: number = this.now()): void {
+  detectCommitment(
+    current_M: number,
+    current_V: number,
+    current_sample: Record<string, number>,
+    current_C?: Record<string, any>,
+    timestamp: number = this.now(),
+  ): void {
     this.history.push({
 
       m: current_M,
       v: current_V,
       sample: current_sample,
-      timestamp
+      config: current_C,
+      timestamp,
     });
     // keep only the last N milliseconds of history
     const horizonMs = 5000; // ~5 s sliding window
@@ -99,36 +114,24 @@ export class CommitmentDetector {
     if (this.detectPerturbation()) {
       // Track config change (ΔC) over last k steps
       const k = Math.min(5, this.history.length);
-      let deltaC = 0;
-      for (let i = this.history.length - k; i < this.history.length - 1; i++) {
-        const prevConfig = this.history[i]?.sample;
-        const currConfig = this.history[i + 1]?.sample;
-        if (prevConfig && currConfig) {
-          // Example: sum absolute difference of config keys
-          deltaC += Object.keys(currConfig).reduce((sum, key) => {
-            return sum + Math.abs((currConfig[key] || 0) - (prevConfig[key] || 0));
-          }, 0);
-        }
-      }
-      // If deltaC spikes then decays (simple: last deltaC much less than peak in window)
+      // If config deltas spike then decay (simple: last delta << peak in window)
       const deltas: number[] = [];
       for (let i = this.history.length - k; i < this.history.length - 1; i++) {
-        const prevConfig = this.history[i]?.sample;
-        const currConfig = this.history[i + 1]?.sample;
+        const prevConfig = this.history[i]?.config;
+        const currConfig = this.history[i + 1]?.config;
         if (prevConfig && currConfig) {
-          deltas.push(
-            Object.keys(currConfig).reduce((sum, key) => {
-              return sum + Math.abs((currConfig[key] || 0) - (prevConfig[key] || 0));
-            }, 0)
-          );
+          deltas.push(this.sumConfigDelta(prevConfig, currConfig));
         }
       }
-      const peakDelta = Math.max(...deltas);
-      const lastDelta = deltas[deltas.length - 1];
-      // If spike then decay (lastDelta < peakDelta * 0.5)
-      this.resonance = Math.max(0, Math.min(1,
-        this.resonance + (lastDelta < peakDelta * 0.5 ? 0.05 : -0.05)
-      ));
+      if (deltas.length > 0) {
+        const peakDelta = Math.max(...deltas);
+        const lastDelta = deltas[deltas.length - 1];
+        // If spike then decay (lastDelta < peakDelta * 0.5)
+        this.resonance = Math.max(
+          0,
+          Math.min(1, this.resonance + (lastDelta < peakDelta * 0.5 ? 0.05 : -0.05)),
+        );
+      }
 
       // if (lastDelta < peakDelta * 0.5) {
       //   // Optionally, you could store resonance as a property and update here
@@ -141,8 +144,8 @@ export class CommitmentDetector {
     }
 
       this.event_trace = this.history.slice(-this.history_window).map(h => ({
-        timestamp: this.now(),
-        config: { ...current_C },
+        timestamp: h.timestamp,
+        config: { ...(h.config ?? current_C) },
         m: h.m,
         v: h.v,
         resonance: this.resonance,
@@ -154,7 +157,7 @@ export class CommitmentDetector {
       if (resonance > this.resonance_thresh) {
         if (this.lyapunov() < 0.05) {
           const event: CommitmentEvent = {
-            timestamp: Date.now(),
+            timestamp,
             config: { ...current_C },
             m: current_M,
             v: current_V,
@@ -178,6 +181,19 @@ export class CommitmentDetector {
     const latencySpike = (lastSample.latencyP95 || 0) - (prevSample.latencyP95 || 0) > 50; // e.g., >50ms spike
     const errorSpike = (lastSample.errRate || 0) - (prevSample.errRate || 0) > 0.05;
     return latencySpike || errorSpike;
+  }
+
+  private sumConfigDelta(prev: Record<string, any>, next: Record<string, any>): number {
+    let sum = 0;
+    const keys = new Set([...Object.keys(prev), ...Object.keys(next)]);
+    for (const key of keys) {
+      const prevValue = prev[key];
+      const nextValue = next[key];
+      if (typeof prevValue === "number" && typeof nextValue === "number") {
+        sum += Math.abs(nextValue - prevValue);
+      }
+    }
+    return sum;
   }
 
   private isCommitted(m: number, v: number): boolean {
@@ -219,7 +235,7 @@ private responsiveness(): number {
     // Proxy for perturbation tolerance: Variance of key signal (e.g., latency_var) over window
     // High resonance = low variance post-fluctuation (damped perturbations)
     
-    const latencies = this.history.map(h => h.sample.latency_var || 0); // Use your signal key
+    const latencies = this.history.map(h => resolveLatencyVar(h.sample)); // Use derived latency variance
     return 1 / (1 + this.stdDev(latencies)); // Normalize [0,1]; low var = high resonance
   }
 

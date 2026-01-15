@@ -1,6 +1,7 @@
 import type { BatchFramer } from "../core/batch-framer";
 import type { FlowController } from "../core/flow-controller";
 import { clamp01, isUnsafe } from "./invariants";
+import { resolveLatencyVar } from "./latency";
 import { CoherenceLoop } from "./loop";
 import type {
   CoherenceConfig,
@@ -118,6 +119,11 @@ export function attachCoherenceAdapter(
     backpressureCount = 0;
 
     const queueDepthBytes = Math.max(bytesPerFlush, pendingBytes);
+    const latency_var = resolveLatencyVar({
+      latencyP50,
+      latencyP95,
+      latencyP99,
+    });
     const sample: FieldSample = {
       t: now,
       latencyP50,
@@ -127,6 +133,7 @@ export function attachCoherenceAdapter(
       queueDepth: Math.max(0, queueDepthBytes / 1024),
       queueSlope,
       corrSpike,
+      latency_var,
     };
 
     loop.sense(sample);

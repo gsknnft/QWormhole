@@ -26,9 +26,11 @@ export function cosineSimilarity(signal: number[], intent: number[]): number {
     }
 
     export function euclideanDistance(signal: number[], intent: number[]): number {  
-      const a = tf.tensor1d(signal);  
-      const b = tf.tensor1d(intent);  
-      return tf.norm(a.sub(b)).dataSync()[0];  
+      return tf.tidy(() => {
+        const a = tf.tensor1d(signal);
+        const b = tf.tensor1d(intent);
+        return tf.norm(a.sub(b)).dataSync()[0];
+      });
     }
 
     export function computeSignalPower(signal: number[]): number {
@@ -45,13 +47,18 @@ export function cosineSimilarity(signal: number[], intent: number[]): number {
 
 
 
-    export async function characterizeNoise(signal: number[], totalPower: number): Promise<{ noise: number; noiseRatio: number; snr: number; entropy: number; }> {  
-      const signalPower = tf.tensor1d(signal).square().mean().dataSync()[0];  
-      const noise = Math.max(0, totalPower - signalPower);
-      const snr = noise > 0 ? signalPower / noise : Infinity;
-      const entropy = -Math.log2(snr / (snr + 1e-12) + 1e-12);
-      const noiseRatio = clamp01(noise / (totalPower || 1e-12));
-      return { noise, noiseRatio, snr, entropy };  
+    export async function characterizeNoise(signal: number[]): Promise<{ noise: number; noiseRatio: number; snr: number; entropy: number; }> {  
+      return tf.tidy(() => {
+        const t = tf.tensor1d(signal);
+        const mean = t.mean();
+        const noise = t.sub(mean).square().mean().dataSync()[0];
+        const signalPower = t.square().mean().dataSync()[0];
+        const totalPower = signalPower + noise;
+        const snr = noise > 0 ? signalPower / noise : Infinity;
+        const entropy = -Math.log2(snr / (snr + 1e-12) + 1e-12);
+        const noiseRatio = clamp01(noise / (totalPower || 1e-12));
+        return { noise, noiseRatio, snr, entropy };
+      });
     }  
 
 export function computeHorizonSec(

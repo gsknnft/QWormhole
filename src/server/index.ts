@@ -568,12 +568,14 @@ export class QWormholeServer<TMessage = Buffer> extends TypedEventEmitter<
           connection.outboundFramer,
         );
         if (pending) {
-          pending.catch(err => {
+          try {
+            await pending;
+          } catch (err) {
             this.emit(
               "error",
               err instanceof Error ? err : new Error(String(err)),
             );
-          });
+          }
         }
         continue;
       }
@@ -971,6 +973,7 @@ export class QWormholeServer<TMessage = Buffer> extends TypedEventEmitter<
           controller.snapshot(framer, { reset: true }),
           framer.snapshot({ reset: true }),
         ]);
+        const queueStats = connection.queue.snapshot({ reset: true });
         await sink({
           direction: "server",
           reason,
@@ -983,6 +986,7 @@ export class QWormholeServer<TMessage = Buffer> extends TypedEventEmitter<
           policyTrustLevel: handshake?.policy?.trustLevel,
           flowDiagnostics,
           batchStats,
+          queueStats,
         });
       } catch (err) {
         console.warn("[QWormholeServer] failed to publish trust snapshot", err);

@@ -34,6 +34,8 @@ export class CoherenceController {
     const velocity = metrics.marginEstimate - this.lastMargin;
     const margin = metrics.marginEstimate;
     const reserve = metrics.reserveEstimate;
+    const elu = metrics.eventLoopUtilization ?? 0;
+    const eluPressure = elu > 0.9;
 
     // --- Mode logic ---
     if (
@@ -42,18 +44,20 @@ export class CoherenceController {
       reserve <= 0.2 ||
       metrics.socketBackpressure ||
       metrics.eventLoopJitterMs > 10 ||
-      metrics.gcPauseMs > 10
+      metrics.gcPauseMs > 10 ||
+      eluPressure
     ) {
       mode = "PROTECT";
       reason =
-        "Low margin, sharply negative velocity, low reserve, or high jitter/backpressure";
+        "Low margin, sharply negative velocity, low reserve, high jitter/backpressure, or high ELU";
     } else if (
       margin > 0.7 &&
       velocity > -0.05 &&
       reserve > 0.5 &&
       !metrics.socketBackpressure &&
       metrics.eventLoopJitterMs <= 10 &&
-      metrics.gcPauseMs <= 10
+      metrics.gcPauseMs <= 10 &&
+      !eluPressure
     ) {
       mode = "MACRO_BATCH";
       reason =

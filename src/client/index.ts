@@ -445,6 +445,7 @@ export class QWormholeClient<TMessage = Buffer> extends TypedEventEmitter<
           this.flowController!.snapshot(this.outboundFramer!, { reset: true }),
           this.outboundFramer!.snapshot({ reset: true }),
         ]);
+        const queueStats = this.queue.snapshot({ reset: true });
         await this.options.onTrustSnapshot?.({
           direction: "client",
           reason,
@@ -456,6 +457,7 @@ export class QWormholeClient<TMessage = Buffer> extends TypedEventEmitter<
           entropyMetrics,
           flowDiagnostics,
           batchStats,
+          queueStats,
         });
       } catch (err) {
         // Surface snapshot issues for visibility but do not throw
@@ -499,12 +501,14 @@ export class QWormholeClient<TMessage = Buffer> extends TypedEventEmitter<
       if (this.outboundFramer && this.flowController) {
         const pending = this.flowController.enqueue(next, this.outboundFramer);
         if (pending) {
-          pending.catch(err => {
+          try {
+            await pending;
+          } catch (err) {
             this.emit(
               "error",
               err instanceof Error ? err : new Error(String(err)),
             );
-          });
+          }
         }
         continue;
       }

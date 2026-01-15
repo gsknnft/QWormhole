@@ -16,17 +16,23 @@ async function coherenceStep(signal: number[], intent: number[], { loop, params 
 
   // Step 2. Compute noise / coherence stats
   const { entropy } = await sigAnalysis(signal);
-const power = totalPower(signal);
-const { noise, snr } = await characterizeNoise(signal, power);
+  const power = totalPower(signal);
+  const { noise, snr } = await characterizeNoise(signal);
 
   // Step 3. Compute directional alignment
   const alignment = cosineSimilarity(signal, intent);
   const resonance = 1 - entropy;
 
   // Step 4. Add a few descriptive stats
-  const t = tf.tensor1d(signal);
-  const mean = t.mean().dataSync()[0];
-  const std = t.sub(mean).square().mean().sqrt().dataSync()[0];
+  const { mean, std } = tf.tidy(() => {
+    const t = tf.tensor1d(signal);
+    const meanTensor = t.mean();
+    const stdTensor = t.sub(meanTensor).square().mean().sqrt();
+    return {
+      mean: meanTensor.dataSync()[0],
+      std: stdTensor.dataSync()[0],
+    };
+  });
 
   // Step 5. Detect commitment event
   detector.detectCommitment(M, V, {
@@ -66,7 +72,7 @@ async function coherenceSteppin(
   const R = loop.estimateResponsiveness(signal);
 
   const power = totalPower(signal);
-  const { noise, snr } = await characterizeNoise(signal, power);
+  const { noise, snr } = await characterizeNoise(signal);
   const { entropy } = await sigAnalysis(signal);
 
   const alignment = cosineSimilarity(signal, intent);

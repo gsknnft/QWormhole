@@ -8,6 +8,7 @@ import type {
 } from "../coherence/types";
 import type { FlowControllerDiagnostics } from "../core/flow-controller";
 import type { BatchFramerStats } from "../core/batch-framer";
+import type { PriorityQueueStats } from "../core/qos";
 
 export type Payload = string | Buffer | Uint8Array | Record<string, unknown>;
 
@@ -353,6 +354,7 @@ export interface FlowTrustSnapshot {
   policyTrustLevel?: number;
   flowDiagnostics?: FlowControllerDiagnostics;
   batchStats?: BatchFramerStats;
+  queueStats?: PriorityQueueStats;
 }
 
 export interface SendOptions {

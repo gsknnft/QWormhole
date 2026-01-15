@@ -1,3 +1,5 @@
+import { Buffer } from "node:buffer";
+
 export class TokenBucket {
   private tokens: number;
   private lastRefill: number;
@@ -44,18 +46,60 @@ export class TokenBucket {
   }
 }
 
-export type QueueItem<T> = { priority: number; data: T };
+export type QueueItem<T> = { priority: number; data: T; size: number };
+
+export type PriorityQueueStats = {
+  length: number;
+  maxLength: number;
+  totalEnqueued: number;
+  totalDequeued: number;
+  bytes: number;
+  maxBytes: number;
+  bytesEnqueued: number;
+  bytesDequeued: number;
+};
+
+const estimateItemSize = (data: unknown): number => {
+  if (!data) return 0;
+  if (typeof data === "string") {
+    return Buffer.byteLength(data);
+  }
+  if (Buffer.isBuffer(data)) return data.length;
+  if (data instanceof Uint8Array) return data.byteLength;
+  const record = data as { byteLength?: number; length?: number };
+  if (typeof record.byteLength === "number") return record.byteLength;
+  if (typeof record.length === "number") return record.length;
+  return 0;
+};
 
 export class PriorityQueue<T> {
   private items: Array<QueueItem<T>> = [];
+  private maxLength = 0;
+  private totalEnqueued = 0;
+  private totalDequeued = 0;
+  private bytes = 0;
+  private maxBytes = 0;
+  private bytesEnqueued = 0;
+  private bytesDequeued = 0;
 
   enqueue(data: T, priority = 0): void {
-    this.items.push({ data, priority });
+    const size = estimateItemSize(data);
+    this.items.push({ data, priority, size });
     this.items.sort((a, b) => a.priority - b.priority);
+    this.totalEnqueued += 1;
+    this.bytesEnqueued += size;
+    this.bytes += size;
+    this.maxLength = Math.max(this.maxLength, this.items.length);
+    this.maxBytes = Math.max(this.maxBytes, this.bytes);
   }
 
   dequeue(): T | undefined {
     const item = this.items.shift();
+    if (item) {
+      this.totalDequeued += 1;
+      this.bytesDequeued += item.size;
+      this.bytes = Math.max(0, this.bytes - item.size);
+    }
     return item?.data;
   }
 
@@ -65,6 +109,38 @@ export class PriorityQueue<T> {
 
   clear(): void {
     this.items = [];
+    this.resetStats();
+  }
+
+  getStats(): PriorityQueueStats {
+    return {
+      length: this.items.length,
+      maxLength: this.maxLength,
+      totalEnqueued: this.totalEnqueued,
+      totalDequeued: this.totalDequeued,
+      bytes: this.bytes,
+      maxBytes: this.maxBytes,
+      bytesEnqueued: this.bytesEnqueued,
+      bytesDequeued: this.bytesDequeued,
+    };
+  }
+
+  snapshot(options?: { reset?: boolean }): PriorityQueueStats {
+    const stats = this.getStats();
+    if (options?.reset) {
+      this.resetStats();
+    }
+    return stats;
+  }
+
+  private resetStats(): void {
+    this.maxLength = this.items.length;
+    this.totalEnqueued = 0;
+    this.totalDequeued = 0;
+    this.bytes = this.items.reduce((sum, item) => sum + item.size, 0);
+    this.maxBytes = this.bytes;
+    this.bytesEnqueued = 0;
+    this.bytesDequeued = 0;
   }
 }
 

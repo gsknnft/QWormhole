@@ -1,5 +1,6 @@
 // import { cosineSimilarity } from "./invariants";
 // import { metaObserver } from "./meta_observer";
+import { resolveLatencyVar } from "./latency";
 
 type Sample = Record<string, number>;
 
@@ -207,23 +208,6 @@ export class ResolutionDetector {
 }
 
 const clamp01 = (value: number) => Math.min(1, Math.max(0, value));
-
-const resolveLatencyVar = (sample: Sample) => {
-  const explicit = sample.latency_var;
-  if (typeof explicit === "number") {
-    return explicit;
-  }
-  const p50 = sample.latencyP50;
-  const p95 = sample.latencyP95;
-  if (typeof p50 === "number" && typeof p95 === "number") {
-    return Math.max(0, p95 - p50) / Math.max(1, p50);
-  }
-  const p99 = sample.latencyP99;
-  if (typeof p50 === "number" && typeof p99 === "number") {
-    return Math.max(0, p99 - p50) / Math.max(1, p50);
-  }
-  return 0;
-};
 
 const computeConfidence = (
   metrics: {

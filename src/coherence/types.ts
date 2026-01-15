@@ -4,6 +4,7 @@ export interface FieldSample {
   latencyP50: number;
   latencyP95: number;
   latencyP99: number;
+  latency_var?: number;
   errRate: number;
   queueDepth: number;
   queueSlope: number;

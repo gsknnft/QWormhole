@@ -69,6 +69,38 @@ export const signalTrialDerivedSchema = z.object({
   resonance: z.number(),
 });
 
+export const signalTrialControlModeSchema = z.enum([
+  "closed_loop",
+  "open_loop",
+]);
+
+export const signalTrialStabilitySchema = z.object({
+  dotJ: z.number(),
+  stable: z.boolean().optional(),
+  violationRate: z.number().optional(),
+  r2: z.number().optional(),
+  samples: z.number().optional(),
+  lastDotV: z.number().optional(),
+  meanDotV: z.number().optional(),
+});
+
+export const signalTrialLyapunovSchema = z.object({
+  stable: z.boolean().optional(),
+  violationRate: z.number().optional(),
+  minDotV: z.number().optional(),
+  maxDotV: z.number().optional(),
+  meanDotV: z.number().optional(),
+  lastDotV: z.number().optional(),
+  samples: z.number().optional(),
+});
+
+export const signalTrialFitJSchema = z.object({
+  model: z.enum(["quadratic", "cubic"]).optional(),
+  r2: z.number().optional(),
+  mse: z.array(z.number()).optional(),
+  samples: z.number().optional(),
+});
+
 export const signalTrialResolutionObserverSchema = z.object({
   confidence: z.number(),
   resolved: z.boolean(),
@@ -125,6 +157,7 @@ export const signalTrialTelemetrySchema = z
     tier: signalTrialTierSchema.optional(),
     difficulty: signalTrialDifficultySchema.optional(),
     profile: signalTrialProfileSchema.optional(),
+    controlMode: signalTrialControlModeSchema.optional(),
     state: coherenceStateSchema,
     coupling: couplingParamsSchema.optional(),
     sample: fieldSampleSchema.optional(),
@@ -132,6 +165,9 @@ export const signalTrialTelemetrySchema = z
     entropy: entropyMetricsSchema.optional(),
     derived: signalTrialDerivedSchema.optional(),
     observer: signalTrialResolutionObserverSchema.optional(),
+    stability: signalTrialStabilitySchema.optional(),
+    lyapunov: signalTrialLyapunovSchema.optional(),
+    fitJ: signalTrialFitJSchema.optional(),
     targetBand: signalTrialTargetBandSchema.optional(),
     gates: signalTrialGatesSchema.optional(),
     phase: signalTrialPhaseSchema.optional(),

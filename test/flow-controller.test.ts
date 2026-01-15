@@ -6,6 +6,7 @@ import {
   FLOW_DEFAULTS,
   type SessionFlowPolicy,
 } from "../../QWormhole/src/core/flow-controller";
+import { CoherenceController } from "../../QWormhole/src/core/CoherenceController";
 import { BatchFramer } from "../../QWormhole/src/core/batch-framer";
 import type { EntropyMetrics } from "../../QWormhole/src/handshake/entropy-policy";
 import { TokenBucket } from "../../QWormhole/src/core/qos";
@@ -478,5 +479,36 @@ describe("FlowController integration with BatchFramer", () => {
     });
     const diag = adaptiveController.getDiagnostics();
     expect(diag.adaptive?.mode).toBe("guarded");
+  });
+});
+
+describe("FlowController updateCoherenceControl", () => {
+  it("selects macro vs protect based on live jitter and reserve", () => {
+    const policy = createTestPolicy({ coherence: 0.9, burstBudgetBytes: 32 * 1024 });
+    const controller = new FlowController(policy);
+    const framer = new BatchFramer({ batchSize: 8, flushIntervalMs: 0 });
+    const coherence = new CoherenceController();
+    const setBatchTimingSpy = vi.spyOn(framer, "setBatchTiming");
+
+    const jitterSpy = vi
+      .spyOn(controller as any, "readEventLoopJitterMs")
+      .mockReturnValue(0);
+    const eluSpy = vi
+      .spyOn(controller as any, "readEventLoopUtilization")
+      .mockReturnValue(0.2);
+
+    framer.encodeToBatch(Buffer.alloc(1024));
+    controller.updateCoherenceControl(framer, coherence);
+
+    expect(setBatchTimingSpy).toHaveBeenLastCalledWith(expect.any(Number), 1);
+
+    jitterSpy.mockReturnValue(20);
+    eluSpy.mockReturnValue(0.95);
+    (controller as any).bucket.reserve(policy.burstBudgetBytes);
+    (coherence as any).lastMargin = 0;
+
+    controller.updateCoherenceControl(framer, coherence);
+
+    expect(setBatchTimingSpy).toHaveBeenLastCalledWith(expect.any(Number), 10);
   });
 });

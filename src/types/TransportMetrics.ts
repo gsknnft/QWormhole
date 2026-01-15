@@ -20,6 +20,7 @@ export interface TransportMetrics {
 
   // Event loop and GC
   eventLoopJitterMs: number; // Recent event loop jitter (ms, e.g. p95)
+  eventLoopUtilization?: number; // Event loop utilization (0..1)
   gcPauseMs: number; // Recent GC pause (ms, e.g. p95)
 
   // Reserve and margin

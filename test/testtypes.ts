@@ -10,6 +10,7 @@ import { KcpServer } from "../src/transports/kcp/kcp-server";
 import { KcpSession } from "../src/transports/kcp/kcp-session";
 import type { FlowControllerDiagnostics } from "../src/core/flow-controller";
 import type { BatchFramerStats } from "../src/core/batch-framer";
+import type { PriorityQueueStats } from "../src/core/qos";
 import type {
   FramingMode,
   NativeBackend,
@@ -47,6 +48,25 @@ type ScenarioResult = {
   msgsPerSec?: number;
   mbPerSec?: number;
   diagnostics?: ScenarioDiagnostics;
+  benchConfig?: {
+    effectiveRateBytesPerSec?: number;
+    flushCapBytes?: number;
+    flushCapBuffers?: number;
+    flushIntervalMs?: number;
+    adaptiveMode?: string;
+    macroBatchTargetBytes: number;
+    yieldEvery?: number;
+    flowFastPath: boolean;
+    payload: {
+      count: number;
+      minBytes: number;
+      maxBytes: number;
+      avgBytes: number;
+      types: string[];
+      framing: FramingMode;
+      frameHeaderBytes: number;
+    };
+  };
   kcpRttMs?: number;
   kcpLossRate?: number;
   kcpPending?: number;
@@ -72,6 +92,14 @@ type SendBlockStats = {
   avgMs: number;
   minMs: number;
   maxMs: number;
+};
+
+type MemorySummary = {
+  rss: number;
+  heapTotal: number;
+  heapUsed: number;
+  external: number;
+  arrayBuffers: number;
 };
 
 // --- Coherence Trace Types ---
@@ -114,6 +142,12 @@ type ScenarioDiagnostics = {
     maxBytes: number;
   };
   sendBlocks?: SendBlockStats;
+  heap?: {
+    start: MemorySummary;
+    end: MemorySummary;
+    peakHeapUsed: number;
+    peakRss: number;
+  };
   quic?: {
     jsToNativeCalls: number;
     callsPerSec: number;
@@ -123,6 +157,7 @@ type ScenarioDiagnostics = {
   flow?: FlowControllerDiagnostics;
   clientFlow?: FlowControllerDiagnostics;
   clientBatch?: BatchFramerStats;
+  clientQueue?: PriorityQueueStats;
   coherenceTrace?: CoherenceDecisionSample[];
 };
 
@@ -131,6 +166,7 @@ type DiagnosticsExtras = {
   flowDiagnostics?: FlowControllerDiagnostics;
   clientFlowDiagnostics?: FlowControllerDiagnostics;
   clientBatchStats?: BatchFramerStats;
+  clientQueueStats?: PriorityQueueStats;
 };
 
 type DiagnosticsScope = {
