@@ -131,16 +131,15 @@ export class CommitmentDetector {
           0,
           Math.min(1, this.resonance + (lastDelta < peakDelta * 0.5 ? 0.05 : -0.05)),
         );
+        if (lastDelta < peakDelta * 0.5) {
+          // Optionally, you could store resonance as a property and update here
+          // For demonstration, just log
+          this.resonance += 1; // If you track resonance as a property
+          // Or trigger some effect
+        } else {
+          this.resonance -= 1;
+        }
       }
-
-      // if (lastDelta < peakDelta * 0.5) {
-      //   // Optionally, you could store resonance as a property and update here
-      //   // For demonstration, just log
-      //   this.resonance += 1; // If you track resonance as a property
-      //   // Or trigger some effect
-      // } else {
-      //   this.resonance -= 1;
-      // }
     }
 
       this.event_trace = this.history.slice(-this.history_window).map(h => ({
