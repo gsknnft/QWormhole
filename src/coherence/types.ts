@@ -57,12 +57,72 @@ export interface CoherenceConfig {
   floors: Partial<CouplingParams>;
   ceilings: Partial<CouplingParams>;
 }
+export type Alignment = "stabilizing" | "destabilizing" | "neutral";
+export interface NboAttribution {
+  index: number;
+  weight: number;
+  epiplexity: number;
+  alignment: Alignment;
+}
+
+export interface NboResult {
+  origEnt: number;
+  origNeg: number;
+  scalar: {
+    finalEnt: number;
+    finalNeg: number;
+    epiplexity: number;
+    negentropicGain: number;
+    stableState: number;
+    basinWidthRaw: number;
+    basinWidthPenalty: number;
+  };
+  vector: {
+    finalEnt: number;
+    finalNeg: number;
+    epiplexity: number;
+    negentropicGain: number;
+    stableStateVector: number[];
+    epiplexityPerNode: number[];
+    epiplexityWeights: number[];
+  };
+  bounds: [number, number];
+  couplingStrength: number;
+}
+
+export interface NboSummary {
+  epiplexity: number;
+  negentropicGain: number;
+  stableState: number;
+  basinWidthRaw: number;
+  basinWidthPenalty: number;
+  topNodes: NboAttribution[];
+  bounds: [number, number];
+  couplingStrength: number;
+  signalLength: number;
+  updatedAt: number;
+  ageMs: number;
+}
+
+export interface NboOptions {
+  couplingStrength?: number;
+  bounds?: [number, number];
+  minProb?: number;
+  boundaryMargin?: number;
+  boundPenalty?: number;
+  ridge?: number;
+  coordSweeps?: number;
+  tol?: number;
+  maxIter?: number;
+  curvatureDelta?: number;
+}
 
 export interface CoherenceTelemetryEntry {
   t: number;
   state: CoherenceState;
   coupling: CouplingParams;
   sample?: FieldSample;
+  nbo?: NboSummary;
   note?: string;
 }
 

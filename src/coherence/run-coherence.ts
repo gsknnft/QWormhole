@@ -3,7 +3,20 @@ import { resolve } from "path";
 import { CoherenceLoop } from "./loop";
 import { CommitmentDetector } from "./commitment-detector";
 import { ResolutionDetector } from "./resolution";
-import type { CoherenceConfig, CoherenceState, CouplingParams, FieldSample } from "./types";
+import {
+  buildIdentityMatrix,
+  buildNboSignal,
+  nboVectorized,
+  normalizeTopologyRows,
+  summarizeNbo,
+} from "./nbo";
+import type {
+  CoherenceConfig,
+  CoherenceState,
+  CouplingParams,
+  FieldSample,
+  NboSummary,
+} from "./types";
 import { resolveLatencyVar } from "./latency";
 import {
   buildSamples,
@@ -222,6 +235,43 @@ const buildObserverConfig = (tickMs: number) => ({
   vScale: readNumber(process.env.SIGNAL_TRIAL_OBSERVER_V_SCALE, observerDefaults.vScale),
   dmDtScale: readNumber(process.env.SIGNAL_TRIAL_OBSERVER_DMDT_SCALE, observerDefaults.dmDtScale),
 });
+
+type NboConfig = {
+  enabled: boolean;
+  intervalMs: number;
+  windowSize: number;
+  topN: number;
+  normalizeTopology: boolean;
+};
+
+const nboDefaults: NboConfig = {
+  enabled: process.env.SIGNAL_TRIAL_NBO_ENABLED !== "0",
+  intervalMs: 1000,
+  windowSize: 12,
+  topN: 5,
+  normalizeTopology: false,
+};
+
+const buildNboConfig = (): NboConfig => {
+  const enabledRaw = process.env.SIGNAL_TRIAL_NBO_ENABLED;
+  const enabled =
+    enabledRaw === undefined ? nboDefaults.enabled : enabledRaw !== "0";
+  const intervalMs = Math.max(
+    200,
+    readNumber(process.env.SIGNAL_TRIAL_NBO_INTERVAL_MS, nboDefaults.intervalMs),
+  );
+  const windowSize = Math.max(
+    4,
+    Math.round(readNumber(process.env.SIGNAL_TRIAL_NBO_WINDOW, nboDefaults.windowSize)),
+  );
+  const topN = Math.max(
+    1,
+    Math.round(readNumber(process.env.SIGNAL_TRIAL_NBO_TOPN, nboDefaults.topN)),
+  );
+  const normalizeTopology =
+    process.env.SIGNAL_TRIAL_NBO_NORMALIZE === "1" || nboDefaults.normalizeTopology;
+  return { enabled, intervalMs, windowSize, topN, normalizeTopology };
+};
 
 const makeId = () => Math.random().toString(36).slice(2, 10);
 const makeSessionId = () => `ST-${Math.random().toString(36).slice(2, 8).toUpperCase()}`;
@@ -926,6 +976,7 @@ export function startSignalTrialBroadcast(options: SignalTrialBroadcastOptions =
   );
   const stabilityConfig = buildStabilityConfig();
   const observerConfig = buildObserverConfig(tickMs);
+  const nboConfig = buildNboConfig();
   const buildAdaptiveHold = (targetDifficulty: SignalTrialDifficulty) => {
     const gateScale = difficultyGateScale[targetDifficulty];
     return {
@@ -978,6 +1029,10 @@ export function startSignalTrialBroadcast(options: SignalTrialBroadcastOptions =
   let stabilityBuffer: Array<{ t: number; state: CoherenceState }> = [];
   let stabilitySummary: StabilitySummary | null = null;
   let stabilityTick = 0;
+  let nboSamples: FieldSample[] = [];
+  let lastNboAt = 0;
+  let lastNboSummary: NboSummary | undefined;
+  let nboWarned = false;
   let effects: Effect[] = [];
   let loadEffects: LoadEffect[] = [];
   let queueDepth = { current: baseSample.queueDepth };
@@ -1071,6 +1126,43 @@ export function startSignalTrialBroadcast(options: SignalTrialBroadcastOptions =
     };
   };
 
+  const recordNboSample = (now: number, sample: FieldSample) => {
+    if (!nboConfig.enabled) {
+      return;
+    }
+    nboSamples.push(sample);
+    if (nboSamples.length > nboConfig.windowSize) {
+      nboSamples.shift();
+    }
+    if (now - lastNboAt < nboConfig.intervalMs) {
+      return;
+    }
+    lastNboAt = now;
+    try {
+      const signal = buildNboSignal(nboSamples);
+      if (signal.length === 0) {
+        return;
+      }
+      const topologyBase = buildIdentityMatrix(signal.length);
+      const topology = nboConfig.normalizeTopology
+        ? normalizeTopologyRows(topologyBase)
+        : topologyBase;
+      const xVec = new Array<number>(signal.length).fill(0);
+      const result = nboVectorized(signal, topology, xVec, {});
+      lastNboSummary = summarizeNbo(result, nboConfig.topN, {
+        updatedAt: now,
+        ageMs: 0,
+      });
+      nboWarned = false;
+    } catch (error) {
+      if (!nboWarned) {
+        const message = error instanceof Error ? error.message : String(error);
+        console.warn(`[SignalTrial:NBO] failed to update summary: ${message}`);
+        nboWarned = true;
+      }
+    }
+  };
+
   const resetSession = () => {
     sessionId = makeSessionId();
     sessionStart = Date.now();
@@ -1081,6 +1173,10 @@ export function startSignalTrialBroadcast(options: SignalTrialBroadcastOptions =
     stabilityBuffer = [];
     stabilitySummary = null;
     stabilityTick = 0;
+    nboSamples = [];
+    lastNboAt = 0;
+    lastNboSummary = undefined;
+    nboWarned = false;
     effects = [];
     loadEffects = [];
     queueDepth = { current: baseSample.queueDepth };
@@ -1242,6 +1338,7 @@ export function startSignalTrialBroadcast(options: SignalTrialBroadcastOptions =
     lastSampleAt = now;
 
     loop.sense(sample);
+    recordNboSample(now, sample);
     const state = loop.estimate();
     if (controlMode === "closed_loop") {
       coupling = loop.adapt(state, coupling);
@@ -1350,6 +1447,13 @@ export function startSignalTrialBroadcast(options: SignalTrialBroadcastOptions =
     const holdMs = stableSince ? now - stableSince : 0;
     const quietMs = lastActionAt ? now - lastActionAt : 0;
 
+    const nboTelemetry = lastNboSummary
+      ? {
+          ...lastNboSummary,
+          ageMs: Math.max(0, now - lastNboSummary.updatedAt),
+        }
+      : undefined;
+
     const stabilityTelemetry = stabilitySummary
       ? {
           dotJ: stabilitySummary.dotJ,
@@ -1394,6 +1498,7 @@ export function startSignalTrialBroadcast(options: SignalTrialBroadcastOptions =
       sample,
       derived,
       observer: observerTelemetry,
+      nbo: nboTelemetry,
       stability: stabilityTelemetry,
       lyapunov: lyapunovTelemetry,
       fitJ: fitJTelemetry,

@@ -5,6 +5,7 @@ import type {
   CoherenceTelemetryEntry,
   CouplingParams,
   FieldSample,
+  NboSummary,
 } from "./types";
 import { clamp01, computeHorizonSec, isUnsafe } from "./invariants-lite";
 
@@ -77,13 +78,19 @@ export class CoherenceLoop {
     return next;
   }
 
-  emit(state: CoherenceState, coupling: CouplingParams, sample?: FieldSample): void {
+  emit(
+    state: CoherenceState,
+    coupling: CouplingParams,
+    sample?: FieldSample,
+    nbo?: NboSummary,
+  ): void {
     if (!this.deps.emit) return;
     const entry: CoherenceTelemetryEntry = {
       t: sample?.t ?? Date.now(),
       state,
       coupling,
       sample,
+      nbo,
     };
     this.deps.emit(entry);
   }
@@ -91,13 +98,14 @@ export class CoherenceLoop {
   step(
     current: CouplingParams,
     sample?: FieldSample,
+    nbo?: NboSummary,
   ): { state: CoherenceState; next: CouplingParams; sample?: FieldSample } {
     const usedSample = sample ?? this.sample() ?? this.history.at(-1);
     if (sample) this.sense(sample);
     const state = this.estimate();
     const next = this.adapt(state, current);
     if (usedSample) {
-      this.emit(state, next, usedSample);
+      this.emit(state, next, usedSample, nbo);
     }
     return { state, next, sample: usedSample };
   }

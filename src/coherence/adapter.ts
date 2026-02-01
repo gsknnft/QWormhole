@@ -1,14 +1,38 @@
-import type { BatchFramer } from "../core/batch-framer";
-import type { FlowController } from "../core/flow-controller";
 import { clamp01, isUnsafe } from "./invariants";
 import { resolveLatencyVar } from "./latency";
 import { CoherenceLoop } from "./loop";
+import {
+  buildIdentityMatrix,
+  buildNboSignal,
+  nboVectorized,
+  normalizeTopologyRows,
+  summarizeNbo,
+} from "./nbo";
 import type {
   CoherenceConfig,
   CouplingParams,
   FieldSample,
   CoherenceMode,
+  CoherenceTelemetryEntry,
+  NboOptions,
+  NboSummary,
 } from "./types";
+import { BatchFramer } from "../core/batch-framer";
+import { FlowController } from "../core/flow-controller";
+
+export interface NboAdapterOptions extends NboOptions {
+  enabled?: boolean;
+  intervalMs?: number;
+  windowSize?: number;
+  topN?: number;
+  signalBuilder?: (samples: FieldSample[]) => number[];
+  topologyBuilder?: (size: number) => number[][];
+  topologyMatrix?: number[][];
+  normalizeTopology?: boolean;
+  topologyNormalizer?: (matrix: number[][]) => number[][];
+  xVecBuilder?: (size: number, signal: number[]) => number[];
+  xVec?: number[];
+}
 
 export interface CoherenceAdapterOptions {
   enabled?: boolean;
@@ -18,6 +42,8 @@ export interface CoherenceAdapterOptions {
   rttSampler?: () => number | undefined;
   eluSampler?: () => number | undefined;
   minUpdateMs?: number;
+  emit?: (entry: CoherenceTelemetryEntry) => void;
+  nbo?: NboAdapterOptions;
 }
 
 export interface CoherenceAdapterHandle {
@@ -38,7 +64,11 @@ export function attachCoherenceAdapter(
   options: CoherenceAdapterOptions = {},
 ): CoherenceAdapterHandle {
   const config = options.config ?? DEFAULT_COHERENCE_CONFIG;
-  const loop = new CoherenceLoop(config);
+  const loop = new CoherenceLoop(
+    config,
+    undefined,
+    options.emit ? { emit: options.emit } : undefined,
+  );
   const mode = options.mode ?? "enforce";
   const applyExternalSlice = (size?: number) => {
     const controller = flow as FlowController & {
@@ -61,6 +91,13 @@ export function attachCoherenceAdapter(
   let lastUpdateAt = lastFlushAt;
   let lastBytesPerFlush = 0;
   let backpressureCount = 0;
+  const nboConfig = options.nbo;
+  const nboEnabled = !!options.emit && (nboConfig?.enabled ?? false);
+  const nboIntervalMs = Math.max(200, nboConfig?.intervalMs ?? 1000);
+  const nboWindowSize = Math.max(4, nboConfig?.windowSize ?? 12);
+  const nboSamples: FieldSample[] = [];
+  let lastNboAt = 0;
+  let lastNboSummary: NboSummary | undefined;
 
   const onBackpressure = () => {
     backpressureCount += 1;
@@ -96,7 +133,7 @@ export function attachCoherenceAdapter(
     const pendingBytes = framer.pendingBatchBytes;
     const dtSec = Math.max(0.05, flushIntervalMs / 1000);
     const deltaBytes = bytesPerFlush - lastBytesPerFlush;
-    const queueSlope = (deltaBytes / dtSec) / 1024;
+    const queueSlope = deltaBytes / dtSec / 1024;
     lastBytesPerFlush = bytesPerFlush;
 
     const rttMs = options.rttSampler?.();
@@ -113,9 +150,7 @@ export function attachCoherenceAdapter(
     const errRate = clamp01(backpressureCount / 8);
     const corrBase = backpressureCount > 0 ? backpressureCount / 8 : 0;
     const corrSpike =
-      corrBase + eluPressure > 0
-        ? clamp01(corrBase + eluPressure)
-        : undefined;
+      corrBase + eluPressure > 0 ? clamp01(corrBase + eluPressure) : undefined;
     backpressureCount = 0;
 
     const queueDepthBytes = Math.max(bytesPerFlush, pendingBytes);
@@ -137,6 +172,44 @@ export function attachCoherenceAdapter(
     };
 
     loop.sense(sample);
+
+    if (nboEnabled) {
+      nboSamples.push(sample);
+      if (nboSamples.length > nboWindowSize) {
+        nboSamples.shift();
+      }
+      if (now - lastNboAt >= nboIntervalMs && nboSamples.length > 0) {
+        lastNboAt = now;
+        try {
+          const signal =
+            nboConfig?.signalBuilder?.(nboSamples) ?? buildNboSignal(nboSamples);
+          if (signal.length > 0) {
+            const topologyBase =
+              nboConfig?.topologyMatrix ??
+              nboConfig?.topologyBuilder?.(signal.length) ??
+              buildIdentityMatrix(signal.length);
+            const topology =
+              nboConfig?.topologyNormalizer
+                ? nboConfig.topologyNormalizer(topologyBase)
+                : nboConfig?.normalizeTopology
+                  ? normalizeTopologyRows(topologyBase)
+                  : topologyBase;
+            const xVec =
+              nboConfig?.xVec ??
+              nboConfig?.xVecBuilder?.(signal.length, signal) ??
+              new Array<number>(signal.length).fill(0);
+            const result = nboVectorized(signal, topology, xVec, nboConfig ?? {});
+            lastNboSummary = summarizeNbo(result, nboConfig?.topN ?? 5, {
+              updatedAt: now,
+              ageMs: 0,
+            });
+          }
+        } catch {
+          // Ignore NBO failures to avoid impacting the core loop.
+        }
+      }
+    }
+
     const state = loop.estimate();
     const gcPressure =
       adaptive?.gcPauseMaxMs && adaptive.gcPauseMaxMs > 8
@@ -147,28 +220,48 @@ export function attachCoherenceAdapter(
       corrSpike !== undefined ||
       queueSlope > 0 ||
       gcPressure > 0;
+    const nextCoupling = pressureActive ? loop.adapt(state, coupling) : coupling;
+    const nboSummary = lastNboSummary
+      ? {
+          ...lastNboSummary,
+          ageMs: Math.max(0, now - lastNboSummary.updatedAt),
+        }
+      : undefined;
+    const emitTelemetry = (couplingToEmit: CouplingParams) => {
+      if (!options.emit) return;
+      loop.emit(state, couplingToEmit, sample, nboSummary);
+    };
 
     if (!pressureActive) {
       if (overrideActive) {
         applyExternalSlice(undefined);
         overrideActive = false;
       }
+      coupling = {
+        ...coupling,
+        batchSize: flow.currentSliceSize,
+        concurrency: Math.max(1, Math.round(flow.currentSliceSize / 4)),
+      };
+      emitTelemetry(coupling);
       return;
     }
 
-    coupling = loop.adapt(state, coupling);
+    coupling = nextCoupling;
     if (mode === "observe") {
+      emitTelemetry(coupling);
       return;
     }
     if (isUnsafe(state, config.Hmin)) {
       applyExternalSlice(coupling.batchSize);
       overrideActive = true;
+      emitTelemetry(coupling);
       return;
     }
     if (overrideActive) {
       applyExternalSlice(undefined);
       overrideActive = false;
     }
+    emitTelemetry(coupling);
   };
 
   flow.on("backpressure", onBackpressure);

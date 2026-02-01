@@ -113,6 +113,33 @@ export const signalTrialResolutionObserverSchema = z.object({
   v: z.number(),
 });
 
+export const signalTrialNboAlignmentSchema = z.enum([
+  "stabilizing",
+  "destabilizing",
+  "neutral",
+]);
+
+export const signalTrialNboAttributionSchema = z.object({
+  index: z.number().int().nonnegative(),
+  weight: z.number(),
+  epiplexity: z.number(),
+  alignment: signalTrialNboAlignmentSchema,
+});
+
+export const signalTrialNboSummarySchema = z.object({
+  epiplexity: z.number(),
+  negentropicGain: z.number(),
+  stableState: z.number(),
+  basinWidthRaw: z.number(),
+  basinWidthPenalty: z.number(),
+  topNodes: z.array(signalTrialNboAttributionSchema),
+  bounds: z.tuple([z.number(), z.number()]),
+  couplingStrength: z.number(),
+  signalLength: z.number().int().nonnegative(),
+  updatedAt: z.number().int().nonnegative(),
+  ageMs: z.number().int().nonnegative(),
+});
+
 export const signalTrialPhaseSchema = z.enum([
   "approaching",
   "tracking",
@@ -165,6 +192,7 @@ export const signalTrialTelemetrySchema = z
     entropy: entropyMetricsSchema.optional(),
     derived: signalTrialDerivedSchema.optional(),
     observer: signalTrialResolutionObserverSchema.optional(),
+    nbo: signalTrialNboSummarySchema.optional(),
     stability: signalTrialStabilitySchema.optional(),
     lyapunov: signalTrialLyapunovSchema.optional(),
     fitJ: signalTrialFitJSchema.optional(),
@@ -258,6 +286,7 @@ export type SignalTrialResolution = z.infer<typeof signalTrialResolutionSchema>;
 export type SignalTrialResolutionAttempt = z.infer<
   typeof signalTrialResolutionAttemptSchema
 >;
+export type SignalTrialNboSummary = z.infer<typeof signalTrialNboSummarySchema>;
 export type SignalTrialProfile = z.infer<typeof signalTrialProfileSchema>;
 export type SignalTrialPhase = z.infer<typeof signalTrialPhaseSchema>;
 export type SignalTrialTargetBand = z.infer<typeof signalTrialTargetBandSchema>;
