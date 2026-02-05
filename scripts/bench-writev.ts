@@ -68,6 +68,11 @@ const TIMEOUT_MS = numberFlag({
   env: "QW_WRITEV_TIMEOUT",
   defaultValue: 10_000,
 });
+const CONNECT_TIMEOUT_MS = numberFlag({
+  name: "connectTimeout",
+  env: "QW_WRITEV_CONNECT_TIMEOUT",
+  defaultValue: 5_000,
+});
 const BATCH_SIZE = numberFlag({
   name: "batch",
   env: "QW_WRITEV_BATCH",
@@ -117,6 +122,11 @@ const ROLLING_WINDOW = numberFlag({
   defaultValue: 400,
 });
 const CSV_PATH = stringFlag("csv", "QW_WRITEV_CSV");
+const HARD_EXIT_MS = numberFlag({
+  name: "hardExit",
+  env: "QW_WRITEV_HARD_EXIT",
+  defaultValue: 5_000,
+});
 
 type FlushSamples = {
   buffers: number[];
@@ -223,6 +233,7 @@ async function mainBenchWritev(): Promise<void> {
     port: (await server.listen()).port,
     framing: "length-prefixed",
     entropyMetrics: { negIndex: 0.9 }, // bias towards macro batching
+    connectTimeoutMs: CONNECT_TIMEOUT_MS,
   });
 
   const applyFramerConfig = (): void => {
@@ -474,10 +485,21 @@ async function mainBenchWritev(): Promise<void> {
   }
 }
 
-void mainBenchWritev().catch(err => {
-  console.error(err);
-  process.exitCode = 1;
-});
+const scheduleHardExit = (code: number): void => {
+  if (HARD_EXIT_MS <= 0) return;
+  const timer = setTimeout(() => {
+    process.exit(code);
+  }, HARD_EXIT_MS);
+  timer.unref?.();
+};
+
+void mainBenchWritev()
+  .then(() => scheduleHardExit(0))
+  .catch(err => {
+    console.error(err);
+    process.exitCode = 1;
+    scheduleHardExit(1);
+  });
 
 
 export { mainBenchWritev };

@@ -14,7 +14,8 @@ const logNative = (msg: string) => {
   }
 };
 
-const requireFn = typeof require === "function" ? require : createRequire(__filename);
+const requireFn =
+  typeof require === "function" ? require : createRequire(__filename);
 const bindingModuleRoot = path.resolve(__dirname, "..", "..");
 const envBindingPath = process.env.QWORMHOLE_NATIVE_PATH;
 
@@ -39,15 +40,24 @@ type NativeBindingClient = {
   send(data: string | Buffer): void;
   recv(length?: number): Buffer;
   isConnected?(): boolean;
-  setEventHandler?(handler: (evt: { type: string; data?: Buffer; error?: string; hadError?: boolean }) => void): void;
-  getTlsInfo?(): {
-    alpnProtocol?: string;
-    protocol?: string;
-    cipher?: string;
-    authorized?: boolean;
-    peerFingerprint?: string;
-    peerFingerprint256?: string;
-  };
+  setEventHandler?(
+    handler: (evt: {
+      type: string;
+      data?: Buffer;
+      error?: string;
+      hadError?: boolean;
+    }) => void,
+  ): void;
+  getTlsInfo?():
+    | {
+        alpnProtocol?: string;
+        protocol?: string;
+        cipher?: string;
+        authorized?: boolean;
+        peerFingerprint?: string;
+        peerFingerprint256?: string;
+      }
+    | undefined;
   exportKeyingMaterial?(
     length: number,
     label: string,
@@ -84,7 +94,9 @@ const tryLoadBindingPath = (targetPath: string): NativeModule | null => {
     logNative(`successfully loaded binding path "${targetPath}"`);
     return mod;
   } catch (err) {
-    logNative(`binding path "${targetPath}" not found: ${(err as Error).message}`);
+    logNative(
+      `binding path "${targetPath}" not found: ${(err as Error).message}`,
+    );
     return null;
   }
 };
@@ -146,7 +158,10 @@ const ensureNativeBinding = (
   preferred?: NativeBackend,
 ): LoadedBinding | null => {
   if (nativeDisabled()) return null;
-  if (nativeBinding === undefined || (preferred && nativeBinding?.kind !== preferred)) {
+  if (
+    nativeBinding === undefined ||
+    (preferred && nativeBinding?.kind !== preferred)
+  ) {
     nativeBinding = loadNative(preferred);
   }
   return nativeBinding ?? null;
@@ -242,7 +257,12 @@ export class NativeTcpClient implements NativeBindingClient {
   }
 
   setEventHandler(
-    handler: (evt: { type: string; data?: Buffer; error?: string; hadError?: boolean }) => void,
+    handler: (evt: {
+      type: string;
+      data?: Buffer;
+      error?: string;
+      hadError?: boolean;
+    }) => void,
   ): void {
     if (typeof this.impl.setEventHandler === "function") {
       this.impl.setEventHandler(handler);

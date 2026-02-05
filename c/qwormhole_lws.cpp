@@ -1340,7 +1340,7 @@ Napi::Value LwsClientWrapper::ExportKeyingMaterial(const Napi::CallbackInfo& inf
     }
   }
 
-  auto maybe = ExportKeyingMaterial(wsi_, opts);
+  auto maybe = ::ExportKeyingMaterial(wsi_, opts);
   if (!maybe.has_value()) return env.Undefined();
   const auto& material = *maybe;
   return Napi::Buffer<uint8_t>::Copy(env, material.data(), material.size());
@@ -1638,7 +1638,7 @@ void AttachHandshakeMetadataToClient(
       tls.Set("protocol", Napi::String::New(env, tlsInfo->protocol));
     }
     if (conn->tls_export.enabled) {
-      auto material = ExportKeyingMaterial(conn->wsi, conn->tls_export);
+      auto material = ::ExportKeyingMaterial(conn->wsi, conn->tls_export);
       if (material.has_value()) {
         std::string b64;
         if (meta.has_neghash && !meta.neghash.empty()) {

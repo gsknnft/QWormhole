@@ -15,7 +15,11 @@ export type Payload = string | Buffer | Uint8Array | Record<string, unknown>;
 export type Serializer = (payload: Payload) => Buffer;
 export type Deserializer<TMessage = unknown> = (data: Buffer) => TMessage;
 
-export type FramingMode = "length-prefixed" | "kcp-arq" | "quic-stream" | "none";
+export type FramingMode =
+  | "length-prefixed"
+  | "kcp-arq"
+  | "quic-stream"
+  | "none";
 export type TransportMode = "ts" | "native-lws" | "native-libsocket";
 export type NativeBackend = "lws" | "libsocket";
 
@@ -45,17 +49,17 @@ type QWEnvelopeBase = {
 };
 
 export type QWEnvelope =
-  | QWEnvelopeBase & {
+  | (QWEnvelopeBase & {
       kind: "request";
       req: QWormholeRequest;
       body?: Uint8Array;
-    }
-  | QWEnvelopeBase & {  
+    })
+  | (QWEnvelopeBase & {
       kind: "response";
       status: QWormholeResponse;
       body?: Uint8Array;
       error?: string;
-    };
+    });
 
 export type QRequest<P = unknown> = QWEnvelopeBase & {
   method: string;
@@ -128,15 +132,21 @@ export interface QWormholeSocketLike {
   once?(event: string, cb: (...args: any[]) => void): this;
   off?(event: string, cb: (...args: any[]) => void): this;
   getPeerCertificate?(detailed?: boolean): unknown;
-  getTlsInfo?: () => {
-    alpnProtocol?: string;
-    protocol?: string;
-    cipher?: string;
-    authorized?: boolean;
-    peerFingerprint?: string;
-    peerFingerprint256?: string;
-  };
-  exportKeyingMaterial?(length: number, label: string, context?: Buffer): Buffer;
+  getTlsInfo?: () =>
+    | {
+        alpnProtocol?: string;
+        protocol?: string;
+        cipher?: string;
+        authorized?: boolean;
+        peerFingerprint?: string;
+        peerFingerprint256?: string;
+      }
+    | undefined;
+  exportKeyingMaterial?(
+    length: number,
+    label: string,
+    context?: Buffer,
+  ): Buffer | undefined;
   alpnProtocol?: string;
 }
 
@@ -150,14 +160,16 @@ export interface NativeTcpClient {
   recv(maxBytes?: number): Buffer; // drains from the recv ring buffer; empty Buffer if none
   isConnected?(): boolean;
   supportsEventStream?(): boolean;
-  getTlsInfo?(): {
-    alpnProtocol?: string;
-    protocol?: string;
-    cipher?: string;
-    authorized?: boolean;
-    peerFingerprint?: string;
-    peerFingerprint256?: string;
-  };
+  getTlsInfo?():
+    | {
+        alpnProtocol?: string;
+        protocol?: string;
+        cipher?: string;
+        authorized?: boolean;
+        peerFingerprint?: string;
+        peerFingerprint256?: string;
+      }
+    | undefined;
   exportKeyingMaterial?(
     length: number,
     label: string,

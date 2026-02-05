@@ -55,7 +55,12 @@ type InternalOptions<TMessage> = Omit<
   coherence?: CoherenceAdapterOptions;
 };
 
-type TrustSnapshotReason = "close" | "error" | "disconnect" | "entropy-related" | "handshake";
+type TrustSnapshotReason =
+  | "close"
+  | "error"
+  | "disconnect"
+  | "entropy-related"
+  | "handshake";
 
 export class QWormholeClient<TMessage = Buffer> extends TypedEventEmitter<
   QWormholeClientEvents<TMessage>
@@ -106,11 +111,13 @@ export class QWormholeClient<TMessage = Buffer> extends TypedEventEmitter<
         });
         const tuneFramer = () => {
           if (!this.outboundFramer || !this.flowController) return;
-        const batchSize = this.flowController.resolveBatchSize(this.peerIsNative);
-        const caps = this.flowController.resolveFramerCaps(this.peerIsNative);
-        this.outboundFramer.setBatchTiming(batchSize, caps.flushMs);
-        this.outboundFramer.setFlushCaps(caps.maxBuffers, caps.maxBytes);
-      };
+          const batchSize = this.flowController.resolveBatchSize(
+            this.peerIsNative,
+          );
+          const caps = this.flowController.resolveFramerCaps(this.peerIsNative);
+          this.outboundFramer.setBatchTiming(batchSize, caps.flushMs);
+          this.outboundFramer.setFlushCaps(caps.maxBuffers, caps.maxBytes);
+        };
         this.outboundFramer.on("backpressure", ({ queuedBytes }) => {
           this.flowController?.onBackpressure(queuedBytes);
           tuneFramer();
@@ -284,9 +291,13 @@ export class QWormholeClient<TMessage = Buffer> extends TypedEventEmitter<
 
       if (this.options.socketFactory) {
         try {
-          const maybePromise = (socket as QWormholeSocketLike & { connect?: () => unknown })
-            .connect?.();
-          if (maybePromise && typeof (maybePromise as Promise<void>).then === "function") {
+          const maybePromise = (
+            socket as QWormholeSocketLike & { connect?: () => unknown }
+          ).connect?.();
+          if (
+            maybePromise &&
+            typeof (maybePromise as Promise<void>).then === "function"
+          ) {
             (maybePromise as Promise<void>).then(onConnect).catch(err => {
               if (!settled) {
                 settled = true;
@@ -710,6 +721,7 @@ export class QWormholeClient<TMessage = Buffer> extends TypedEventEmitter<
       this.options.tls.exportKeyingMaterial.context ?? Buffer.alloc(0);
     try {
       const material = socket.exportKeyingMaterial(length, label, context);
+      if (!material) return undefined;
       return material.toString("base64");
     } catch {
       return undefined;
