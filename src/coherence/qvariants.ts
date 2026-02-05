@@ -1,5 +1,5 @@
 import { QuantumSignalSuite } from "@sigilnet/qfield";
-import type { QuantumFieldState, SignalVector } from "types";
+import { QuantumFieldState, SignalVector } from "../../../../src/types/types";
 
     export async function processAndLogSignal(signal: number[]): Promise<SignalVector> {
       const qss = new QuantumSignalSuite();

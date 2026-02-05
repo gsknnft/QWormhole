@@ -38,12 +38,16 @@ describe("NativeTcpClient coverage", () => {
   });
 
   it("prefers libwebsockets binding when available", async () => {
-    const bindingsMock = vi.fn((name: string) => {
-      if (name === "qwormhole_lws") {
-        return { TcpClientWrapper: MockTcpClientWrapper };
-      }
-      throw new Error("not found");
-    });
+    const bindingsMock = vi.fn(
+      (nameOrOpts: string | { bindings: string }) => {
+        const name =
+          typeof nameOrOpts === "string" ? nameOrOpts : nameOrOpts.bindings;
+        if (name === "qwormhole_lws") {
+          return { TcpClientWrapper: MockTcpClientWrapper };
+        }
+        throw new Error("not found");
+      },
+    );
     vi.stubGlobal("bindings", bindingsMock);
     const { NativeTcpClient, getNativeBackend } =
       await import("../src/core/NativeTCPClient");
@@ -62,12 +66,16 @@ describe("NativeTcpClient coverage", () => {
   });
 
   it("falls back to libsocket binding if LWS is unavailable", async () => {
-    const bindingsMock = vi.fn((name: string) => {
-      if (name === "qwormhole") {
-        return { TcpClientWrapper: MockTcpClientWrapper };
-      }
-      throw new Error("not found");
-    });
+    const bindingsMock = vi.fn(
+      (nameOrOpts: string | { bindings: string }) => {
+        const name =
+          typeof nameOrOpts === "string" ? nameOrOpts : nameOrOpts.bindings;
+        if (name === "qwormhole") {
+          return { TcpClientWrapper: MockTcpClientWrapper };
+        }
+        throw new Error("not found");
+      },
+    );
     vi.stubGlobal("bindings", bindingsMock);
     const { NativeTcpClient, getNativeBackend } =
       await import("../src/core/NativeTCPClient");
@@ -77,12 +85,16 @@ describe("NativeTcpClient coverage", () => {
   });
 
   it("connect accepts options object for LWS backend", async () => {
-    const bindingsMock = vi.fn((name: string) => {
-      if (name === "qwormhole_lws") {
-        return { TcpClientWrapper: MockTcpClientWrapper };
-      }
-      throw new Error("not found");
-    });
+    const bindingsMock = vi.fn(
+      (nameOrOpts: string | { bindings: string }) => {
+        const name =
+          typeof nameOrOpts === "string" ? nameOrOpts : nameOrOpts.bindings;
+        if (name === "qwormhole_lws") {
+          return { TcpClientWrapper: MockTcpClientWrapper };
+        }
+        throw new Error("not found");
+      },
+    );
     vi.stubGlobal("bindings", bindingsMock);
     const { NativeTcpClient } = await import("../src/core/NativeTCPClient");
     const client = new NativeTcpClient();

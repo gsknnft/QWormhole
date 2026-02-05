@@ -6,6 +6,7 @@ export * from "./commitment-detector";
 export * from "./field-stability";
 export * from "./invariants";
 export * from "./loop";
+export * from "./ncf";
 export * from "./resolution";
 export * from "./run-coherence";
 export * from "./sim";

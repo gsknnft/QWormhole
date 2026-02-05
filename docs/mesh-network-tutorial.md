@@ -2,6 +2,8 @@
 
 This guide demonstrates how to build mesh networks using QWormhole with WireGuard integration.
 
+**Status (2026-02-05):** WireGuard integration patterns are documented here but have not been fully validated end-to-end in this repo. Treat this guide as a starting point and validate in your environment.
+
 ## Table of Contents
 
 - [Overview](#overview)

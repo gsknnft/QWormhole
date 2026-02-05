@@ -5,6 +5,7 @@ import {
   isNativeAvailable,
   NativeTcpClient,
 } from "./NativeTCPClient";
+import { NativeSocketAdapter } from "./native-socket";
 import {
   getNativeServerBackend,
   isNativeServerAvailable,
@@ -27,6 +28,8 @@ export interface CreateClientOptions<
   preferNative?: boolean;
   forceTs?: boolean;
   detectNative?: boolean;
+  nativeRaw?: boolean;
+  nativePollIntervalMs?: number;
 }
 
 export interface CreateClientResult<TMessage> {
@@ -42,14 +45,39 @@ export interface CreateClientResult<TMessage> {
 export function createQWormholeClient<TMessage = Buffer>(
   options: CreateClientOptions<TMessage>,
 ): CreateClientResult<TMessage> {
-  const detectNative = options.detectNative !== false;
-  const backend = detectNative ? getNativeBackend() : null;
-  const nativeReady = detectNative ? isNativeAvailable() : false;
+  const {
+    preferNative,
+    forceTs,
+    detectNative,
+    nativeRaw,
+    nativePollIntervalMs,
+    ...clientOptions
+  } = options;
+  const useDetectNative = detectNative !== false;
+  const backend = useDetectNative ? getNativeBackend() : null;
+  const nativeReady = useDetectNative ? isNativeAvailable() : false;
 
-  if (!options.forceTs && options.preferNative && nativeReady && backend) {
+  if (!forceTs && preferNative && nativeReady && backend) {
     const resolvedBackend = backend ?? "lws";
+    if (nativeRaw) {
+      return {
+        client: new NativeTcpClient(resolvedBackend),
+        mode: resolvedBackend === "lws" ? "native-lws" : "native-libsocket",
+        nativeAvailable: true,
+        nativeBackend: resolvedBackend,
+      };
+    }
     return {
-      client: new NativeTcpClient(resolvedBackend),
+      client: new QWormholeClient<TMessage>({
+        ...clientOptions,
+        peerIsNative: true,
+        socketFactory: socketOpts =>
+          new NativeSocketAdapter({
+            ...socketOpts,
+            preferredBackend: resolvedBackend,
+            pollIntervalMs: nativePollIntervalMs,
+          }),
+      }),
       mode: resolvedBackend === "lws" ? "native-lws" : "native-libsocket",
       nativeAvailable: true,
       nativeBackend: resolvedBackend,
@@ -58,7 +86,7 @@ export function createQWormholeClient<TMessage = Buffer>(
 
   // Always fall back to TS if native is unavailable or forceTs is set
   return {
-    client: new QWormholeClient<TMessage>(options),
+    client: new QWormholeClient<TMessage>(clientOptions),
     mode: "ts",
     nativeAvailable: nativeReady,
     nativeBackend: backend,

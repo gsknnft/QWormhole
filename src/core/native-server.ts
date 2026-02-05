@@ -1,9 +1,15 @@
 import bindings from "bindings";
 import type net from "node:net";
 import path from "node:path";
+import { createRequire } from "node:module";
 import { defaultSerializer, bufferDeserializer } from "./codecs";
 import { QWormholeError } from "../utils/errors";
 import { TypedEventEmitter } from "../utils/typedEmitter";
+import {
+  computeEntropyMetrics,
+  deriveEntropyPolicy,
+  type EntropyMetrics,
+} from "../handshake/entropy-policy";
 import type {
   Deserializer,
   NativeBackend,
@@ -28,17 +34,26 @@ const parsePreferredBackend = (raw?: string): NativeBackend | undefined => {
   return undefined;
 };
 
+const requireFn = typeof require === "function" ? require : createRequire(__filename);
+const envBindingPath = process.env.QWORMHOLE_NATIVE_PATH;
+
 const DEFAULT_NATIVE_SERVER_BACKEND =
   parsePreferredBackend(process.env.QWORMHOLE_NATIVE_SERVER_PREFERRED) ??
   parsePreferredBackend(process.env.QWORMHOLE_NATIVE_PREFERRED) ??
   (process.platform === "linux" ? "libsocket" : undefined);
 
-const nativeDisabled = () => process.env.QWORMHOLE_DISABLE_NATIVE === "1";
+const nativeDisabled = () => {
+  const legacy = process.env.QWORMHOLE_NATIVE;
+  if (legacy === "0") return true;
+  if (legacy === "1") return false;
+  return process.env.QWORMHOLE_DISABLE_NATIVE === "1";
+};
 
 type NativeServerHandle = NodeJS.EventEmitter & {
   listen(): Promise<net.AddressInfo>;
   close(): Promise<void>;
   broadcast(payload: Payload): void;
+  sendTo?(id: string, payload: Payload): void;
   shutdown?(gracefulMs?: number): Promise<void>;
   getConnection?(id: string): QWormholeServerConnection | undefined;
   getConnectionCount?(): number;
@@ -70,6 +85,7 @@ type InternalServerOptions<TMessage> = {
   serializer: Serializer;
   deserializer: Deserializer<TMessage>;
   verifyHandshake?: QWormholeServerOptions<TMessage>["verifyHandshake"];
+  maxBackpressureBytes?: number;
 };
 
 type NativeConnectionState = {
@@ -104,6 +120,30 @@ type BindingLoader = (
   target: string | { module_root: string; bindings: string },
 ) => unknown;
 
+const tryLoadBindingPath = <TMessage>(
+  targetPath: string,
+): NativeServerModule<TMessage> | null => {
+  try {
+    logNativeServer(`attempting to load server binding path "${targetPath}"`);
+    const mod = requireFn(targetPath) as NativeServerModule<TMessage>;
+    if (!mod?.QWormholeServerWrapper) {
+      logNativeServer(
+        `server binding path "${targetPath}" missing QWormholeServerWrapper export`,
+      );
+      return null;
+    }
+    logNativeServer(
+      `successfully loaded server binding path "${targetPath}"`,
+    );
+    return mod;
+  } catch (err) {
+    logNativeServer(
+      `server binding path "${targetPath}" not found: ${(err as Error).message}`,
+    );
+    return null;
+  }
+};
+
 const tryLoadBinding = <TMessage>(
   name: string,
 ): NativeServerModule<TMessage> | null => {
@@ -135,6 +175,15 @@ const loadServerBackend = <TMessage>(
 ): LoadedServerBinding<TMessage> | null => {
   const bindingName = kind === "lws" ? "qwormhole_lws" : "qwormhole";
   logNativeServer(`trying server backend: ${kind} (${bindingName})`);
+  if (envBindingPath) {
+    const mod = tryLoadBindingPath<TMessage>(envBindingPath);
+    if (mod?.QWormholeServerWrapper) {
+      logNativeServer(
+        `loaded native server backend "${kind}" from ${envBindingPath}`,
+      );
+      return { kind, module: mod };
+    }
+  }
   const module = tryLoadBinding<TMessage>(bindingName);
   if (module?.QWormholeServerWrapper) {
     logNativeServer(
@@ -261,6 +310,7 @@ export class NativeQWormholeServer<TMessage = Buffer> extends TypedEventEmitter<
       serializer: options.serializer ?? defaultSerializer,
       deserializer,
       verifyHandshake: options.verifyHandshake,
+      maxBackpressureBytes: options.maxBackpressureBytes,
     };
   }
 
@@ -336,15 +386,35 @@ export class NativeQWormholeServer<TMessage = Buffer> extends TypedEventEmitter<
         "Native backend does not support per-connection send yet",
       );
     };
+    const send: QWormholeServerConnection["send"] = async payload => {
+      const state = this.connections.get(snapshot.id);
+      if (
+        state?.managed.backpressured &&
+        this.options.maxBackpressureBytes !== undefined
+      ) {
+        throw new QWormholeError(
+          "E_BACKPRESSURE",
+          "Backpressure limit exceeded",
+        );
+      }
+      if (typeof this.impl.sendTo === "function") {
+        const serialized = this.options.serializer(payload);
+        this.impl.sendTo(snapshot.id, serialized);
+        return;
+      }
+      return sendNotSupported();
+    };
+
+    const handshake = this.normalizeHandshake(snapshot.handshake);
 
     return {
       id: snapshot.id,
       remoteAddress: snapshot.remoteAddress,
       remotePort: snapshot.remotePort,
-      handshake: snapshot.handshake,
+      handshake,
       backpressured: false,
       socket: {} as net.Socket,
-      send: sendNotSupported,
+      send,
       end: close,
       destroy: close,
     } as QWormholeServerConnection;
@@ -381,7 +451,11 @@ export class NativeQWormholeServer<TMessage = Buffer> extends TypedEventEmitter<
       return;
     }
     try {
-      const result = await verifier(handshake ?? {});
+      const normalized = this.normalizeHandshake(handshake);
+      const payload = normalized
+        ? ({ type: "handshake", ...normalized } as unknown)
+        : ({ type: "handshake" } as unknown);
+      const result = await verifier(payload);
       if (!result) {
         this.rejectConnection(
           state,
@@ -437,6 +511,7 @@ export class NativeQWormholeServer<TMessage = Buffer> extends TypedEventEmitter<
       : undefined;
     if (!state) return;
     if (event === "backpressure") {
+      state.managed.backpressured = true;
       this.emit(event, {
         client: state.managed,
         queuedBytes: payload.queuedBytes ?? 0,
@@ -444,7 +519,23 @@ export class NativeQWormholeServer<TMessage = Buffer> extends TypedEventEmitter<
       } as never);
       return;
     }
+    state.managed.backpressured = false;
     this.emit(event, { client: state.managed } as never);
+  }
+
+  private normalizeHandshake(
+    handshake?: QWormholeServerConnection["handshake"],
+  ): QWormholeServerConnection["handshake"] | undefined {
+    if (!handshake) return undefined;
+    const nIndex = handshake.nIndex ?? handshake.entropyMetrics?.negIndex ?? 0.5;
+    const entropyMetrics: EntropyMetrics =
+      handshake.entropyMetrics ?? computeEntropyMetrics(nIndex);
+    const policy = deriveEntropyPolicy(entropyMetrics);
+    return {
+      ...handshake,
+      entropyMetrics,
+      policy,
+    };
   }
 
   listen(): Promise<net.AddressInfo> {

@@ -3,6 +3,7 @@ import { resolve } from "path";
 import { CoherenceLoop } from "./loop";
 import { CommitmentDetector } from "./commitment-detector";
 import { ResolutionDetector } from "./resolution";
+import { deriveNcfSummary, NCF_SOURCE } from "./ncf";
 import {
   buildIdentityMatrix,
   buildNboSignal,
@@ -1033,6 +1034,8 @@ export function startSignalTrialBroadcast(options: SignalTrialBroadcastOptions =
   let lastNboAt = 0;
   let lastNboSummary: NboSummary | undefined;
   let nboWarned = false;
+  let lastEntropy: number | null = null;
+  let lastEntropyAt: number | null = null;
   let effects: Effect[] = [];
   let loadEffects: LoadEffect[] = [];
   let queueDepth = { current: baseSample.queueDepth };
@@ -1392,6 +1395,20 @@ export function startSignalTrialBroadcast(options: SignalTrialBroadcastOptions =
     }
 
     const derived = mapDerived(state, sample);
+    const entropy = derived.tension;
+    let entropyVelocity: number | undefined;
+    if (lastEntropy !== null && lastEntropyAt !== null) {
+      const dt = Math.max(1e-6, (now - lastEntropyAt) / 1000);
+      entropyVelocity = (entropy - lastEntropy) / dt;
+    }
+    lastEntropy = entropy;
+    lastEntropyAt = now;
+    const ncf = deriveNcfSummary({
+      entropy,
+      coherence: state.R,
+      negentropy: state.M,
+      entropyVelocity,
+    });
     const targetBand = targetBandAt(
       now,
       sessionStart,
@@ -1497,6 +1514,9 @@ export function startSignalTrialBroadcast(options: SignalTrialBroadcastOptions =
       coupling,
       sample,
       derived,
+      ncf,
+      state_source: NCF_SOURCE,
+      regime_source: NCF_SOURCE,
       observer: observerTelemetry,
       nbo: nboTelemetry,
       stability: stabilityTelemetry,

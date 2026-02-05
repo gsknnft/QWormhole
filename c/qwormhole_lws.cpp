@@ -1,6 +1,8 @@
 #include <napi.h>
 #include <atomic>
 #include <libwebsockets.h>
+#include <openssl/ssl.h>
+#include <openssl/x509.h>
 #include <openssl/evp.h>
 #include <openssl/sha.h>
 
@@ -562,6 +564,18 @@ std::string HexEncode(const unsigned char* data, size_t len) {
   return out;
 }
 
+std::string FingerprintHex(const unsigned char* data, size_t len) {
+  std::ostringstream oss;
+  for (size_t i = 0; i < len; ++i) {
+    if (i > 0) {
+      oss << ":";
+    }
+    oss << std::uppercase << std::hex << std::setw(2) << std::setfill('0')
+        << static_cast<int>(data[i]);
+  }
+  return oss.str();
+}
+
 std::optional<std::vector<uint8_t>> Base64Decode(const std::string& input) {
   if (input.empty()) {
     return std::vector<uint8_t>();
@@ -581,6 +595,22 @@ std::optional<std::vector<uint8_t>> Base64Decode(const std::string& input) {
   }
   output.resize((size_t)len - padding);
   return output;
+}
+
+std::string Base64Encode(const uint8_t* data, size_t len) {
+  if (!data || len == 0) {
+    return "";
+  }
+  std::string out;
+  out.resize(((len + 2) / 3) * 4);
+  int encoded =
+      EVP_EncodeBlock(reinterpret_cast<unsigned char*>(&out[0]), data,
+                      static_cast<int>(len));
+  if (encoded < 0) {
+    return "";
+  }
+  out.resize(static_cast<size_t>(encoded));
+  return out;
 }
 
 double ComputeEntropy(const std::vector<uint8_t>& data) {
@@ -675,6 +705,86 @@ bool VerifyEd25519Signature(const std::vector<uint8_t>& public_key,
   EVP_MD_CTX_free(ctx);
   EVP_PKEY_free(pkey);
   return ok;
+}
+
+struct TlsExportOptions {
+  bool enabled = false;
+  std::string label = "qwormhole-negentropic";
+  size_t length = 32;
+  std::vector<uint8_t> context;
+};
+
+struct TlsInfo {
+  std::string alpn;
+  std::string protocol;
+  std::string cipher;
+  bool authorized = false;
+  std::string fingerprint;
+  std::string fingerprint256;
+};
+
+std::optional<TlsInfo> CollectTlsInfo(struct lws* wsi) {
+  if (!wsi) return std::nullopt;
+  SSL* ssl = lws_get_ssl(wsi);
+  if (!ssl) return std::nullopt;
+
+  TlsInfo info;
+  const SSL_CIPHER* cipher = SSL_get_current_cipher(ssl);
+  if (cipher) {
+    info.cipher = SSL_CIPHER_get_name(cipher);
+  }
+  const char* version = SSL_get_version(ssl);
+  if (version) {
+    info.protocol = version;
+  }
+
+  const unsigned char* alpn_data = nullptr;
+  unsigned int alpn_len = 0;
+  SSL_get0_alpn_selected(ssl, &alpn_data, &alpn_len);
+  if (alpn_len > 0 && alpn_data) {
+    info.alpn.assign(reinterpret_cast<const char*>(alpn_data), alpn_len);
+  }
+
+  info.authorized = SSL_get_verify_result(ssl) == X509_V_OK;
+
+  X509* cert = SSL_get_peer_certificate(ssl);
+  if (cert) {
+    unsigned char md[EVP_MAX_MD_SIZE];
+    unsigned int md_len = 0;
+    if (X509_digest(cert, EVP_sha1(), md, &md_len) == 1) {
+      info.fingerprint = FingerprintHex(md, md_len);
+    }
+    if (X509_digest(cert, EVP_sha256(), md, &md_len) == 1) {
+      info.fingerprint256 = FingerprintHex(md, md_len);
+    }
+    X509_free(cert);
+  }
+
+  return info;
+}
+
+std::optional<std::vector<uint8_t>> ExportKeyingMaterial(
+    struct lws* wsi,
+    const TlsExportOptions& opts) {
+  if (!wsi || !opts.enabled) return std::nullopt;
+  SSL* ssl = lws_get_ssl(wsi);
+  if (!ssl) return std::nullopt;
+  std::vector<uint8_t> material(opts.length);
+  const uint8_t* context_ptr =
+      opts.context.empty() ? nullptr : opts.context.data();
+  int ok = SSL_export_keying_material(
+      ssl,
+      material.data(),
+      material.size(),
+      opts.label.c_str(),
+      static_cast<int>(opts.label.size()),
+      context_ptr,
+      static_cast<int>(opts.context.size()),
+      opts.context.empty() ? 0 : 1);
+  if (ok != 1) {
+    return std::nullopt;
+  }
+  return material;
 }
 
 bool LooksNegantropicHandshake(const JsonValue& root) {
@@ -775,11 +885,19 @@ class LwsClientWrapper : public Napi::ObjectWrap<LwsClientWrapper> {
   Napi::Value Connect(const Napi::CallbackInfo& info);
   Napi::Value Send(const Napi::CallbackInfo& info);
   Napi::Value Recv(const Napi::CallbackInfo& info);
+  Napi::Value IsConnected(const Napi::CallbackInfo& info);
+  Napi::Value SetEventHandler(const Napi::CallbackInfo& info);
+  Napi::Value GetTlsInfo(const Napi::CallbackInfo& info);
+  Napi::Value ExportKeyingMaterial(const Napi::CallbackInfo& info);
   Napi::Value Close(const Napi::CallbackInfo& info);
 
   void ServiceLoop();
   void Stop();
   void EnqueueSend(const uint8_t* data, size_t len);
+  void EmitEvent(const std::string& type,
+                 std::vector<uint8_t> data = {},
+                 std::optional<std::string> error = std::nullopt,
+                 bool had_error = false);
 
   Options ParseOptions(const Napi::CallbackInfo& info);
 
@@ -792,6 +910,8 @@ class LwsClientWrapper : public Napi::ObjectWrap<LwsClientWrapper> {
   std::condition_variable recv_cv_;
   std::deque<std::vector<uint8_t>> recv_queue_;
   std::deque<PendingSend> send_queue_;
+  Napi::ThreadSafeFunction tsfn_;
+  bool tsfn_ready_ = false;
   std::vector<uint8_t> tls_ca_;
   std::vector<uint8_t> tls_cert_;
   std::vector<uint8_t> tls_key_;
@@ -827,6 +947,10 @@ Napi::Object LwsClientWrapper::Init(Napi::Env env, Napi::Object exports) {
                       InstanceMethod<&LwsClientWrapper::Connect>("connect"),
                       InstanceMethod<&LwsClientWrapper::Send>("send"),
                       InstanceMethod<&LwsClientWrapper::Recv>("recv"),
+                      InstanceMethod<&LwsClientWrapper::IsConnected>("isConnected"),
+                      InstanceMethod<&LwsClientWrapper::SetEventHandler>("setEventHandler"),
+                      InstanceMethod<&LwsClientWrapper::GetTlsInfo>("getTlsInfo"),
+                      InstanceMethod<&LwsClientWrapper::ExportKeyingMaterial>("exportKeyingMaterial"),
                       InstanceMethod<&LwsClientWrapper::Close>("close"),
                   });
 
@@ -1039,6 +1163,11 @@ void LwsClientWrapper::Stop() {
   std::lock_guard<std::mutex> lock(mutex_);
   recv_queue_.clear();
   send_queue_.clear();
+
+  if (tsfn_ready_) {
+    tsfn_.Release();
+    tsfn_ready_ = false;
+  }
 }
 
 void LwsClientWrapper::EnqueueSend(const uint8_t* data, size_t len) {
@@ -1050,6 +1179,30 @@ void LwsClientWrapper::EnqueueSend(const uint8_t* data, size_t len) {
   PendingSend pending;
   pending.data.assign(data, data + len);
   send_queue_.push_back(std::move(pending));
+}
+
+void LwsClientWrapper::EmitEvent(const std::string& type,
+                                 std::vector<uint8_t> data,
+                                 std::optional<std::string> error,
+                                 bool had_error) {
+  if (!tsfn_ready_) return;
+
+  auto callback = [type, data = std::move(data), error = std::move(error), had_error](Napi::Env env, Napi::Function cb) {
+    Napi::Object evt = Napi::Object::New(env);
+    evt.Set("type", Napi::String::New(env, type));
+    if (!data.empty()) {
+      evt.Set("data", Napi::Buffer<uint8_t>::Copy(env, data.data(), data.size()));
+    }
+    if (error.has_value()) {
+      evt.Set("error", Napi::String::New(env, *error));
+    }
+    if (type == "close") {
+      evt.Set("hadError", Napi::Boolean::New(env, had_error));
+    }
+    cb.Call({evt});
+  };
+
+  tsfn_.NonBlockingCall(callback);
 }
 
 Napi::Value LwsClientWrapper::Send(const Napi::CallbackInfo& info) {
@@ -1109,6 +1262,90 @@ Napi::Value LwsClientWrapper::Recv(const Napi::CallbackInfo& info) {
                                      data.size());
 }
 
+Napi::Value LwsClientWrapper::IsConnected(const Napi::CallbackInfo& info) {
+  return Napi::Boolean::New(info.Env(), connected_ && !closing_);
+}
+
+Napi::Value LwsClientWrapper::SetEventHandler(const Napi::CallbackInfo& info) {
+  Napi::Env env = info.Env();
+  if (info.Length() < 1 || !info[0].IsFunction()) {
+    Napi::TypeError::New(env, "setEventHandler(fn) requires a function")
+        .ThrowAsJavaScriptException();
+    return env.Undefined();
+  }
+
+  if (tsfn_ready_) {
+    tsfn_.Release();
+    tsfn_ready_ = false;
+  }
+
+  Napi::Function cb = info[0].As<Napi::Function>();
+  tsfn_ = Napi::ThreadSafeFunction::New(
+      env,
+      cb,
+      "QWormholeClientEvents",
+      0,
+      1);
+  tsfn_ready_ = true;
+  return env.Undefined();
+}
+
+Napi::Value LwsClientWrapper::GetTlsInfo(const Napi::CallbackInfo& info) {
+  (void)info;
+  Napi::Env env = info.Env();
+  if (!wsi_) return env.Undefined();
+  auto maybe = CollectTlsInfo(wsi_);
+  if (!maybe.has_value()) return env.Undefined();
+  const TlsInfo& tls = *maybe;
+
+  Napi::Object out = Napi::Object::New(env);
+  if (!tls.alpn.empty()) {
+    out.Set("alpnProtocol", Napi::String::New(env, tls.alpn));
+  }
+  if (!tls.protocol.empty()) {
+    out.Set("protocol", Napi::String::New(env, tls.protocol));
+  }
+  if (!tls.cipher.empty()) {
+    out.Set("cipher", Napi::String::New(env, tls.cipher));
+  }
+  out.Set("authorized", Napi::Boolean::New(env, tls.authorized));
+  if (!tls.fingerprint.empty()) {
+    out.Set("peerFingerprint", Napi::String::New(env, tls.fingerprint));
+  }
+  if (!tls.fingerprint256.empty()) {
+    out.Set("peerFingerprint256", Napi::String::New(env, tls.fingerprint256));
+  }
+  return out;
+}
+
+Napi::Value LwsClientWrapper::ExportKeyingMaterial(const Napi::CallbackInfo& info) {
+  Napi::Env env = info.Env();
+  if (!wsi_) return env.Undefined();
+
+  if (info.Length() < 2 || !info[0].IsNumber() || !info[1].IsString()) {
+    Napi::TypeError::New(env, "exportKeyingMaterial(length, label, context?) required")
+        .ThrowAsJavaScriptException();
+    return env.Undefined();
+  }
+
+  TlsExportOptions opts;
+  opts.enabled = true;
+  opts.length = static_cast<size_t>(info[0].As<Napi::Number>().Uint32Value());
+  opts.label = info[1].As<Napi::String>().Utf8Value();
+
+  if (info.Length() >= 3) {
+    if (info[2].IsBuffer()) {
+      auto buf = info[2].As<Napi::Buffer<uint8_t>>();
+      opts.context.assign(buf.Data(), buf.Data() + buf.Length());
+    }
+  }
+
+  auto maybe = ExportKeyingMaterial(wsi_, opts);
+  if (!maybe.has_value()) return env.Undefined();
+  const auto& material = *maybe;
+  return Napi::Buffer<uint8_t>::Copy(env, material.data(), material.size());
+}
+
 Napi::Value LwsClientWrapper::Close(const Napi::CallbackInfo& info) {
   Stop();
   return info.Env().Undefined();
@@ -1128,6 +1365,7 @@ int LwsClientWrapper::Callback(struct lws* wsi,
       } else {
         lws_set_opaque_user_data(wsi, self);
         self->connected_ = true;
+        self->EmitEvent("connect");
         std::lock_guard<std::mutex> lock(self->mutex_);
         if (!self->send_queue_.empty()) {
           lws_callback_on_writable(wsi);
@@ -1139,8 +1377,10 @@ int LwsClientWrapper::Callback(struct lws* wsi,
       if (self && in && len > 0) {
         std::lock_guard<std::mutex> lock(self->mutex_);
         auto* ptr = static_cast<uint8_t*>(in);
-        self->recv_queue_.emplace_back(ptr, ptr + len);
+        std::vector<uint8_t> payload(ptr, ptr + len);
+        self->recv_queue_.push_back(payload);
         self->recv_cv_.notify_all();
+        self->EmitEvent("data", std::move(payload));
       }
       break;
 
@@ -1170,6 +1410,8 @@ int LwsClientWrapper::Callback(struct lws* wsi,
                         next.data.size(), LWS_WRITE_RAW);
           if (written < 0) {
             self->closing_ = true;
+            std::string error = "Native client write failed";
+            self->EmitEvent("error", {}, error, true);
             lws_cancel_service(self->context_);
             break;
           }
@@ -1195,11 +1437,17 @@ int LwsClientWrapper::Callback(struct lws* wsi,
       break;
 
     case LWS_CALLBACK_CLIENT_CONNECTION_ERROR:
+      if (self) {
+        std::string error =
+            in ? std::string(static_cast<const char*>(in)) : "Connection error";
+        self->EmitEvent("error", {}, error, true);
+      }
     case LWS_CALLBACK_RAW_CLOSE:
     case LWS_CALLBACK_WSI_DESTROY:
       if (self) {
         self->closing_ = true;
         self->connected_ = false;
+        self->EmitEvent("close", {}, std::nullopt, true);
         lws_cancel_service(self->context_);
       }
       break;
@@ -1240,6 +1488,7 @@ class LwsServerWrapper : public Napi::ObjectWrap<LwsServerWrapper> {
     bool length_prefixed = true;
     size_t max_frame_length = kDefaultMaxFrameLength;
     std::string protocol_version;
+    TlsExportOptions tls_export;
   };
 
   struct ClientConnection {
@@ -1257,6 +1506,7 @@ class LwsServerWrapper : public Napi::ObjectWrap<LwsServerWrapper> {
     bool connection_announced = false;
     bool handshake_required = false;
     HandshakeMetadata handshake_metadata;
+    TlsExportOptions tls_export;
   };
 
   friend void AttachHandshakeMetadataToClient(
@@ -1268,6 +1518,7 @@ class LwsServerWrapper : public Napi::ObjectWrap<LwsServerWrapper> {
   Napi::Value Listen(const Napi::CallbackInfo& info);
   Napi::Value Close(const Napi::CallbackInfo& info);
   Napi::Value Broadcast(const Napi::CallbackInfo& info);
+  Napi::Value SendTo(const Napi::CallbackInfo& info);
   Napi::Value Shutdown(const Napi::CallbackInfo& info);
   Napi::Value GetConnection(const Napi::CallbackInfo& info);
   Napi::Value GetConnectionCount(const Napi::CallbackInfo& info);
@@ -1341,7 +1592,10 @@ void AttachHandshakeMetadataToClient(
     return;
   }
   const HandshakeMetadata& meta = conn->handshake_metadata;
-  if (!meta.has_version && meta.tags.empty() && !meta.has_nindex && !meta.has_neghash) {
+  auto tlsInfo = CollectTlsInfo(conn->wsi);
+  const bool has_meta =
+      meta.has_version || !meta.tags.empty() || meta.has_nindex || meta.has_neghash;
+  if (!has_meta && !tlsInfo.has_value()) {
     return;
   }
   Napi::Object handshake = Napi::Object::New(env);
@@ -1364,6 +1618,48 @@ void AttachHandshakeMetadataToClient(
   }
   if (meta.has_neghash) {
     handshake.Set("negHash", Napi::String::New(env, meta.neghash));
+  }
+  if (tlsInfo.has_value()) {
+    Napi::Object tls = Napi::Object::New(env);
+    if (!tlsInfo->alpn.empty()) {
+      tls.Set("alpnProtocol", Napi::String::New(env, tlsInfo->alpn));
+    }
+    tls.Set("authorized", Napi::Boolean::New(env, tlsInfo->authorized));
+    if (!tlsInfo->fingerprint.empty()) {
+      tls.Set("peerFingerprint", Napi::String::New(env, tlsInfo->fingerprint));
+    }
+    if (!tlsInfo->fingerprint256.empty()) {
+      tls.Set("peerFingerprint256", Napi::String::New(env, tlsInfo->fingerprint256));
+    }
+    if (!tlsInfo->cipher.empty()) {
+      tls.Set("cipher", Napi::String::New(env, tlsInfo->cipher));
+    }
+    if (!tlsInfo->protocol.empty()) {
+      tls.Set("protocol", Napi::String::New(env, tlsInfo->protocol));
+    }
+    if (conn->tls_export.enabled) {
+      auto material = ExportKeyingMaterial(conn->wsi, conn->tls_export);
+      if (material.has_value()) {
+        std::string b64;
+        if (meta.has_neghash && !meta.neghash.empty()) {
+          SHA256_CTX ctx;
+          SHA256_Init(&ctx);
+          if (!material->empty()) {
+            SHA256_Update(&ctx, material->data(), material->size());
+          }
+          SHA256_Update(&ctx, meta.neghash.data(), meta.neghash.size());
+          unsigned char digest[SHA256_DIGEST_LENGTH];
+          SHA256_Final(digest, &ctx);
+          b64 = Base64Encode(digest, SHA256_DIGEST_LENGTH);
+        } else {
+          b64 = Base64Encode(material->data(), material->size());
+        }
+        if (!b64.empty()) {
+          tls.Set("tlsSessionKey", Napi::String::New(env, b64));
+        }
+      }
+    }
+    handshake.Set("tls", tls);
   }
   target->Set("handshake", handshake);
 }
@@ -1388,6 +1684,7 @@ Napi::Object LwsServerWrapper::Init(Napi::Env env, Napi::Object exports) {
                       InstanceMethod<&LwsServerWrapper::Listen>("listen"),
                       InstanceMethod<&LwsServerWrapper::Close>("close"),
                       InstanceMethod<&LwsServerWrapper::Broadcast>("broadcast"),
+                      InstanceMethod<&LwsServerWrapper::SendTo>("sendTo"),
                       InstanceMethod<&LwsServerWrapper::Shutdown>("shutdown"),
                       InstanceMethod<&LwsServerWrapper::GetConnection>("getConnection"),
                       InstanceMethod<&LwsServerWrapper::GetConnectionCount>("getConnectionCount"),
@@ -1475,6 +1772,31 @@ LwsServerWrapper::ServerOptions LwsServerWrapper::ParseServerOptions(
     assignBuffer("ca", opts.tls_ca);
     assignBuffer("cert", opts.tls_cert);
     assignBuffer("key", opts.tls_key);
+
+    if (tls.Has("exportKeyingMaterial") &&
+        tls.Get("exportKeyingMaterial").IsObject()) {
+      Napi::Object exportObj = tls.Get("exportKeyingMaterial").As<Napi::Object>();
+      opts.tls_export.enabled = true;
+      if (exportObj.Has("label") && exportObj.Get("label").IsString()) {
+        opts.tls_export.label = exportObj.Get("label").As<Napi::String>().Utf8Value();
+      }
+      if (exportObj.Has("length") && exportObj.Get("length").IsNumber()) {
+        const auto len = exportObj.Get("length").As<Napi::Number>().Uint32Value();
+        if (len > 0) {
+          opts.tls_export.length = static_cast<size_t>(len);
+        }
+      }
+      if (exportObj.Has("context")) {
+        Napi::Value ctx = exportObj.Get("context");
+        if (ctx.IsBuffer()) {
+          auto buf = ctx.As<Napi::Buffer<uint8_t>>();
+          opts.tls_export.context.assign(buf.Data(), buf.Data() + buf.Length());
+        } else if (ctx.IsString()) {
+          auto str = ctx.As<Napi::String>().Utf8Value();
+          opts.tls_export.context.assign(str.begin(), str.end());
+        }
+      }
+    }
 
     if (!opts.tls_cert.empty() || !opts.tls_key.empty()) {
       opts.use_tls = true;
@@ -1679,6 +2001,64 @@ Napi::Value LwsServerWrapper::Broadcast(const Napi::CallbackInfo& info) {
 
       lws_callback_on_writable(wsi);
     }
+  }
+
+  if (context_) {
+    lws_cancel_service(context_);
+  }
+
+  return env.Undefined();
+}
+
+Napi::Value LwsServerWrapper::SendTo(const Napi::CallbackInfo& info) {
+  Napi::Env env = info.Env();
+
+  if (info.Length() < 2 || !info[0].IsString()) {
+    Napi::TypeError::New(env, "sendTo(id, data) requires connection id")
+        .ThrowAsJavaScriptException();
+    return env.Undefined();
+  }
+
+  std::string id = info[0].As<Napi::String>().Utf8Value();
+
+  std::vector<uint8_t> data;
+  if (info[1].IsBuffer()) {
+    auto buf = info[1].As<Napi::Buffer<uint8_t>>();
+    data.assign(buf.Data(), buf.Data() + buf.Length());
+  } else if (info[1].IsString()) {
+    std::string str = info[1].As<Napi::String>().Utf8Value();
+    data.assign(str.begin(), str.end());
+  } else {
+    // Serialize object to JSON
+    Napi::Object global = env.Global();
+    Napi::Object json = global.Get("JSON").As<Napi::Object>();
+    Napi::Function stringify = json.Get("stringify").As<Napi::Function>();
+    std::string str = stringify.Call(json, {info[1]}).As<Napi::String>().Utf8Value();
+    data.assign(str.begin(), str.end());
+  }
+
+  std::vector<uint8_t> framed = BuildFramedPayload(data);
+
+  std::shared_ptr<ClientConnection> target;
+  {
+    std::lock_guard<std::mutex> lock(mutex_);
+    auto it = connections_by_id_.find(id);
+    if (it == connections_by_id_.end()) {
+      return env.Undefined();
+    }
+    target = it->second;
+    target->send_queue.push_back(framed);
+    target->queued_bytes += framed.size();
+
+    if (!target->backpressured &&
+        target->queued_bytes >= options_.max_backpressure_bytes) {
+      target->backpressured = true;
+      EmitBackpressure(target->id, target->queued_bytes, options_.max_backpressure_bytes);
+    }
+  }
+
+  if (target && target->wsi) {
+    lws_callback_on_writable(target->wsi);
   }
 
   if (context_) {
@@ -2139,6 +2519,7 @@ int LwsServerWrapper::ServerCallback(struct lws* wsi,
       conn->handshake_required = !self->options_.protocol_version.empty();
       conn->handshake_complete = !conn->handshake_required;
       conn->connection_announced = !conn->handshake_required;
+      conn->tls_export = self->options_.tls_export;
 
       {
         std::lock_guard<std::mutex> lock(self->mutex_);

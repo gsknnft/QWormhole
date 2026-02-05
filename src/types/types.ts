@@ -113,10 +113,56 @@ export interface NativeSocketOptions {
   tls?: QWTlsOptions;
 }
 
+export interface QWormholeSocketLike {
+  destroyed?: boolean;
+  writableLength?: number;
+  write(data: Buffer): boolean;
+  end(): void;
+  destroy(err?: Error): void;
+  setKeepAlive?(enable?: boolean, delay?: number): void;
+  setTimeout?(timeoutMs: number): void;
+  on(event: "data", cb: (data: Buffer) => void): this;
+  on(event: "close", cb: (hadError: boolean) => void): this;
+  on(event: "error", cb: (err: Error) => void): this;
+  on(event: "timeout", cb: () => void): this;
+  once?(event: string, cb: (...args: any[]) => void): this;
+  off?(event: string, cb: (...args: any[]) => void): this;
+  getPeerCertificate?(detailed?: boolean): unknown;
+  getTlsInfo?: () => {
+    alpnProtocol?: string;
+    protocol?: string;
+    cipher?: string;
+    authorized?: boolean;
+    peerFingerprint?: string;
+    peerFingerprint256?: string;
+  };
+  exportKeyingMaterial?(length: number, label: string, context?: Buffer): Buffer;
+  alpnProtocol?: string;
+}
+
+export type QWormholeSocketFactory = (
+  opts: NativeSocketOptions,
+) => QWormholeSocketLike;
+
 export interface NativeTcpClient {
   connect(opts: NativeSocketOptions | { host: string; port: number }): void;
   send(data: string | Buffer): void; // queues and flushes via LWS writable callbacks
   recv(maxBytes?: number): Buffer; // drains from the recv ring buffer; empty Buffer if none
+  isConnected?(): boolean;
+  supportsEventStream?(): boolean;
+  getTlsInfo?(): {
+    alpnProtocol?: string;
+    protocol?: string;
+    cipher?: string;
+    authorized?: boolean;
+    peerFingerprint?: string;
+    peerFingerprint256?: string;
+  };
+  exportKeyingMaterial?(
+    length: number,
+    label: string,
+    context?: Buffer,
+  ): Buffer | undefined;
   close(): void;
   backend?: NativeBackend;
 }
@@ -231,6 +277,8 @@ export interface QWormholeClientOptions<
   peerIsNative?: boolean;
   /** Optional override for client socket writable highWaterMark (bytes). */
   socketHighWaterMark?: number;
+  /** Optional socket factory for custom transports (e.g., native bindings). */
+  socketFactory?: QWormholeSocketFactory;
 }
 
 export interface QWormholeServerOptions<

@@ -1,4 +1,6 @@
 import bindings from "bindings";
+import path from "node:path";
+import { createRequire } from "node:module";
 import type {
   NativeBackend,
   NativeSocketOptions,
@@ -11,6 +13,10 @@ const logNative = (msg: string) => {
     console.log(`[qwormhole][native] ${msg}`);
   }
 };
+
+const requireFn = typeof require === "function" ? require : createRequire(__filename);
+const bindingModuleRoot = path.resolve(__dirname, "..", "..");
+const envBindingPath = process.env.QWORMHOLE_NATIVE_PATH;
 
 type TlsBufferInput = string | Buffer | Array<string | Buffer> | undefined;
 
@@ -32,6 +38,21 @@ type NativeBindingClient = {
   connect(opts: NativeSocketOptions): void;
   send(data: string | Buffer): void;
   recv(length?: number): Buffer;
+  isConnected?(): boolean;
+  setEventHandler?(handler: (evt: { type: string; data?: Buffer; error?: string; hadError?: boolean }) => void): void;
+  getTlsInfo?(): {
+    alpnProtocol?: string;
+    protocol?: string;
+    cipher?: string;
+    authorized?: boolean;
+    peerFingerprint?: string;
+    peerFingerprint256?: string;
+  };
+  exportKeyingMaterial?(
+    length: number,
+    label: string,
+    context?: Buffer,
+  ): Buffer | undefined;
   close(): void;
 };
 
@@ -48,10 +69,34 @@ const resolveBindings = () =>
   (globalThis as unknown as { bindings?: typeof bindings }).bindings ??
   bindings;
 
+type BindingLoader = (
+  target: string | { module_root: string; bindings: string },
+) => unknown;
+
+const tryLoadBindingPath = (targetPath: string): NativeModule | null => {
+  try {
+    logNative(`attempting to load binding path "${targetPath}"`);
+    const mod = requireFn(targetPath) as NativeModule;
+    if (!mod?.TcpClientWrapper) {
+      logNative(`binding path "${targetPath}" missing TcpClientWrapper export`);
+      return null;
+    }
+    logNative(`successfully loaded binding path "${targetPath}"`);
+    return mod;
+  } catch (err) {
+    logNative(`binding path "${targetPath}" not found: ${(err as Error).message}`);
+    return null;
+  }
+};
+
 const tryLoadBinding = (name: string): NativeModule | null => {
   try {
     logNative(`attempting to load binding "${name}"`);
-    const mod = resolveBindings()(name) as NativeModule;
+    const loader = resolveBindings() as BindingLoader;
+    const mod = loader({
+      module_root: bindingModuleRoot,
+      bindings: name,
+    }) as NativeModule;
     logNative(`successfully loaded binding "${name}"`);
     return mod;
   } catch (err) {
@@ -61,6 +106,14 @@ const tryLoadBinding = (name: string): NativeModule | null => {
 };
 
 const loadNative = (preferred?: NativeBackend): LoadedBinding | null => {
+  if (envBindingPath) {
+    const mod = tryLoadBindingPath(envBindingPath);
+    if (mod?.TcpClientWrapper) {
+      const fallbackKind = preferred ?? "lws";
+      return { kind: fallbackKind, module: mod };
+    }
+  }
+
   const order: NativeBackend[] = preferred
     ? [preferred, preferred === "lws" ? "libsocket" : "lws"]
     : ["lws", "libsocket"];
@@ -82,7 +135,12 @@ const loadNative = (preferred?: NativeBackend): LoadedBinding | null => {
 
 let nativeBinding: LoadedBinding | null | undefined;
 
-const nativeDisabled = () => process.env.QWORMHOLE_DISABLE_NATIVE === "1";
+const nativeDisabled = () => {
+  const legacy = process.env.QWORMHOLE_NATIVE;
+  if (legacy === "0") return true;
+  if (legacy === "1") return false;
+  return process.env.QWORMHOLE_DISABLE_NATIVE === "1";
+};
 
 const ensureNativeBinding = (
   preferred?: NativeBackend,
@@ -174,6 +232,52 @@ export class NativeTcpClient implements NativeBindingClient {
 
   recv(length?: number): Buffer {
     return this.impl.recv(length);
+  }
+
+  isConnected(): boolean {
+    if (typeof this.impl.isConnected === "function") {
+      return this.impl.isConnected();
+    }
+    return false;
+  }
+
+  setEventHandler(
+    handler: (evt: { type: string; data?: Buffer; error?: string; hadError?: boolean }) => void,
+  ): void {
+    if (typeof this.impl.setEventHandler === "function") {
+      this.impl.setEventHandler(handler);
+    }
+  }
+
+  supportsEventStream(): boolean {
+    return typeof this.impl.setEventHandler === "function";
+  }
+
+  getTlsInfo():
+    | {
+        alpnProtocol?: string;
+        protocol?: string;
+        cipher?: string;
+        authorized?: boolean;
+        peerFingerprint?: string;
+        peerFingerprint256?: string;
+      }
+    | undefined {
+    if (typeof this.impl.getTlsInfo === "function") {
+      return this.impl.getTlsInfo();
+    }
+    return undefined;
+  }
+
+  exportKeyingMaterial(
+    length: number,
+    label: string,
+    context?: Buffer,
+  ): Buffer | undefined {
+    if (typeof this.impl.exportKeyingMaterial === "function") {
+      return this.impl.exportKeyingMaterial(length, label, context);
+    }
+    return undefined;
   }
 
   close(): void {

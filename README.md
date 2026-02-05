@@ -100,6 +100,12 @@ QWormhole isn’t just a socket wrapper — it’s a transport ritual.
     - Device networks: bind to interfaces (wg0, eth0) and tag connections
     - Mesh networks: use handshake tags to route and identify peers
 
+## Current Status (2026-02-05)
+- **TS transport:** stable and production-viable. Reported local tests show ~13 MB/s sustained when rate-limited; unbounded spikes >200 MB/s can starve the event loop.
+- **Native client/server:** experimental; native client binding resolution and server parity need realignment (see TODOs below).
+- **QUIC/WebTransport:** experimental; bindings exist but are not production-ready.
+- **WireGuard guide:** functional patterns, but not fully validated end-to-end in this repo.
+
 
 ## Minimal Example
 ```ts
@@ -421,7 +427,8 @@ Install attempts a native build automatically; if native fails, TS remains avail
 - macOS runners automatically skip the libsocket backend (it relies on Linux-only APIs). Set `QWORMHOLE_NATIVE=1` if you really want to force a build attempt.
 - If native build fails (missing toolchain/SSL), it logs a warning and falls back to TS without failing install.
 - You can rebuild explicitly anytime: `pnpm --filter @gsknnft/qwormhole run build:native`.
-- Set `QWORMHOLE_NATIVE=0` to skip native manually (e.g., CI); set `QWORMHOLE_BUILD_LIBSOCKET=0` on POSIX to skip libsocket when you only want LWS.
+- Set `QWORMHOLE_DISABLE_NATIVE=1` to skip native manually (e.g., CI). `QWORMHOLE_NATIVE=0` is documented in older notes but not currently wired in code.
+- Set `QWORMHOLE_BUILD_LIBSOCKET=0` on POSIX to skip libsocket when you only want LWS.
 
 ## Handshake & security
 - **Default handshake** – `{ type: "handshake", version, tags? }` automatically queues when `protocolVersion` is set.
@@ -552,6 +559,7 @@ This keeps the Windows `libwebsockets/build` directory intact while producing a 
 
 - `QWORMHOLE_NATIVE_PREFERRED` &mdash; default backend for both client and server loaders (`lws` or `libsocket`).
 - `QWORMHOLE_NATIVE_SERVER_PREFERRED` / `QWORMHOLE_NATIVE_CLIENT_PREFERRED` &mdash; override detection per side without touching the other.
+- `QWORMHOLE_NATIVE_PATH` &mdash; explicit path to a native .node binding (useful in monorepos or custom builds).
 - `preferNative: true` on `createQWormholeServer()` now accepts `preferredNativeBackend` to force a backend per instance (used by the bench harness to run both `native-lws` and `native-libsocket`).
 - `QWORMHOLE_BUILD_LIBSOCKET=0` still skips libsocket entirely when you only need libwebsockets.
 
@@ -594,7 +602,10 @@ Use WireGuard, SSH tunnels, or TLS termination if required.
 Secure Streams will provide encrypted, multiplexed channels.
 
 ## Known issues / roadmap
-- Native server wrapper is now implemented but still experimental; the TypeScript server is recommended for production.
+- **Native client binding resolution** may fail outside standard `bindings()` lookup paths; alignment with `module_root` resolution is pending.
+- **Native server parity**: per-connection `send()` is not yet implemented on the wrapper; TS server is recommended for production.
+- **QUIC/WebTransport**: experimental; bindings and adapters exist but are not production-ready.
+- **WireGuard integration**: docs exist, but end-to-end validation is pending in this repo.
 - More telemetry/export hooks and Secure Streams are planned for a later release.
 
 ### Focus items (v1.x)

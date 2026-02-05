@@ -60,7 +60,7 @@ describe("createQWormholeClient transport selection", () => {
     expect(result.nativeBackend).toBe("lws");
   });
 
-  it("falls back to TS when native is unavailable (native should always be available)", async () => {
+  it("falls back to TS when backend cannot be detected", async () => {
     (getNativeBackend as any).mockReturnValue(null);
     (isNativeAvailable as any).mockReturnValue(true);
 
@@ -70,8 +70,8 @@ describe("createQWormholeClient transport selection", () => {
       preferNative: true,
     });
 
-    expect(result.mode).toBe("native-lws");
+    expect(result.mode).toBe("ts");
     expect(result.nativeAvailable).toBe(true);
-    expect(result.nativeBackend).toBe('lws');
+    expect(result.nativeBackend).toBe(null);
   });
 });

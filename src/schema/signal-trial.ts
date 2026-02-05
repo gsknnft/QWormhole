@@ -69,6 +69,31 @@ export const signalTrialDerivedSchema = z.object({
   resonance: z.number(),
 });
 
+export const signalTrialNcfStateSchema = z.enum([
+  "macro",
+  "balanced",
+  "defensive",
+]);
+
+export const signalTrialNcfRegimeSchema = z.enum([
+  "coherent",
+  "transitional",
+  "chaos",
+]);
+
+export const signalTrialNcfSchema = z
+  .object({
+    version: z.string().min(1),
+    entropy: z.number().min(0).max(1),
+    coherence: z.number().min(0).max(1),
+    negentropy: z.number().min(0).max(1),
+    nIndex: z.number().min(0).max(1),
+    entropyVelocity: z.number().optional(),
+    state: signalTrialNcfStateSchema,
+    regime: signalTrialNcfRegimeSchema,
+  })
+  .catchall(z.unknown());
+
 export const signalTrialControlModeSchema = z.enum([
   "closed_loop",
   "open_loop",
@@ -191,6 +216,9 @@ export const signalTrialTelemetrySchema = z
     transport: transportMetricsSchema.optional(),
     entropy: entropyMetricsSchema.optional(),
     derived: signalTrialDerivedSchema.optional(),
+    ncf: signalTrialNcfSchema.optional(),
+    state_source: z.string().optional(),
+    regime_source: z.string().optional(),
     observer: signalTrialResolutionObserverSchema.optional(),
     nbo: signalTrialNboSummarySchema.optional(),
     stability: signalTrialStabilitySchema.optional(),
@@ -294,6 +322,7 @@ export type SignalTrialGates = z.infer<typeof signalTrialGatesSchema>;
 export type SignalTrialResolutionObserver = z.infer<
   typeof signalTrialResolutionObserverSchema
 >;
+export type SignalTrialNcf = z.infer<typeof signalTrialNcfSchema>;
 export type SignalTrialResolutionTier = z.infer<
   typeof signalTrialResolutionTierSchema
 >;

@@ -13,10 +13,15 @@ This is the thin-scaffold for adding native QUIC to QWormhole. It keeps the exis
 - Browser path: WebTransport adapter with the same surface, wired into the telemetry store (future step).
 
 ## Current scaffold
-- `src/transports/quic/quic-transport.ts`: Stub transport that will throw on `connect()` if the native binding is absent.
+- `src/transports/quic/quic-transport.ts`: Experimental transport using the native binding. Throws on `connect()` if `qwquic.node` is missing.
 - `src/transports/quic/quic-binding.ts`: Dynamic loader for `qwquic.node` from `build/Release` or `dist/native`; exposes `quicAvailable()`.
 - `src/transports/quic/types.ts`: Minimal binding and stats shapes.
-- Factory now accepts `kind: "quic"` and returns `undefined` if the binding is missing (safe noop).
+- Factory accepts `kind: "quic"` and returns `undefined` if bindings are missing (call `QuicTransport.isAvailable()` to preflight).
+
+## Binding discovery
+- Override path with `QW_QUIC_PATH` (or legacy alias `QWORMHOLE_QUIC_PATH`).
+- Loader checks package `build/Release`, `dist/native`, and `native/qwquic/target/release` paths.
+- `node-gyp-build` resolution is scoped to `native/qwquic` to avoid accidentally loading the TCP native bindings.
 
 ## Next steps
 1. Implement the native QUIC binding (quiche or MsQuic) to match `QuicBinding` in `types.ts`.

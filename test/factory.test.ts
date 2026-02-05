@@ -46,10 +46,22 @@ describe("createQWormholeClient", () => {
     getNativeBackendMock.mockReturnValue("lws");
   });
 
-  it("returns NativeTcpClient when preferNative is true and native is available", () => {
+  it("returns QWormholeClient when preferNative is true (wrapped native transport)", () => {
     const result = createQWormholeClient({
       ...defaultOptions,
       preferNative: true,
+    });
+    expect(result.client).toBeInstanceOf(QWormholeClient);
+    expect(result.mode).toBe("native-lws");
+    expect(result.nativeAvailable).toBe(true);
+    expect(result.nativeBackend).toBe("lws");
+  });
+
+  it("returns NativeTcpClient when preferNative is true and nativeRaw is enabled", () => {
+    const result = createQWormholeClient({
+      ...defaultOptions,
+      preferNative: true,
+      nativeRaw: true,
     });
     expect(result.client).toBeInstanceOf(NativeTcpClientMock);
     expect(result.mode).toBe("native-lws");
