@@ -557,6 +557,8 @@ cp ./lib/libwebsockets.a ../build/lib/libwebsockets.a
 
 This keeps the Windows `libwebsockets/build` directory intact while producing a PIC-enabled archive for WSL/Linux builds.
 
+`libwebsockets/include/lws_config.h` is intentionally committed as a fallback so CI can compile `qwormhole_lws` even when generated build headers are missing. If you regenerate libwebsockets config, sync this file from `libwebsockets/build-linux/include/lws_config.h`.
+
 **Backend selection**
 
 - `QWORMHOLE_NATIVE_PREFERRED` &mdash; default backend for both client and server loaders (`lws` or `libsocket`).

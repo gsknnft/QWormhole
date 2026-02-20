@@ -19,3 +19,8 @@ declare module "../../../../src/types/types" {
   export type SignalVector = any;
   export type QuantumFieldState = any;
 }
+
+declare module "@vitejs/plugin-react-swc" {
+  const react: (...args: any[]) => any;
+  export default react;
+}
