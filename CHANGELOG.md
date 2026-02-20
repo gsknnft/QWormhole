@@ -1,5 +1,24 @@
 # Changelog
 
+## Unreleased (next: 0.3.0)
+
+- Prebuilt-native distribution lane added:
+  - Added `native:stage-prebuilds` to stage `prebuilds/<platform>-<arch>/*.node`.
+  - Installer now hydrates prebuilt artifacts into `dist/native` before rebuild attempts.
+  - Runtime loaders probe prebuilt paths first, then fallback to `bindings()` and TS transport.
+- Native build/install hardening:
+  - `install-native.js` now uses `node-gyp` for rebuild invocation on non-Windows hosts.
+  - Added committed `libwebsockets/include/lws_config.h` fallback for deterministic CI builds.
+- CI/release hardening:
+  - Release workflow now supports multi-OS prebuild artifact jobs.
+  - Release workflow supports `workflow_dispatch` dry-run mode (`semantic-release --dry-run`).
+  - Tag-based publish flow remains authoritative for actual release publication.
+- Test/contract hardening:
+  - Native server smoke suite now skips when native binding is unavailable.
+  - Native loader test path is isolated from local prebuilt probing during Vitest unless explicitly enabled.
+- Optional/research dependency hardening:
+  - Vite release build externalizes optional `@tensorflow/tfjs` and `@sigilnet/qfield` imports.
+
 ## 0.2.1 - Packaging and publish hardening
 
 - Publish path hardened for npm consumers:

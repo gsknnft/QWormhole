@@ -2,7 +2,8 @@
 [![NPM Version](https://img.shields.io/npm/v/@gsknnft/qwormhole.svg?style=flat-square)](https://www.npmjs.com/package/@gsknnft/qwormhole)
 [![Node Version](https://img.shields.io/node/v/@gsknnft/qwormhole.svg?style=flat-square)](https://nodejs.org)
 
-> **Current version: 0.2.1 - Packaging hardening + native server, adaptive slicing, diagnostics**
+> **Current version: 0.2.1 (published)**  
+> **Next release lane:** prebuilt-native distribution + dry-run release workflow hardening.
 
 <p align="center">
   <h1 style="font-size:2.5rem; font-family:Segoe UI, Arial, sans-serif; margin-bottom:0.2em;">
@@ -96,7 +97,7 @@ QWormhole isn't just a socket wrapper - it's a transport ritual.
 ## Current Status (2026-02-20)
 - **TS transport:** stable and production-viable.
 - **Native client/server:** available with optional bindings; install falls back to TS mode when native setup is unavailable.
-- **Test status:** `233` tests passed, `1` skipped (`pnpm --filter @gsknnft/qwormhole test`).
+- **Test status:** full package suite passing in maintainer release lane (`pnpm --filter @gsknnft/qwormhole test`).
 - **QUIC/WebTransport:** experimental; bindings are optional and currently non-production.
 - **WireGuard guide:** functional patterns, still integration-heavy and environment-dependent.
 
