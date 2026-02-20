@@ -100,6 +100,12 @@ QWormhole isn't just a socket wrapper - it's a transport ritual.
 - **QUIC/WebTransport:** experimental; bindings are optional and currently non-production.
 - **WireGuard guide:** functional patterns, still integration-heavy and environment-dependent.
 
+## Coherence Note
+
+- QWormhole's in-tree coherence modules are now considered **legacy compatibility**.
+- Canonical coherence package: `@sigilnet/coherence`.
+- Legacy imports can use `@gsknnft/qwormhole/legacy/coherence` during migration.
+
 
 ## Minimal Example
 ```ts

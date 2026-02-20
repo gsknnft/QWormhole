@@ -16,6 +16,11 @@
     "./index.cjs": "./dist/index.js",
     "./index.mjs": "./dist/index.js",
     "./types": "./dist/types/index.d.ts",
+    "./legacy/coherence": {
+      "types": "./dist/types/legacy/coherence.d.ts",
+      "import": "./dist/legacy/coherence.js",
+      "require": "./dist/legacy/coherence.js"
+    },
     "./native": {
       "import": "./dist/native/qwormhole_lws.node"
     },
@@ -75,7 +80,7 @@
     "bench:sweep": "node scripts/run-bench-sweep.js",
     "bench:sweep:ts": "node scripts/run-bench-sweep-ts.js",
     "bench:qw": "pnpm run bench -- --mode=all --diagnostics",
-    "lint": "tsc --noEmit",
+    "lint": "tsc -p tsconfig.lint.json --noEmit",
     "lint:eslint": "eslint .",
     "lint:full": "pnpm run lint:eslint && pnpm run lint",
     "format": "prettier . --write"
