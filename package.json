@@ -75,7 +75,9 @@
     "bench:sweep": "node scripts/run-bench-sweep.js",
     "bench:sweep:ts": "node scripts/run-bench-sweep-ts.js",
     "bench:qw": "pnpm run bench -- --mode=all --diagnostics",
-    "lint": "eslint . && tsc --noEmit",
+    "lint": "tsc --noEmit",
+    "lint:eslint": "eslint .",
+    "lint:full": "pnpm run lint:eslint && pnpm run lint",
     "format": "prettier . --write"
   },
   "tsup": {

@@ -9,6 +9,8 @@ export default [
   {
     rules: {
       "no-unused-vars": "off",
+      "prefer-const": "warn",
+      "no-empty": "warn",
       "@typescript-eslint/no-unused-vars": [
         "warn",
         {
@@ -17,6 +19,8 @@ export default [
           caughtErrorsIgnorePattern: "^_",
         },
       ],
+      "@typescript-eslint/no-explicit-any": "warn",
+      "@typescript-eslint/prefer-as-const": "warn",
     },
   },
 ];
