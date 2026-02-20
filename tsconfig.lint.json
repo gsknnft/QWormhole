@@ -4,11 +4,13 @@
     "noEmit": true,
     "composite": false
   },
-  "include": ["src/**/*.ts"],
+  "include": ["src/**/*.ts", "src/**/*.d.ts"],
   "exclude": [
     "node_modules",
     "dist",
     "**/dist/**",
-    "**/test/**"
+    "**/test/**",
+    "console/**",
+    "bench-visualization/**"
   ]
 }
