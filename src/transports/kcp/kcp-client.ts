@@ -1,4 +1,4 @@
-// Implement a merge function for SCPState, verify function for SCPHandshake and SCPIntent, and analyze function for NegentropyVector. 
+// Implement a merge function for SCPState, verify function for SCPHandshake and SCPIntent, and analyze function for NegentropyVector.
 // // SCP Handshake module
 // export interface SCPHandshake {
 //   version: string;
@@ -11,7 +11,7 @@
 // export function verifyHandshake(handshake: SCPHandshake): boolean {
 
 //implement a KCP client that uses MuxSession for multiplexing streams over a KCP transport
-import dgram from "node:dgram";
+import dgram from "dgram";
 import { EventEmitter } from "node:events";
 import { KcpConfig, DEFAULT_KCP_CONFIG } from "./kcp-config";
 import { MuxSession } from "../mux/mux-session";
@@ -53,7 +53,7 @@ export class KcpClient extends EventEmitter implements QWormholeTransport {
       this.mux.receiveRaw(data);
     }
     );
-  } 
+  }
 
   private startKeepalive(): void {
     const interval = this.cfg.updateIntervalMs ?? 10_000;
@@ -94,5 +94,3 @@ export class KcpClient extends EventEmitter implements QWormholeTransport {
     this.on("data", cb);
   }
 }
-
-

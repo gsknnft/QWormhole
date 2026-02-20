@@ -1,4 +1,4 @@
-import { spawn } from "node:child_process";
+import { ChildProcess, spawn } from "child_process";
 import { computeNegentropicIndex } from "../utils/randomId";
 
 export type JsonValue =
@@ -192,18 +192,33 @@ export function createSpawnAdapter(options: SpawnAdapterOptions): MLAdapter {
   return {
     name: "spawn",
     async run(metrics: JsonValue): Promise<JsonValue> {
-      const proc = spawn(options.command, options.args ?? [], {
+      const proc: ChildProcess = spawn(options.command, options.args ?? [], {
         stdio: ["pipe", "pipe", "inherit"],
         env: { ...process.env, ...options.env },
       });
-      proc.stdin.write(JSON.stringify(metrics));
-      proc.stdin.end();
+      if (proc.stdin) {
+        proc.stdin.write(JSON.stringify(metrics));
+        proc.stdin.end();
+      } else {
+        throw new Error(
+          "Failed to write to child process stdin: stdin is null",
+        );
+      }
       const result = await new Promise<JsonValue>((resolve, reject) => {
         let data = "";
-        proc.stdout.on("data", chunk => {
-          data += chunk.toString();
-        });
-        proc.once("error", reject);
+        if (proc.stdout) {
+          proc.stdout.on("data", chunk => {
+            data += chunk.toString();
+          });
+        } else {
+          reject(
+            new Error(
+              "Failed to read from child process stdout: stdout is null",
+            ),
+          );
+          return;
+        }
+        proc.on("error", reject);
         proc.on("close", () => {
           try {
             resolve(data ? (JSON.parse(data) as JsonValue) : ({} as JsonValue));

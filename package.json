@@ -10,10 +10,10 @@
     ".": {
       "types": "./dist/types/index.d.ts",
       "import": "./dist/index.js",
-      "require": "./dist/index.cjs"
+      "require": "./dist/index.js"
     },
     "./index.js": "./dist/index.js",
-    "./index.cjs": "./dist/index.cjs",
+    "./index.cjs": "./dist/index.js",
     "./index.mjs": "./dist/index.js",
     "./types": "./dist/types/index.d.ts",
     "./native": {
@@ -59,7 +59,9 @@
     "build:rollup": "rollup -c",
     "build": "vite build && pnpm run build:tsc && pnpm run build:decl && pnpm run rebuild:binds",
     "build:decl": "tsc --emitDeclarationOnly --declaration --outDir dist/types --project tsconfig.json",
-    "install": "node ./scripts/install-native.js && pnpm run rebuild && pnpm run build",
+    "install": "node ./scripts/install-native.js",
+    "prepack": "node -e \"const fs=require('fs');const p='dist/tsconfig.tsbuildinfo';if(fs.existsSync(p))fs.rmSync(p,{force:true});\"",
+    "prepublishOnly": "pnpm run build && pnpm run test",
     "dev": "tsup --watch",
     "test": "vitest run",
     "dev:console": "cd ./app && pnpm dev:console",
@@ -131,7 +133,7 @@
     "zod": "^4.1.13"
   },
   "publishConfig": {
-    "access": "restricted"
+    "access": "public"
   },
   "optionalDependencies": {
     "@rollup/rollup-linux-x64-gnu": "4.53.3"

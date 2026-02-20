@@ -182,3 +182,34 @@ export type EntropyMetricsPayload = z.infer<typeof entropyMetricsSchema>;
 export type EntropyVelocity = z.infer<typeof entropyVelocitySchema>;
 export type CoherenceLevel = z.infer<typeof coherenceLevelSchema>;
 export type HandshakeMode = z.infer<typeof handshakeModeSchema>;
+
+
+
+/* 
+// reference for LLM Training shape (vera-torch rpc_server output)
+{
+  "ts": "...",
+  "source": "signal-trial",
+  "market": {"symbol":"SOL/USDC","venue":"..."},
+  "metrics": {
+    "coherence": 0.81,
+    "entropy": 0.22,
+    "negentropy": 0.59,
+    "negentropic_index": 3.68
+  },
+  "transport": {
+    "latency_ms": 128,
+    "jitter_ms": 19,
+    "drop_rate": 0.003,
+    "out_of_order": 0.01,
+    "replay_detected": false,
+    "schema_hash": "..."
+  },
+  "execution": {
+    "slippage_bps": 7.2,
+    "fill_rate": 0.92
+  }
+}
+
+
+*/

@@ -1,45 +1,45 @@
-import net from "net";
-import tls from "tls";
 import { createHash, randomUUID } from "crypto";
-import { LengthPrefixedFramer } from "../core/framing";
-import { BatchFramer } from "../core/batch-framer";
-import { TypedEventEmitter } from "../utils/typedEmitter";
-import { bufferDeserializer, defaultSerializer } from "../core/codecs";
-import { QWormholeError } from "../utils/errors";
-import { TokenBucket, PriorityQueue, delay } from "../core/qos";
-import {
-  isNegentropicHandshake,
-  verifyNegentropicHandshake,
-} from "../handshake/negentropic-handshake";
-import { type HandshakePayload } from "../handshake/handshake-policy";
-import {
-  deriveEntropyPolicy,
-  computeEntropyMetrics,
-} from "../handshake/entropy-policy";
-import type { EntropyMetrics } from "../handshake/entropy-policy";
-import { handshakePayloadSchema } from "../schema/scp";
-import {
-  createFlowController,
-  type FlowController,
-} from "../core/flow-controller";
+import net from "net";
+import type {
+  Deserializer,
+  FramingMode,
+  Payload,
+  QWTlsOptions,
+  QWormholeServerConnection,
+  QWormholeServerEvents,
+  QWormholeServerOptions,
+  QWormholeTelemetry,
+  SendOptions,
+  Serializer,
+} from "src/types/types";
+import tls from "tls";
 import {
   attachCoherenceAdapter,
   type CoherenceAdapterHandle,
   type CoherenceAdapterOptions,
 } from "../coherence/adapter";
+import { BatchFramer } from "../core/batch-framer";
+import { bufferDeserializer, defaultSerializer } from "../core/codecs";
+import {
+  createFlowController,
+  type FlowController,
+} from "../core/flow-controller";
+import { LengthPrefixedFramer } from "../core/framing";
+import { PriorityQueue, TokenBucket, delay } from "../core/qos";
+import type { EntropyMetrics } from "../handshake/entropy-policy";
+import {
+  computeEntropyMetrics,
+  deriveEntropyPolicy,
+} from "../handshake/entropy-policy";
+import { type HandshakePayload } from "../handshake/handshake-policy";
+import {
+  isNegentropicHandshake,
+  verifyNegentropicHandshake,
+} from "../handshake/negentropic-handshake";
+import { handshakePayloadSchema } from "../schema/scp";
+import { QWormholeError } from "../utils/errors";
 import { inferMessageType } from "../utils/negentropic-diagnostics";
-import type {
-  Payload,
-  QWormholeServerConnection,
-  QWormholeServerEvents,
-  QWormholeServerOptions,
-  Serializer,
-  Deserializer,
-  QWormholeTelemetry,
-  SendOptions,
-  QWTlsOptions,
-  FramingMode,
-} from "src/types/types";
+import { TypedEventEmitter } from "../utils/typedEmitter";
 
 const randomId = () =>
   typeof randomUUID === "function"
@@ -98,7 +98,7 @@ export class QWormholeServer<TMessage = Buffer> extends TypedEventEmitter<
   >();
   private failedHandshakesTTLMs = 60 * 60 * 1000; // 1 hour TTL
   private failedHandshakesMaxSize = 10000; // Maximum entries to prevent unbounded growth
-  private readonly server: net.Server;
+  private readonly server: net.Server | tls.Server;
   private readonly clients = new Map<string, ManagedConnection>();
   private readonly options: InternalServerOptions<TMessage>;
   private readonly encoder = new LengthPrefixedFramer();
@@ -199,8 +199,8 @@ export class QWormholeServer<TMessage = Buffer> extends TypedEventEmitter<
         reject(err);
       };
       const cleanup = () => {
-        this.server.off("close", onClose);
-        this.server.off("error", onError);
+        (this.server as any).removeListener("close", onClose);
+        (this.server as any).removeListener("error", onError);
       };
       this.server.once("close", onClose);
       this.server.once("error", onError);
@@ -471,7 +471,8 @@ export class QWormholeServer<TMessage = Buffer> extends TypedEventEmitter<
       limiter: this.options.rateLimitBytesPerSec
         ? new TokenBucket(
             this.options.rateLimitBytesPerSec,
-            this.options.rateLimitBurstBytes ?? this.options.rateLimitBytesPerSec,
+            this.options.rateLimitBurstBytes ??
+              this.options.rateLimitBytesPerSec,
           )
         : undefined,
       handshakePending: Boolean(this.options.protocolVersion),

@@ -1,4 +1,4 @@
-import dgram from "node:dgram";
+import dgram from "dgram";
 import { EventEmitter } from "node:events";
 import { KcpConfig, DEFAULT_KCP_CONFIG } from "./kcp-config";
 import { MuxSession } from "../mux/mux-session";

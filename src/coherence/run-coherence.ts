@@ -17,18 +17,17 @@ import type {
   CouplingParams,
   FieldSample,
   NboSummary,
+  FitModel,
+  FitSample,
+  Vector3,
+  CoherenceGeometry,
 } from "./types";
 import { resolveLatencyVar } from "./latency";
 import {
   buildSamples,
-  checkLyapunov,
-  fitJ,
+  certifyGeometry,
+  fitGeometry,
   minimumSamplesForModel,
-  type FitJResult,
-  type FitModel,
-  type FitSample,
-  type LyapunovCheck,
-  type Vector3,
 } from "./field-stability";
 import { WSTransport, WSTransportServer } from "../transports/ws/ws-transport";
 import type { MuxStream } from "../transports/mux/mux-stream";
@@ -127,12 +126,12 @@ type StabilityConfig = {
   convention: StabilityConvention;
 };
 
-type StabilitySummary = {
-  fit: FitJResult;
-  lyapunov: LyapunovCheck;
+type GeometrySummary = {
+  geometry: CoherenceGeometry;
   dotJ: number;
   r2: number;
 };
+
 
 const stabilityDefaults: StabilityConfig = {
   bufferSize: 128,
@@ -968,6 +967,7 @@ export interface SignalTrialBroadcastOptions {
 }
 
 export function startSignalTrialBroadcast(options: SignalTrialBroadcastOptions = {}) {
+  const missing: string[] = [];
   const port = options.port ?? Number(process.env.SIGNAL_TRIAL_WS_PORT ?? 4183);
   const tickMs = options.tickMs ?? Number(process.env.SIGNAL_TRIAL_TICK_MS ?? 250);
   const tier: SignalTrialTier = options.tier ?? "instrument";
@@ -1028,7 +1028,7 @@ export function startSignalTrialBroadcast(options: SignalTrialBroadcastOptions =
   let detector = new CommitmentDetector();
   let resolutionObserver = new ResolutionDetector(observerConfig);
   let stabilityBuffer: Array<{ t: number; state: CoherenceState }> = [];
-  let stabilitySummary: StabilitySummary | null = null;
+  let geometrySummary: GeometrySummary | null = null;
   let stabilityTick = 0;
   let nboSamples: FieldSample[] = [];
   let lastNboAt = 0;
@@ -1110,20 +1110,23 @@ export function startSignalTrialBroadcast(options: SignalTrialBroadcastOptions =
       return;
     }
     const effectiveWindow = applyStabilityConvention(window, stabilityConfig.convention);
-    const fit = fitJ(effectiveWindow, {
+    const fit = fitGeometry(effectiveWindow, {
       model: stabilityConfig.model,
       regularization: stabilityConfig.regularization,
     });
-    const lyapunov = checkLyapunov(fit, effectiveWindow, {
-      tolerance: stabilityConfig.tolerance,
-    });
+    const geometry = certifyGeometry(
+      fit,
+      effectiveWindow,
+      stabilityConfig.regularization,
+    );
+
     const last = effectiveWindow[effectiveWindow.length - 1];
-    const grad = fit.grad(last.s);
+    const grad = geometry.gradient(last.s);
     const dotJ =
       grad[0] * last.dotS[0] + grad[1] * last.dotS[1] + grad[2] * last.dotS[2];
-    stabilitySummary = {
-      fit,
-      lyapunov,
+
+    geometrySummary = {
+      geometry,
       dotJ,
       r2: average(fit.stats.r2),
     };
@@ -1174,7 +1177,7 @@ export function startSignalTrialBroadcast(options: SignalTrialBroadcastOptions =
     detector = new CommitmentDetector();
     resolutionObserver = new ResolutionDetector(observerConfig);
     stabilityBuffer = [];
-    stabilitySummary = null;
+    geometrySummary = null;
     stabilityTick = 0;
     nboSamples = [];
     lastNboAt = 0;
@@ -1471,36 +1474,21 @@ export function startSignalTrialBroadcast(options: SignalTrialBroadcastOptions =
         }
       : undefined;
 
-    const stabilityTelemetry = stabilitySummary
-      ? {
-          dotJ: stabilitySummary.dotJ,
-          stable: stabilitySummary.lyapunov.stable,
-          violationRate: stabilitySummary.lyapunov.violationRate,
-          r2: stabilitySummary.r2,
-          samples: stabilitySummary.fit.stats.samples,
-          lastDotV: stabilitySummary.lyapunov.lastDotV,
-          meanDotV: stabilitySummary.lyapunov.meanDotV,
-        }
-      : undefined;
-    const lyapunovTelemetry = stabilitySummary
-      ? {
-          stable: stabilitySummary.lyapunov.stable,
-          violationRate: stabilitySummary.lyapunov.violationRate,
-          minDotV: stabilitySummary.lyapunov.minDotV,
-          maxDotV: stabilitySummary.lyapunov.maxDotV,
-          meanDotV: stabilitySummary.lyapunov.meanDotV,
-          lastDotV: stabilitySummary.lyapunov.lastDotV,
-          samples: stabilitySummary.lyapunov.samples,
-        }
-      : undefined;
-    const fitJTelemetry = stabilitySummary
-      ? {
-          model: stabilitySummary.fit.model,
-          r2: stabilitySummary.r2,
-          mse: stabilitySummary.fit.stats.mse,
-          samples: stabilitySummary.fit.stats.samples,
-        }
-      : undefined;
+const geometryTelemetry = geometrySummary
+  ? {
+      health: geometrySummary.geometry.health,
+      lambdaMin: geometrySummary.geometry.curvature.lambdaMin,
+      lambdaMax: geometrySummary.geometry.curvature.lambdaMax,
+      conditionNumber: geometrySummary.geometry.curvature.conditionNumber,
+      violationRate: geometrySummary.geometry.stability.violationRate,
+      stable: geometrySummary.geometry.stability.stable,
+      cubicDominance: geometrySummary.geometry.distortion?.dominanceRatio,
+      dotJ: geometrySummary.dotJ,
+      r2: geometrySummary.r2,
+      samples: geometrySummary.geometry.stability.samples,
+    }
+  : undefined;
+
 
     const telemetry: SignalTrialTelemetry = {
       type: "telemetry",
@@ -1519,9 +1507,7 @@ export function startSignalTrialBroadcast(options: SignalTrialBroadcastOptions =
       regime_source: NCF_SOURCE,
       observer: observerTelemetry,
       nbo: nboTelemetry,
-      stability: stabilityTelemetry,
-      lyapunov: lyapunovTelemetry,
-      fitJ: fitJTelemetry,
+      geometry: geometryTelemetry,
       targetBand: targetBandTelemetry,
       gates: {
         uptimeMs,
@@ -1598,65 +1584,100 @@ export function startSignalTrialBroadcast(options: SignalTrialBroadcastOptions =
         lastStableAttemptKey = null;
       }
 
-      if (stableQualified && uptimeOk && actionsOk && holdOk && quietOk) {
-        resolution = "stable";
-        const resolutionTier = resolveResolutionTier(state, holdMs, gate.holdMs);
-        broadcast({
-          type: "resolution",
-          sessionId,
-          at: now,
-          result: "stable",
-          tier: resolutionTier,
-          reason: "gated stability achieved",
+const requireGeometry = uptimeMs >= Math.round(gate.minUptimeMs * 0.5);
+
+const geometryOk =
+  !requireGeometry ||
+  (geometrySummary &&
+    geometrySummary.geometry.stability.stable &&
+    geometrySummary.geometry.stability.violationRate < 0.02 &&
+    geometrySummary.geometry.curvature.lambdaMin >= -1e-9);
+
+  if (!geometryOk) missing.push("geometry");
+
+  if (
+    stableQualified &&
+    geometryOk &&
+    uptimeOk &&
+    actionsOk &&
+    holdOk &&
+    quietOk
+  ) {
+  resolution = "stable";
+  const resolutionTier = resolveResolutionTier(state, holdMs, gate.holdMs);
+  broadcast({
+    type: "resolution",
+    sessionId,
+    at: now,
+    result: "stable",
+    tier: resolutionTier,
+    reason: "gated stability achieved",
+    state,
+  });
+} else {
+  const collapseCandidate = isCollapseCandidate(state, sample);
+  if (collapseCandidate) {
+    if (!collapseSince) {
+      collapseSince = now;
+    }
+  } else {
+    collapseSince = null;
+  }
+
+  const collapseHoldOk =
+    gate.collapseHoldMs === 0 ||
+    (collapseSince !== null && now - collapseSince >= gate.collapseHoldMs);
+  const collapseUptimeOk = uptimeMs >= gate.minUptimeMs;
+  const collapseActionsOk =
+    gate.minActions === 0 || actionsCount >= gate.minActions;
+
+  if (collapseCandidate) {
+    const missing: string[] = [];
+    if (!collapseHoldOk) missing.push("collapseHold");
+    if (!collapseUptimeOk) missing.push("minUptime");
+    if (!collapseActionsOk) missing.push("minActions");
+    if (missing.length > 0) {
+      const key = missing.join("|");
+      if (key !== lastCollapseAttemptKey) {
+        const hints = buildResolutionHints(
+          "collapsed",
+          missing,
+          targetBandTelemetry,
+        );
+        broadcastResolutionAttempt(
+          "collapsed",
+          missing,
+          now,
           state,
-        });
-      } else {
-        const collapseCandidate = isCollapseCandidate(state, sample);
-        if (collapseCandidate) {
-          if (!collapseSince) {
-            collapseSince = now;
-          }
-        } else {
-          collapseSince = null;
-        }
-
-        const collapseHoldOk =
-          gate.collapseHoldMs === 0 ||
-          (collapseSince !== null && now - collapseSince >= gate.collapseHoldMs);
-        const collapseUptimeOk = uptimeMs >= gate.minUptimeMs;
-        const collapseActionsOk = gate.minActions === 0 || actionsCount >= gate.minActions;
-
-        if (collapseCandidate) {
-          const missing: string[] = [];
-          if (!collapseHoldOk) missing.push("collapseHold");
-          if (!collapseUptimeOk) missing.push("minUptime");
-          if (!collapseActionsOk) missing.push("minActions");
-          if (missing.length > 0) {
-            const key = missing.join("|");
-            if (key !== lastCollapseAttemptKey) {
-              const hints = buildResolutionHints("collapsed", missing, targetBandTelemetry);
-              broadcastResolutionAttempt("collapsed", missing, now, state, hints, phase);
-              lastCollapseAttemptKey = key;
-            }
-          } else {
-            lastCollapseAttemptKey = null;
-          }
-        } else {
-          lastCollapseAttemptKey = null;
-        }
-
-        if (collapseCandidate && collapseHoldOk && collapseUptimeOk && collapseActionsOk) {
-          resolution = "collapsed";
-          broadcast({
-            type: "resolution",
-            sessionId,
-            at: now,
-            result: "collapsed",
-            reason: "collapse threshold reached",
-            state,
-          });
-        }
+          hints,
+          phase,
+        );
+        lastCollapseAttemptKey = key;
       }
+    } else {
+      lastCollapseAttemptKey = null;
+    }
+  } else {
+    lastCollapseAttemptKey = null;
+  }
+
+  if (
+    collapseCandidate &&
+    collapseHoldOk &&
+    collapseUptimeOk &&
+    collapseActionsOk
+  ) {
+    resolution = "collapsed";
+    broadcast({
+      type: "resolution",
+      sessionId,
+      at: now,
+      result: "collapsed",
+      reason: "collapse threshold reached",
+      state,
+    });
+  }
+}
     }
   }, tickMs);
 

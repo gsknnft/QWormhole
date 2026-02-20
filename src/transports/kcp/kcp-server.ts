@@ -1,7 +1,7 @@
-import dgram from "node:dgram";
+import dgram from "dgram";
 import { EventEmitter } from "node:events";
-import { KcpConfig, DEFAULT_KCP_CONFIG } from "./kcp-config";
 import { MuxSession } from "../mux/mux-session";
+import { DEFAULT_KCP_CONFIG, KcpConfig } from "./kcp-config";
 
 export interface KcpServerOptions extends KcpConfig {
   listenPort: number;
@@ -37,7 +37,13 @@ interface SessionState {
   rto: number;
   pending: Map<
     number,
-    { payload: Uint8Array; ts: number; rto: number; retries: number; sent: boolean }
+    {
+      payload: Uint8Array;
+      ts: number;
+      rto: number;
+      retries: number;
+      sent: boolean;
+    }
   >;
 }
 
@@ -100,7 +106,12 @@ export class KcpServer extends EventEmitter {
         this.emit("session", { key, mux });
       }
       session.lastSeen = Date.now();
-      this.handlePacket(session, new Uint8Array(msg), rinfo.port, rinfo.address);
+      this.handlePacket(
+        session,
+        new Uint8Array(msg),
+        rinfo.port,
+        rinfo.address,
+      );
     });
 
     const bound = await new Promise<number>((resolve, reject) => {
@@ -147,10 +158,7 @@ export class KcpServer extends EventEmitter {
         if (!entry.sent) continue;
         if (now - entry.ts >= entry.rto) {
           entry.retries += 1;
-          entry.rto = Math.min(
-            MAX_RTO_MS,
-            Math.max(MIN_RTO_MS, entry.rto * 2),
-          );
+          entry.rto = Math.min(MAX_RTO_MS, Math.max(MIN_RTO_MS, entry.rto * 2));
           session.ssthresh = Math.max(2, Math.floor(session.cwnd / 2));
           session.cwnd = Math.max(2, session.ssthresh);
           this.transmit(session, seq, entry);
@@ -171,7 +179,10 @@ export class KcpServer extends EventEmitter {
 
     if (packet.type === 0) {
       // data in (buffer and deliver in-order)
-      if (packet.seq >= session.rcvNxt && packet.seq < session.rcvNxt + this.rcvWnd) {
+      if (
+        packet.seq >= session.rcvNxt &&
+        packet.seq < session.rcvNxt + this.rcvWnd
+      ) {
         session.recvBuf.set(packet.seq, packet.payload);
         while (session.recvBuf.has(session.rcvNxt)) {
           const payload = session.recvBuf.get(session.rcvNxt)!;
@@ -199,7 +210,7 @@ export class KcpServer extends EventEmitter {
           session.pending.delete(seq);
         }
       }
-      
+
       session.sndUna = Math.max(session.sndUna, ack + 1);
       // congestion window growth
       if (session.cwnd < session.ssthresh) {
@@ -228,7 +239,10 @@ export class KcpServer extends EventEmitter {
   private queueData(session: SessionState, payload: Uint8Array): void {
     const maxPayload = Math.max(1, this.mtu - HEADER_BYTES);
     for (let offset = 0; offset < payload.length; offset += maxPayload) {
-      const slice = payload.subarray(offset, Math.min(offset + maxPayload, payload.length));
+      const slice = payload.subarray(
+        offset,
+        Math.min(offset + maxPayload, payload.length),
+      );
       const seq = session.sndNxt++;
       session.pending.set(seq, {
         payload: slice,
@@ -242,7 +256,7 @@ export class KcpServer extends EventEmitter {
 
   private drain(session: SessionState): void {
     const inFlight = [...session.pending.entries()].filter(
-      ([seq, entry]) => seq >= session.sndUna && entry.sent
+      ([seq, entry]) => seq >= session.sndUna && entry.sent,
     ).length;
     const budget = Math.max(0, Math.min(this.sndWnd, session.cwnd) - inFlight);
     if (budget <= 0) return;
@@ -345,9 +359,10 @@ function decodePacket(buf: Uint8Array): WirePacket | null {
 
 function readU32(buf: Uint8Array, offset: number): number {
   return (
-    (buf[offset] << 24 >>> 0) +
-    (buf[offset + 1] << 16) +
-    (buf[offset + 2] << 8) +
-    buf[offset + 3]
-  ) >>> 0;
+    (((buf[offset] << 24) >>> 0) +
+      (buf[offset + 1] << 16) +
+      (buf[offset + 2] << 8) +
+      buf[offset + 3]) >>>
+    0
+  );
 }

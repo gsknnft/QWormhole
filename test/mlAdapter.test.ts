@@ -81,11 +81,11 @@ describe("mlAdapter", () => {
     const mockProc = {
       stdin: { write: vi.fn(), end: vi.fn() },
       stdout: { on: vi.fn() },
-      once: vi.fn((event, cb) => {
+      once: vi.fn(),
+      on: vi.fn((event, cb) => {
         if (event === "error") cb(error);
         return mockProc;
       }),
-      on: vi.fn(),
     };
     (spawn as ReturnType<typeof vi.fn>).mockReturnValue(mockProc);
 
