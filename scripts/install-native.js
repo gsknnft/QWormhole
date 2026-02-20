@@ -10,7 +10,7 @@ const forceNative = process.env.QWORMHOLE_NATIVE === "1";
 const explicitSkip = process.env.QWORMHOLE_NATIVE === "0";
 const macOsAutoSkip = platform === "darwin" && !forceNative;
 const skipNative = explicitSkip || macOsAutoSkip;
-const nodeGypCmd = process.platform === "win32" ? "node-gyp.cmd" : "node-gyp-build";
+const nodeGypCmd = process.platform === "win32" ? "node-gyp.cmd" : "node-gyp";
 
 const hasNodeGyp = () => {
   const check = spawnSync(nodeGypCmd, ["--version"], { stdio: "ignore" });
@@ -26,6 +26,37 @@ const artifacts = [
   path.join(process.cwd(), "dist", "native", "qwormhole_lws.node"),
   path.join(process.cwd(), "dist", "native", "qwormhole.node"),
 ];
+
+const hydrateFromPrebuilds = () => {
+  const platformArch = `${platform}-${os.arch()}`;
+  const candidates = [
+    path.join(process.cwd(), "prebuilds", platformArch),
+    path.join(process.cwd(), "dist", "native", "prebuilds", platformArch),
+  ];
+  const names = ["qwormhole_lws.node", "qwormhole.node"];
+  const outDir = path.join(process.cwd(), "dist", "native");
+  if (!fs.existsSync(outDir)) fs.mkdirSync(outDir, { recursive: true });
+
+  let copied = 0;
+  for (const dir of candidates) {
+    if (!fs.existsSync(dir)) continue;
+    for (const name of names) {
+      const src = path.join(dir, name);
+      const dst = path.join(outDir, name);
+      if (!fs.existsSync(src) || fs.existsSync(dst)) continue;
+      fs.copyFileSync(src, dst);
+      copied += 1;
+      console.log(`[qwormhole] hydrated prebuilt ${src} -> ${dst}`);
+    }
+  }
+  return copied;
+};
+
+const prebuiltHydrated = hydrateFromPrebuilds();
+if (prebuiltHydrated > 0) {
+  console.log("[qwormhole] native prebuild available; skipping rebuild.");
+  process.exit(0);
+}
 
 const alreadyBuilt = artifacts.some(p => fs.existsSync(p));
 

@@ -87,6 +87,8 @@ srv
 *.swp
 *.a
 *.kdev4
+*.tgz
+*.tar.gz
 headers/conf.h
 node_modules/
 dist/

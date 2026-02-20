@@ -1,6 +1,6 @@
 import { describe, expect, it, beforeAll, afterAll, vi } from "vitest";
 import { QWormholeClient, textDeserializer } from "../src";
-import {NativeQWormholeServer} from "../src/core/native-server";
+import { NativeQWormholeServer, isNativeServerAvailable } from "../src/core/native-server";
 /**
  * Native server smoke test - validates that the native server wrapper works
  * when the native addon is available. This test is skipped if native is not built.
@@ -28,8 +28,8 @@ const waitForEvent = <T>(
 };
 
 describe("Native Server Smoke Test", async () => {
-
-  describe("with native server", () => {
+  const nativeAvailable = isNativeServerAvailable();
+  describe.skipIf(!nativeAvailable)("with native server", () => {
     let server: NativeQWormholeServer | null = null;
     let client: QWormholeClient<string> | null = null;
     let serverPort: number;
@@ -127,7 +127,7 @@ describe("Native Server Smoke Test", async () => {
     });
   });
 
-  describe("without native server", () => {
+  describe.skipIf(nativeAvailable)("without native server", () => {
     it("skips tests when native server is unavailable", () => {
       console.log("[native-server-smoke] Native server not available, skipping tests");
       expect(true).toBe(true);

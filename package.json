@@ -28,6 +28,7 @@
   },
   "files": [
     "dist",
+    "prebuilds",
     "binding.gyp",
     "c"
   ],
@@ -80,6 +81,7 @@
     "bench:sweep": "node scripts/run-bench-sweep.js",
     "bench:sweep:ts": "node scripts/run-bench-sweep-ts.js",
     "bench:qw": "pnpm run bench -- --mode=all --diagnostics",
+    "native:stage-prebuilds": "node ./scripts/stage-prebuilds.cjs",
     "lint": "tsc -p tsconfig.lint.json --noEmit",
     "lint:eslint": "eslint .",
     "lint:full": "pnpm run lint:eslint && pnpm run lint",
@@ -117,6 +119,7 @@
     "arrowParens": "avoid"
   },
   "devDependencies": {
+    "prebuildify": "6.0.1",
     "@types/ws": "^8.18.1",
     "@arethetypeswrong/cli": "^0.17.3",
     "@eslint/js": "^9.39.1",

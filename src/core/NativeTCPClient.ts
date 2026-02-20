@@ -18,6 +18,14 @@ const requireFn =
   typeof require === "function" ? require : createRequire(__filename);
 const bindingModuleRoot = path.resolve(__dirname, "..", "..");
 const envBindingPath = process.env.QWORMHOLE_NATIVE_PATH;
+const platformArch = `${process.platform}-${process.arch}`;
+const isTestRuntime =
+  process.env.NODE_ENV === "test" ||
+  process.env.VITEST === "true" ||
+  process.env.VITEST === "1" ||
+  !!process.env.VITEST_WORKER_ID;
+const allowPrebuiltProbeInTests =
+  process.env.QWORMHOLE_ENABLE_TEST_PREBUILDS === "1";
 
 type TlsBufferInput = string | Buffer | Array<string | Buffer> | undefined;
 
@@ -117,15 +125,28 @@ const tryLoadBinding = (name: string): NativeModule | null => {
   }
 };
 
-const loadNative = (preferred?: NativeBackend): LoadedBinding | null => {
-  if (envBindingPath) {
-    const mod = tryLoadBindingPath(envBindingPath);
-    if (mod?.TcpClientWrapper) {
-      const fallbackKind = preferred ?? "lws";
-      return { kind: fallbackKind, module: mod };
-    }
+const bindingPathCandidates = (bindingName: string): string[] => {
+  const candidates: string[] = [];
+  if (envBindingPath) candidates.push(envBindingPath);
+  if (isTestRuntime && !allowPrebuiltProbeInTests) {
+    return candidates;
   }
+  candidates.push(
+    path.join(bindingModuleRoot, "dist", "native", `${bindingName}.node`),
+    path.join(bindingModuleRoot, "prebuilds", platformArch, `${bindingName}.node`),
+    path.join(
+      bindingModuleRoot,
+      "dist",
+      "native",
+      "prebuilds",
+      platformArch,
+      `${bindingName}.node`,
+    ),
+  );
+  return candidates;
+};
 
+const loadNative = (preferred?: NativeBackend): LoadedBinding | null => {
   const order: NativeBackend[] = preferred
     ? [preferred, preferred === "lws" ? "libsocket" : "lws"]
     : ["lws", "libsocket"];
@@ -133,6 +154,13 @@ const loadNative = (preferred?: NativeBackend): LoadedBinding | null => {
   for (const kind of order) {
     const bindingName = kind === "lws" ? "qwormhole_lws" : "qwormhole";
     logNative(`trying backend: ${kind} (${bindingName})`);
+    for (const candidatePath of bindingPathCandidates(bindingName)) {
+      const mod = tryLoadBindingPath(candidatePath);
+      if (mod?.TcpClientWrapper) {
+        logNative(`loaded native backend "${kind}" from ${candidatePath}`);
+        return { kind, module: mod };
+      }
+    }
     const module = tryLoadBinding(bindingName);
     if (module?.TcpClientWrapper) {
       logNative(`loaded native backend "${kind}" from ${bindingName}`);
@@ -186,7 +214,7 @@ export class NativeTcpClient implements NativeBindingClient {
     if (!nativeBinding?.module?.TcpClientWrapper) {
       logNative(`NativeTcpClient failed: no TcpClientWrapper in loaded module`);
       throw new Error(
-        "Native qwormhole binding not available. Run `pnpm run build:native` (libsocket) or `pnpm run build:native:lws` (libwebsockets).",
+        "Native qwormhole binding not available. Run `pnpm run rebuild` or disable preferNative.",
       );
     }
 

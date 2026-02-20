@@ -36,6 +36,14 @@ const parsePreferredBackend = (raw?: string): NativeBackend | undefined => {
 
 const requireFn = typeof require === "function" ? require : createRequire(__filename);
 const envBindingPath = process.env.QWORMHOLE_NATIVE_PATH;
+const platformArch = `${process.platform}-${process.arch}`;
+const isTestRuntime =
+  process.env.NODE_ENV === "test" ||
+  process.env.VITEST === "true" ||
+  process.env.VITEST === "1" ||
+  !!process.env.VITEST_WORKER_ID;
+const allowPrebuiltProbeInTests =
+  process.env.QWORMHOLE_ENABLE_TEST_PREBUILDS === "1";
 
 const DEFAULT_NATIVE_SERVER_BACKEND =
   parsePreferredBackend(process.env.QWORMHOLE_NATIVE_SERVER_PREFERRED) ??
@@ -170,16 +178,37 @@ const tryLoadBinding = <TMessage>(
   }
 };
 
+const bindingPathCandidates = (bindingName: string): string[] => {
+  const candidates: string[] = [];
+  if (envBindingPath) candidates.push(envBindingPath);
+  if (isTestRuntime && !allowPrebuiltProbeInTests) {
+    return candidates;
+  }
+  candidates.push(
+    path.join(bindingModuleRoot, "dist", "native", `${bindingName}.node`),
+    path.join(bindingModuleRoot, "prebuilds", platformArch, `${bindingName}.node`),
+    path.join(
+      bindingModuleRoot,
+      "dist",
+      "native",
+      "prebuilds",
+      platformArch,
+      `${bindingName}.node`,
+    ),
+  );
+  return candidates;
+};
+
 const loadServerBackend = <TMessage>(
   kind: NativeBackend,
 ): LoadedServerBinding<TMessage> | null => {
   const bindingName = kind === "lws" ? "qwormhole_lws" : "qwormhole";
   logNativeServer(`trying server backend: ${kind} (${bindingName})`);
-  if (envBindingPath) {
-    const mod = tryLoadBindingPath<TMessage>(envBindingPath);
+  for (const candidatePath of bindingPathCandidates(bindingName)) {
+    const mod = tryLoadBindingPath<TMessage>(candidatePath);
     if (mod?.QWormholeServerWrapper) {
       logNativeServer(
-        `loaded native server backend "${kind}" from ${envBindingPath}`,
+        `loaded native server backend "${kind}" from ${candidatePath}`,
       );
       return { kind, module: mod };
     }
@@ -292,7 +321,7 @@ export class NativeQWormholeServer<TMessage = Buffer> extends TypedEventEmitter<
     if (!nativeServerBinding?.module?.QWormholeServerWrapper) {
       logNativeServer("NativeQWormholeServer failed: wrapper unavailable");
       throw new Error(
-        "Native qwormhole server binding not available. Run `pnpm run build:native` or disable preferNative.",
+        "Native qwormhole server binding not available. Run `pnpm run rebuild` or disable preferNative.",
       );
     }
 

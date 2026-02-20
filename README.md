@@ -569,6 +569,11 @@ This keeps the Windows `libwebsockets/build` directory intact while producing a 
 
 This runs `node-gyp` to build native addons, then drops any produced `.node` binaries under `dist/native/`. The loader prefers libwebsockets (`qwormhole_lws`), falls back to libsocket, otherwise uses the TS transport automatically.
 
+Prebuilt flow:
+- Stage prebuilt artifacts after a successful native build: `pnpm --filter @gsknnft/qwormhole run native:stage-prebuilds`
+- This writes to `prebuilds/<platform>-<arch>/`.
+- On install, `scripts/install-native.js` hydrates matching prebuilt binaries into `dist/native/` before attempting rebuild.
+
 Notes:
 - Node >= 24.9 recommended (matches workspace engines).
 - Windows build expects OpenSSL in the default OpenSSL-Win64 location; set `OPENSSL_LIB_DIR` if yours differs.

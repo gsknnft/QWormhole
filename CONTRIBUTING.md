@@ -9,6 +9,7 @@ QWormhole Core is a transport kernel. Please keep contributions scoped to transp
 5) Add tests for new code paths (TS and native where applicable).
 
 Before opening a PR:
-- `pnpm --filter @sigilnet/qwormhole test` (TS + coverage)
-- `pnpm --filter @sigilnet/qwormhole run build:native` (optional; native smoke)
+- `pnpm --filter @gsknnft/qwormhole test` (TS + coverage)
+- `pnpm --filter @gsknnft/qwormhole run rebuild` (optional; native smoke)
+- `pnpm --filter @gsknnft/qwormhole run native:stage-prebuilds` (optional; stage prebuild artifact for your platform)
 - Ensure README/CHANGELOG/docs stay accurate, especially for diagnostics/negentropic features (0.2.0+).
