@@ -93,11 +93,12 @@ QWormhole isn't just a socket wrapper - it's a transport ritual.
     - Device networks: bind to interfaces (wg0, eth0) and tag connections
     - Mesh networks: use handshake tags to route and identify peers
 
-## Current Status (2026-02-05)
-- **TS transport:** stable and production-viable. Reported local tests show ~13 MB/s sustained when rate-limited; unbounded spikes >200 MB/s can starve the event loop.
-- **Native client/server:** experimental; native client binding resolution and server parity need realignment (see TODOs below).
-- **QUIC/WebTransport:** experimental; bindings exist but are not production-ready.
-- **WireGuard guide:** functional patterns, but not fully validated end-to-end in this repo.
+## Current Status (2026-02-20)
+- **TS transport:** stable and production-viable.
+- **Native client/server:** available with optional bindings; install falls back to TS mode when native setup is unavailable.
+- **Test status:** `233` tests passed, `1` skipped (`pnpm --filter @gsknnft/qwormhole test`).
+- **QUIC/WebTransport:** experimental; bindings are optional and currently non-production.
+- **WireGuard guide:** functional patterns, still integration-heavy and environment-dependent.
 
 
 ## Minimal Example
@@ -387,9 +388,10 @@ QWormhole provides all of this in a small, modern, TypeScript-native API.
 
 
 Benchmarks:
-- `pnpm --filter @gsknnft/qwormhole bench` runs a simple localhost throughput test comparing TS vs native (if available).
-  - Or run `node scripts/bench.ts` to benchmark TS, native-lws, and native-libsocket (when present).
-- **Latest snapshot (2025-12-03, Windows 11, Node 24.10.0):**
+- `pnpm --filter @gsknnft/qwormhole run bench`
+- `pnpm --filter @gsknnft/qwormhole run bench:writev`
+- `pnpm --filter @gsknnft/qwormhole run bench:sweep`
+- **Latest reproducible snapshot (2025-12-03, Windows 11, Node 24.10.0):**
 
   | Scenario | Old throughput (msg/s) <br />*(pre-native-fix: 2768.8k msgs landed)* | New duration (ms) | New throughput (msg/s) | Approx  |
   | --- | --- | --- | --- | --- |
@@ -399,6 +401,7 @@ Benchmarks:
   | `native-server + native-lws` | 940 msg/s | 209 | 47,900 msg/s | **+51** |
 
   The earlier runs never reached the configured 10,000 messages because handshake stalls dropped the socket; the native routing fix now delivers the full payload before the 1-second mark, so per-socket throughput jumped by one to two orders of magnitude. `native-libsocket` rows remain skipped on Windows until that backend is built.
+- **Note (2026-02-20):** in restricted environments, benchmark scripts may fail with `esbuild spawn EPERM` because bench scripts currently execute through `tsx`.
 Tests:
 - `pnpm --filter @gsknnft/qwormhole test` (TS), `pnpm --filter @gsknnft/qwormhole test:native` (gated by native availability).
 
@@ -414,12 +417,12 @@ pnpm test:native (only runs if native present)
 
 ## Install
 
-Install attempts a native build automatically; if native fails, TS remains available.
+Install attempts optional native setup automatically; if native setup fails, TS remains available.
 
-- `pnpm install` (or workspace install) triggers the native build attempt via `scripts/install-native.js`.
+- `pnpm install` (or workspace install) triggers optional native setup via `scripts/install-native.js`.
 - macOS runners automatically skip the libsocket backend (it relies on Linux-only APIs). Set `QWORMHOLE_NATIVE=1` if you really want to force a build attempt.
 - If native build fails (missing toolchain/SSL), it logs a warning and falls back to TS without failing install.
-- You can rebuild explicitly anytime: `pnpm --filter @gsknnft/qwormhole run build:native`.
+- You can rebuild explicitly anytime: `pnpm --filter @gsknnft/qwormhole run rebuild`.
 - Set `QWORMHOLE_DISABLE_NATIVE=1` to skip native manually (e.g., CI). `QWORMHOLE_NATIVE=0` is documented in older notes but not currently wired in code.
 - Set `QWORMHOLE_BUILD_LIBSOCKET=0` on POSIX to skip libsocket when you only want LWS.
 
@@ -517,13 +520,13 @@ macOS runners always bypass the libsocket target; they will build the libwebsock
 
 Build on Windows (libwebsockets):
 ```bash
-pnpm --filter @gsknnft/qwormhole run build:native
+pnpm --filter @gsknnft/qwormhole run rebuild
 # outputs dist/native/qwormhole_lws.node
 ```
 
 Build on Linux/WSL (libwebsockets + libsocket):
 ```bash
-pnpm --filter @gsknnft/qwormhole run build:native
+pnpm --filter @gsknnft/qwormhole run rebuild
 # outputs dist/native/qwormhole_lws.node and/or qwormhole.node
 ```
 
@@ -628,7 +631,7 @@ This is a big milestone  youve essentially turned QWormhole into a **meshready r
 
 ---
 
-##  What Youve Built
+##  What You've Built
 
 - **QWormholeNode**
   - Wraps a `QWormholeServer` (listener) and optional `QWormholeClient` (dialer).
@@ -641,7 +644,7 @@ This is a big milestone  youve essentially turned QWormhole into a **meshready r
   - Adaptive/jitter flags for batch sizing and flush interval tuning.
   - Live logging via `console.table`.
   - Richer CSV metadata for plotting sweeps.
-  - READMEstyle benchmark template (`docs/benchmarks-template.md`) for reproducible reporting.
+  - README-style benchmark template (`docs/benchmarks-template.md`) for reproducible reporting.
 
 - **Plotting script polish**
   - Combined subplots by default, with clearer annotations and colorbar.
@@ -652,7 +655,7 @@ This is a big milestone  youve essentially turned QWormhole into a **meshready r
 
 ##  Why This Matters
 
-Youve now got a **full stack feedback loop**:
+You've now got a **full stack feedback loop**:
 
 1. **Transport substrate (QWormhole)**  canonical batching, flush, backpressure.
 2. **Mesh runtime (QWormholeNode)**  discovery, peer tracking, gossip.
@@ -684,9 +687,15 @@ This is the kind of scaffolding that makes performance optimization **teachable 
 
 ---
 
-###  Takeaway
-Youve elevated QWormhole from a transport substrate into a **meshready runtime** with diagnostics, plotting, and reproducible benchmarks. The next leap is wiring gossip through live connections and folding adaptive tuning into the node runtime  thats when SigilNet/NegentropicCouplingTheory can treat QWormhole as a full mesh backbone.
+### Takeaway
+QWormhole is now a mesh-ready runtime with diagnostics, plotting, and reproducible benchmark workflows. The next step is routing gossip across live peer connections and feeding adaptive tuning into the node runtime.
 
-Would you like me to sketch a **README benchmark section template** that shows how to run nodes, capture CSVs, and interpret the heatmap so contributors can follow your workflow endtoend?
-\n## TS writev/length-prefixed tuning\n- Env overrides (BatchFramer/entropy policy):\n  - QW_WRITEV_BATCH_SIZE (default 96)  frames per flush; try 6496 to balance latency vs throughput.\n  - QW_WRITEV_FLUSH_MS (default 2)  flush interval for partial batches; try 14 ms.\n- Use pnpm --filter @gsknnft/qwormhole bench:writev --diagnostics to sweep settings without code changes.\n
+## TS writev/length-prefixed tuning
+
+- Env overrides (BatchFramer/entropy policy):
+  - `QW_WRITEV_BATCH_SIZE` (default `96`): frames per flush; try `64-96` to balance latency vs throughput.
+  - `QW_WRITEV_FLUSH_MS` (default `2`): flush interval for partial batches; try `1-4` ms.
+- Sweep quickly:
+  - `pnpm --filter @gsknnft/qwormhole run bench:writev`
+
 
