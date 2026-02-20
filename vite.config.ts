@@ -5,6 +5,8 @@ import ts from "./tsconfig.json";
 const externalDeps = [
   "@sigilnet/shared-tools",
   "@sigilnet/rug-guard",
+  "@tensorflow/tfjs",
+  "@sigilnet/qfield",
   "fs",
   "path",
   "os",

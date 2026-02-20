@@ -146,6 +146,7 @@
     "@rollup/rollup-linux-x64-gnu": "4.53.3"
   },
   "dependencies": {
+    "@tensorflow/tfjs": "4.22.0",
     "multicast-dns": "7.2.5",
     "multicast-dns-service-types": "1.1.0",
     "bindings": "^1.5.0",
