@@ -28,6 +28,13 @@ This RFC formalizes the Negentropic Transport Protocol, grounded in the mathemat
 ## Entropy-Aware Codecs
 - **Codec selection:** Adapts between JSON, CBOR, FlatBuffers based on entropy and message type histogram.
 
+## NCF as Canonical Derivation (v1+)
+- **Authoritative source:** QWormhole emits the Negentropic Coupling Framework (NCF) block in telemetry.
+- **Dual-output model:** Raw metrics remain ground truth; NCF is a deterministic derivation.
+- **Versioned outputs:** `ncf.version` and `state_source/regime_source = ncf:<version>` enable future theory forks.
+- **Downstream contract:** Services (SigilNet, Vera‑Torch, QWave) should treat NCF as canonical when present,
+  and fall back to raw metric derivation only if `ncf` is missing.
+
 ## Implementation ↔ Theory Mapping
 - Each transport policy and diagnostic is mapped to a formal definition in the theory repo.
 - NeganticIndex, entropy velocity, and coherence enums are computed as per theory.

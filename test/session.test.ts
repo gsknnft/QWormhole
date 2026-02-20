@@ -16,9 +16,8 @@ const {
     beforeFn: vi.fn((pub: Uint8Array, sec: Uint8Array) =>
       Uint8Array.from([...pub, ...sec]),
     ),
-    boxAfter: vi.fn(
-      (msg: Uint8Array, nonce: Uint8Array, shared: Uint8Array) =>
-        Uint8Array.from([...msg, ...nonce, ...shared]),
+    boxAfter: vi.fn((msg: Uint8Array, nonce: Uint8Array, shared: Uint8Array) =>
+      Uint8Array.from([...msg, ...nonce, ...shared]),
     ),
     boxOpenAfter: vi.fn(() => Uint8Array.from([116, 101, 115, 116])),
     randomBytesFn: vi.fn((len: number) =>

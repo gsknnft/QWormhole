@@ -15,7 +15,9 @@ type NativeBindingClient = {
 };
 
 vi.mock("bindings", () => {
-  const loadBinding = (name: string) => {
+  const loadBinding = (nameOrOpts: string | { bindings: string }) => {
+    const name =
+      typeof nameOrOpts === "string" ? nameOrOpts : nameOrOpts.bindings;
     const mod = bindingStore.modules.get(name);
     if (!mod) {
       throw new Error(`binding ${name} missing`);
@@ -45,7 +47,7 @@ function registerBinding(name: string) {
 }
 
 async function importNative() {
-  return import("../src/native");
+  return import("../src/core/NativeTCPClient");
 }
 
 describe("native binding loader", () => {

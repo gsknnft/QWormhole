@@ -1,0 +1,882 @@
+/**
+ * BatchFramer - Zero-copy framing with writev() batching
+ *
+ * Implements high-performance message batching for QWormhole 0.3.0 roadmap:
+ * - Preallocated buffer rings for zero-copy framing
+ * - writev() batching to reduce syscall overhead
+ * - Configurable batch sizes based on entropy policy
+ *
+ * Performance target: ≤ 150 ms for 10k messages in TS-to-TS topology
+ */
+
+import net from "node:net";
+import { TypedEventEmitter } from "../utils/typedEmitter";
+
+const HEADER_LENGTH = 4;
+const DEFAULT_MAX_FRAME_LENGTH = 4 * 1024 * 1024; // 4 MiB
+const ENV_BATCH_SIZE = process.env.QW_WRITEV_BATCH_SIZE
+  ? Number(process.env.QW_WRITEV_BATCH_SIZE)
+  : undefined;
+const ENV_FLUSH_INTERVAL_MS = process.env.QW_WRITEV_FLUSH_MS
+  ? Number(process.env.QW_WRITEV_FLUSH_MS)
+  : undefined;
+
+const DEFAULT_BATCH_SIZE = Number.isFinite(ENV_BATCH_SIZE)
+  ? ENV_BATCH_SIZE!
+  : 96;
+const DEFAULT_RING_SIZE = 128;
+const DEFAULT_FLUSH_INTERVAL_MS = Number.isFinite(ENV_FLUSH_INTERVAL_MS)
+  ? ENV_FLUSH_INTERVAL_MS!
+  : 1;
+// Do not let env silently clamp caps; FlowController governs at runtime.
+const DEFAULT_MAX_BUFFERS_PER_FLUSH = 64;
+const DEFAULT_MAX_BYTES_PER_FLUSH = 96 * 1024; // 96 KiB budget per writev
+
+interface BatchFramerEvents {
+  message: Buffer;
+  error: Error;
+  flush: { bufferCount: number; totalBytes: number };
+  drain: void;
+  backpressure: { queuedBytes: number };
+}
+
+export interface BatchFramerStats {
+  totalFrames: number;
+  totalFlushes: number;
+  totalBytes: number;
+  pendingFrames: number;
+  pendingBytes: number;
+  maxPendingFrames: number;
+  maxPendingBytes: number;
+  maxInBufferBytes: number;
+  ringSlots: number;
+  ringInUse: number;
+  ringMaxInUse: number;
+  ringResizeCount: number;
+  ringResizeBytes: number;
+  overflowAllocations: number;
+  overflowAllocatedBytes: number;
+  copyAllocations: number;
+  copyAllocatedBytes: number;
+  lastFlushTimestamp?: number;
+  backpressureEvents: number;
+  lastBackpressureBytes?: number;
+  lastBackpressureTimestamp?: number;
+}
+
+export interface BatchFramerOptions {
+  /** Maximum frame length in bytes (default: 4 MiB) */
+  maxFrameLength?: number;
+  /** Maximum number of frames to batch before flush (default: 64) */
+  batchSize?: number;
+  /** Size of the preallocated buffer ring (default: 128) */
+  ringSize?: number;
+  /** Flush interval in ms for partial batches (default: 1ms) */
+  flushIntervalMs?: number;
+  /** Enable writev batching (default: true) */
+  enableWritev?: boolean;
+  /** Maximum buffers to send per writev flush (default: env or 32) */
+  maxBuffersPerFlush?: number;
+  /** Maximum bytes to send per writev flush (default: env or 64 KiB) */
+  maxBytesPerFlush?: number;
+  /** Optional flush handler for non-socket transports */
+  flushHandler?: (buffers: Buffer[]) => number;
+}
+
+/**
+ * Preallocated buffer slot in the ring buffer
+ */
+interface RingSlot {
+  buffer: Buffer;
+  length: number;
+  inUse: boolean;
+}
+
+/**
+ * BatchFramer provides high-performance message framing with batching
+ */
+export class BatchFramer extends TypedEventEmitter<BatchFramerEvents> {
+  private readonly maxFrameLength: number;
+  private batchSize: number;
+  private readonly enableWritev: boolean;
+  private flushIntervalMs: number;
+  private maxBuffersPerFlush: number;
+  private maxBytesPerFlush: number;
+
+  // Ring buffer for preallocated buffers
+  private readonly ring: RingSlot[];
+  private ringHead = 0;
+
+  // Incoming data buffer
+  private inBuffer: Buffer = Buffer.alloc(0);
+
+  // Outgoing batch queue
+  private outBatch: Buffer[] = [];
+  private outBatchBytes = 0;
+  // Track which ring slots are used by current batch
+  private outBatchSlotIndices: number[] = [];
+  private flushTimer?: NodeJS.Timeout;
+  private socket?: net.Socket;
+  private flushHandler?: (buffers: Buffer[]) => number;
+  private drainWaiter?: {
+    promise: Promise<void>;
+    cleanup: () => void;
+    reject: (err: Error) => void;
+    settled: boolean;
+  };
+  private draining = false;
+  private drainListener?: () => void;
+  private totalFrames = 0;
+  private totalFlushes = 0;
+  private totalBytes = 0;
+  private lastFlushTimestamp?: number;
+  private backpressureEvents = 0;
+  private lastBackpressureBytes?: number;
+  private lastBackpressureTimestamp?: number;
+  private maxPendingFrames = 0;
+  private maxPendingBytes = 0;
+  private maxInBufferBytes = 0;
+  private ringInUse = 0;
+  private ringMaxInUse = 0;
+  private ringResizeCount = 0;
+  private ringResizeBytes = 0;
+  private overflowAllocations = 0;
+  private overflowAllocatedBytes = 0;
+  private copyAllocations = 0;
+  private copyAllocatedBytes = 0;
+
+  private computeFlushCut(buffers: Buffer[]): { cut: number; bytes: number } {
+    if (buffers.length === 0) return { cut: 0, bytes: 0 };
+    let count = 0;
+    let bytes = 0;
+    let cut = 0;
+    while (cut < buffers.length) {
+      const next = buffers[cut];
+      if (
+        count >= this.maxBuffersPerFlush ||
+        bytes + next.length > this.maxBytesPerFlush
+      ) {
+        break;
+      }
+      bytes += next.length;
+      count += 1;
+      cut += 1;
+    }
+    if (cut === 0) {
+      cut = 1;
+      bytes = buffers[0].length;
+    }
+    return { cut, bytes };
+  }
+
+  /**
+   * Preview the next flush size without mutating state.
+   */
+  getFlushPreview(): { bufferCount: number; totalBytes: number } {
+    const { cut, bytes } = this.computeFlushCut(this.outBatch);
+    return { bufferCount: cut, totalBytes: bytes };
+  }
+
+  constructor(options?: BatchFramerOptions) {
+    super();
+    this.maxFrameLength = options?.maxFrameLength ?? DEFAULT_MAX_FRAME_LENGTH;
+    this.batchSize = options?.batchSize ?? DEFAULT_BATCH_SIZE;
+    this.enableWritev = options?.enableWritev ?? true;
+    this.flushIntervalMs =
+      options?.flushIntervalMs ?? DEFAULT_FLUSH_INTERVAL_MS;
+    this.maxBuffersPerFlush =
+      options?.maxBuffersPerFlush ?? DEFAULT_MAX_BUFFERS_PER_FLUSH;
+    this.maxBytesPerFlush =
+      options?.maxBytesPerFlush ?? DEFAULT_MAX_BYTES_PER_FLUSH;
+    this.flushHandler = options?.flushHandler;
+
+    // Initialize ring buffer
+    const ringSize = options?.ringSize ?? DEFAULT_RING_SIZE;
+    this.ring = Array.from({ length: ringSize }, () => ({
+      buffer: Buffer.allocUnsafe(HEADER_LENGTH + 1024), // Start with 1KB slots
+      length: 0,
+      inUse: false,
+    }));
+  }
+
+  /**
+   * Update flush caps (buffers / bytes) at runtime, primarily for tuning/benching.
+   */
+  setFlushCaps(maxBuffersPerFlush?: number, maxBytesPerFlush?: number): void {
+    if (typeof maxBuffersPerFlush === "number" && Number.isFinite(maxBuffersPerFlush) && maxBuffersPerFlush > 0) {
+      this.maxBuffersPerFlush = maxBuffersPerFlush;
+    }
+    if (typeof maxBytesPerFlush === "number" && Number.isFinite(maxBytesPerFlush) && maxBytesPerFlush > 0) {
+      this.maxBytesPerFlush = maxBytesPerFlush;
+    }
+  }
+
+  /**
+   * Update batch sizing and flush interval at runtime (bench-only).
+   */
+  setBatchTiming(batchSize?: number, flushIntervalMs?: number): void {
+    if (typeof batchSize === "number" && Number.isFinite(batchSize) && batchSize > 0) {
+      this.batchSize = batchSize;
+    }
+    if (typeof flushIntervalMs === "number" && Number.isFinite(flushIntervalMs) && flushIntervalMs >= 0) {
+      this.flushIntervalMs = flushIntervalMs;
+    }
+  }
+
+  /**
+   * Attach or replace the flush handler for non-socket transports.
+   */
+  setFlushHandler(handler?: (buffers: Buffer[]) => number): void {
+    this.flushHandler = handler;
+  }
+
+  /**
+   * Attach a socket for writev operations
+   */
+  attachSocket(socket: net.Socket): void {
+    if (this.socket && this.drainListener) {
+      this.socket.off("drain", this.drainListener);
+    }
+    this.socket = socket;
+    this.drainListener = () => {
+      this.draining = false;
+      this.emit("drain", undefined as never);
+      void this.flushBatch();
+    };
+    socket.on("drain", this.drainListener);
+  }
+
+  /**
+   * Detach the socket
+   */
+  detachSocket(): void {
+    this.clearFlushTimer();
+    if (this.socket && this.drainListener) {
+      this.socket.off("drain", this.drainListener);
+    }
+    if (this.drainWaiter) {
+      const waiter = this.drainWaiter;
+      if (!waiter.settled) {
+        waiter.settled = true;
+        waiter.cleanup();
+        waiter.reject(new Error("Socket detached while waiting for drain"));
+      } else {
+        waiter.cleanup();
+      }
+      this.drainWaiter = undefined;
+    }
+    this.drainListener = undefined;
+    this.draining = false;
+    this.socket = undefined;
+  }
+
+  /**
+   * Encode a payload with length prefix (zero-copy when possible)
+   */
+  encode(payload: Buffer): Buffer {
+    const { slot, index } = this.acquireSlot(HEADER_LENGTH + payload.length);
+    slot.buffer.writeUInt32BE(payload.length, 0);
+    payload.copy(slot.buffer, HEADER_LENGTH);
+    slot.length = HEADER_LENGTH + payload.length;
+
+    // Track the slot index for later release
+    if (index >= 0) {
+      this.outBatchSlotIndices.push(index);
+    }
+
+    // Return a view of the slot buffer
+    return slot.buffer.subarray(0, slot.length);
+  }
+
+  /**
+   * Encode payload and add to batch queue
+   */
+  encodeToBatch(payload: Buffer): void {
+    const framed = this.encode(payload);
+    this.outBatch.push(framed);
+    this.outBatchBytes += framed.length;
+    this.totalFrames += 1;
+    this.maxPendingFrames = Math.max(this.maxPendingFrames, this.outBatch.length);
+    this.maxPendingBytes = Math.max(this.maxPendingBytes, this.outBatchBytes);
+
+    if (this.outBatch.length >= this.batchSize) {
+      void this.flushBatch();
+    } else if (!this.flushTimer && this.flushIntervalMs > 0) {
+      this.flushTimer = setTimeout(() => {
+        this.flushTimer = undefined;
+        void this.flushBatch();
+      }, this.flushIntervalMs);
+    }
+  }
+
+  /**
+   * Flush the current batch to the socket
+   */
+  async flushBatch(): Promise<void> {
+    this.clearFlushTimer();
+
+    if (this.outBatch.length === 0) {
+      return;
+    }
+    if (this.draining) {
+      try {
+        await this.waitForDrain();
+      } catch (err) {
+        this.emit("error", err instanceof Error ? err : new Error(String(err)));
+      }
+      return;
+    }
+
+    const buffers = this.outBatch;
+    const totalBytes = this.outBatchBytes;
+    const slotIndices = this.outBatchSlotIndices;
+    this.outBatch = [];
+    this.outBatchBytes = 0;
+    this.outBatchSlotIndices = [];
+
+    let flushBuffers = buffers;
+    let flushSlotIndices = slotIndices;
+    let flushBytes = totalBytes;
+
+    if (
+      buffers.length > this.maxBuffersPerFlush ||
+      totalBytes > this.maxBytesPerFlush
+    ) {
+      const { cut, bytes } = this.computeFlushCut(buffers);
+      flushBuffers = buffers.slice(0, cut);
+      flushSlotIndices = slotIndices.slice(0, cut);
+      flushBytes = bytes;
+      this.outBatch = buffers.slice(cut);
+      this.outBatchSlotIndices = slotIndices.slice(cut);
+      this.outBatchBytes = Math.max(0, totalBytes - bytes);
+    }
+
+    this.emit("flush", { bufferCount: flushBuffers.length, totalBytes: flushBytes });
+    this.totalFlushes += 1;
+    this.totalBytes += flushBytes;
+    this.lastFlushTimestamp = Date.now();
+
+    if (this.flushHandler) {
+      try {
+        const written = this.flushHandler(flushBuffers);
+        if (written < flushBytes) {
+          this.queueRemainder(flushBuffers, written, flushSlotIndices);
+        } else if (this.draining) {
+          this.draining = false;
+          this.emit("drain", undefined as never);
+        }
+      } catch (err) {
+        this.emit("error", err instanceof Error ? err : new Error(String(err)));
+      } finally {
+        this.releaseSlots(flushSlotIndices);
+      }
+      return;
+    }
+
+    if (!this.socket || this.socket.destroyed) {
+      this.releaseSlots(flushSlotIndices);
+      return;
+    }
+
+    try {
+      if (this.enableWritev && flushBuffers.length > 1) {
+        // chunk by caps (buffers and bytes) to avoid overruns/backpressure storms
+        let idx = 0;
+        while (idx < flushBuffers.length) {
+          let count = 0;
+          let bytes = 0;
+          const chunk: Buffer[] = [];
+          const chunkIndices: number[] = [];
+          while (idx < flushBuffers.length) {
+            const next = flushBuffers[idx];
+            const nextBytes = bytes + next.length;
+            if (
+              count >= this.maxBuffersPerFlush ||
+              nextBytes > this.maxBytesPerFlush
+            ) {
+              break;
+            }
+            chunk.push(next);
+            chunkIndices.push(flushSlotIndices[idx]);
+            bytes = nextBytes;
+            count += 1;
+            idx += 1;
+          }
+          // safety: ensure progress even if a single buffer exceeds cap
+          if (chunk.length === 0) {
+            chunk.push(flushBuffers[idx]);
+            chunkIndices.push(flushSlotIndices[idx]);
+            idx += 1;
+          }
+          await this.writevBatch(chunk, chunkIndices);
+        }
+      } else {
+        const combined = Buffer.concat(flushBuffers);
+        await this.writeBuffer(combined);
+      }
+    } finally {
+      this.releaseSlots(flushSlotIndices);
+    }
+
+    if (this.outBatch.length > 0 && !this.flushTimer && this.flushIntervalMs >= 0) {
+      this.flushTimer = setTimeout(() => {
+        this.flushTimer = undefined;
+        void this.flushBatch();
+      }, this.flushIntervalMs);
+    }
+  }
+
+  /**
+   * Write buffers using writev
+   */
+  private async writevBatch(
+    buffers: Buffer[],
+    slotIndices?: number[],
+  ): Promise<void> {
+    if (!this.socket || this.socket.destroyed) return;
+
+    return new Promise<void>((resolve, reject) => {
+      const socket = this.socket!;
+
+      // Node.js socket.cork() + multiple writes + uncork() is effectively writev
+      socket.cork();
+      let bytesWritten = 0;
+      for (let idx = 0; idx < buffers.length; idx += 1) {
+        const buf = buffers[idx];
+        bytesWritten += buf.length;
+        const canWrite = socket.write(buf);
+        if (!canWrite) {
+          this.handleBackpressure(socket.writableLength);
+          if (idx < buffers.length - 1) {
+            this.queueRemainder(buffers, bytesWritten, slotIndices);
+          }
+          break;
+        }
+      }
+      // Use queueMicrotask to ensure uncork happens after all writes are queued
+      queueMicrotask(() => socket.uncork());
+
+      if (this.draining) {
+        // Cleanup function to remove all listeners
+        const cleanup = () => {
+          socket.off("drain", onDrain);
+          socket.off("error", onError);
+          socket.off("close", onClose);
+        };
+
+        const onDrain = () => {
+          cleanup();
+          this.draining = false;
+          resolve();
+        };
+
+        const onError = (err: Error) => {
+          cleanup();
+          reject(err);
+        };
+
+        const onClose = () => {
+          cleanup();
+          reject(new Error("Socket closed while waiting for drain"));
+        };
+
+        socket.once("drain", onDrain);
+        socket.once("error", onError);
+        socket.once("close", onClose);
+      } else {
+        resolve();
+      }
+    });
+  }
+
+  /**
+   * Write a single buffer
+   */
+  private async writeBuffer(buffer: Buffer): Promise<void> {
+    if (!this.socket || this.socket.destroyed) return;
+
+    return new Promise<void>((resolve, reject) => {
+      const socket = this.socket!;
+      const canWrite = socket.write(buffer);
+
+      if (!canWrite) {
+        this.handleBackpressure(socket.writableLength);
+
+        // Cleanup function to remove all listeners
+        const cleanup = () => {
+          socket.off("drain", onDrain);
+          socket.off("error", onError);
+          socket.off("close", onClose);
+        };
+
+        const onDrain = () => {
+          cleanup();
+          this.draining = false;
+          resolve();
+        };
+
+        const onError = (err: Error) => {
+          cleanup();
+          reject(err);
+        };
+
+        const onClose = () => {
+          cleanup();
+          reject(new Error("Socket closed while waiting for drain"));
+        };
+
+        socket.once("drain", onDrain);
+        socket.once("error", onError);
+        socket.once("close", onClose);
+      } else {
+        resolve();
+      }
+    });
+  }
+
+  private handleBackpressure(queuedBytes: number): void {
+    const entering = !this.draining;
+    if (entering) {
+      this.backpressureEvents += 1;
+      this.lastBackpressureTimestamp = Date.now();
+      this.lastBackpressureBytes = queuedBytes;
+      this.draining = true;
+      this.emit("backpressure", { queuedBytes });
+      return;
+    }
+    this.lastBackpressureBytes = Math.max(
+      this.lastBackpressureBytes ?? 0,
+      queuedBytes,
+    );
+  }
+
+  private waitForDrain(): Promise<void> {
+    if (!this.socket || this.socket.destroyed) {
+      return Promise.resolve();
+    }
+    if (this.drainWaiter) {
+      return this.drainWaiter.promise;
+    }
+    const socket = this.socket;
+    let resolveWaiter: () => void = () => undefined;
+    let rejectWaiter: (err: Error) => void = () => undefined;
+    const promise = new Promise<void>((resolve, reject) => {
+      resolveWaiter = resolve;
+      rejectWaiter = reject;
+    });
+    const cleanup = () => {
+      socket.off("drain", onDrain);
+      socket.off("error", onError);
+      socket.off("close", onClose);
+      this.drainWaiter = undefined;
+    };
+    const waiter = {
+      promise,
+      cleanup,
+      reject: (err: Error) => rejectWaiter(err),
+      settled: false,
+    };
+    const onDrain = () => {
+      if (waiter.settled) return;
+      waiter.settled = true;
+      cleanup();
+      resolveWaiter();
+    };
+    const onError = (err: Error) => {
+      if (waiter.settled) return;
+      waiter.settled = true;
+      cleanup();
+      rejectWaiter(err);
+    };
+    const onClose = () => {
+      if (waiter.settled) return;
+      waiter.settled = true;
+      cleanup();
+      rejectWaiter(new Error("Socket closed while waiting for drain"));
+    };
+    socket.once("drain", onDrain);
+    socket.once("error", onError);
+    socket.once("close", onClose);
+    this.drainWaiter = waiter;
+    if (!this.draining) {
+      onDrain();
+    }
+    return promise;
+  }
+
+  /**
+   * Push incoming data for parsing
+   */
+  push(chunk: Buffer): void {
+    this.inBuffer = Buffer.concat([this.inBuffer, chunk]);
+    this.maxInBufferBytes = Math.max(this.maxInBufferBytes, this.inBuffer.length);
+
+    while (this.inBuffer.length >= HEADER_LENGTH) {
+      const frameLength = this.inBuffer.readUInt32BE(0);
+
+      if (frameLength > this.maxFrameLength) {
+        this.inBuffer = Buffer.alloc(0);
+        this.emit(
+          "error",
+          new Error(
+            `Frame length ${frameLength} exceeds limit ${this.maxFrameLength}`,
+          ),
+        );
+        return;
+      }
+
+      if (this.inBuffer.length < HEADER_LENGTH + frameLength) break;
+
+      const start = HEADER_LENGTH;
+      const end = HEADER_LENGTH + frameLength;
+      const frame = this.inBuffer.subarray(start, end);
+      this.inBuffer = this.inBuffer.subarray(end);
+      this.emit("message", frame);
+    }
+  }
+
+  /**
+   * Reset the framer state
+   */
+  reset(): void {
+    this.inBuffer = Buffer.alloc(0);
+    this.outBatch = [];
+    this.outBatchBytes = 0;
+    this.outBatchSlotIndices = [];
+    this.clearFlushTimer();
+    for (const slot of this.ring) {
+      slot.inUse = false;
+      slot.length = 0;
+    }
+    this.maxPendingFrames = 0;
+    this.maxPendingBytes = 0;
+    this.maxInBufferBytes = 0;
+    this.ringInUse = 0;
+    this.ringMaxInUse = 0;
+    this.ringResizeCount = 0;
+    this.ringResizeBytes = 0;
+    this.overflowAllocations = 0;
+    this.overflowAllocatedBytes = 0;
+    this.copyAllocations = 0;
+    this.copyAllocatedBytes = 0;
+  }
+
+  getStats(): BatchFramerStats {
+    return {
+      totalFrames: this.totalFrames,
+      totalFlushes: this.totalFlushes,
+      totalBytes: this.totalBytes,
+      pendingFrames: this.outBatch.length,
+      pendingBytes: this.outBatchBytes,
+      maxPendingFrames: this.maxPendingFrames,
+      maxPendingBytes: this.maxPendingBytes,
+      maxInBufferBytes: this.maxInBufferBytes,
+      ringSlots: this.ring.length,
+      ringInUse: this.ringInUse,
+      ringMaxInUse: this.ringMaxInUse,
+      ringResizeCount: this.ringResizeCount,
+      ringResizeBytes: this.ringResizeBytes,
+      overflowAllocations: this.overflowAllocations,
+      overflowAllocatedBytes: this.overflowAllocatedBytes,
+      copyAllocations: this.copyAllocations,
+      copyAllocatedBytes: this.copyAllocatedBytes,
+      lastFlushTimestamp: this.lastFlushTimestamp,
+      backpressureEvents: this.backpressureEvents,
+      lastBackpressureBytes: this.lastBackpressureBytes,
+      lastBackpressureTimestamp: this.lastBackpressureTimestamp,
+    };
+  }
+
+  private resetStats(): void {
+    this.totalFrames = 0;
+    this.totalFlushes = 0;
+    this.totalBytes = 0;
+    this.lastFlushTimestamp = undefined;
+    this.backpressureEvents = 0;
+    this.lastBackpressureBytes = undefined;
+    this.lastBackpressureTimestamp = undefined;
+    this.maxPendingFrames = this.outBatch.length;
+    this.maxPendingBytes = this.outBatchBytes;
+    this.maxInBufferBytes = this.inBuffer.length;
+    this.ringMaxInUse = this.ringInUse;
+    this.ringResizeCount = 0;
+    this.ringResizeBytes = 0;
+    this.overflowAllocations = 0;
+    this.overflowAllocatedBytes = 0;
+    this.copyAllocations = 0;
+    this.copyAllocatedBytes = 0;
+  }
+
+  async snapshot(options?: { reset?: boolean }): Promise<BatchFramerStats> {
+    await this.flushBatch();
+    const stats = this.getStats();
+    if (options?.reset) {
+      this.resetStats();
+    }
+    return stats;
+  }
+
+  /**
+   * Get current batch size
+   */
+  get pendingBatchSize(): number {
+    return this.outBatch.length;
+  }
+
+  /**
+   * Get current batch bytes
+   */
+  get pendingBatchBytes(): number {
+    return this.outBatchBytes;
+  }
+
+  /**
+   * Check if the framer has a connected socket for flushing
+   */
+  get canFlush(): boolean {
+    return Boolean(this.flushHandler || (this.socket && !this.socket.destroyed));
+  }
+
+  /**
+   * Acquire a slot from the ring buffer, returns slot and its index
+   */
+  private acquireSlot(requiredSize: number): { slot: RingSlot; index: number } {
+    // Find an available slot
+    for (let i = 0; i < this.ring.length; i++) {
+      const idx = (this.ringHead + i) % this.ring.length;
+      const slot = this.ring[idx];
+
+      if (!slot.inUse) {
+        // Resize if needed
+        if (slot.buffer.length < requiredSize) {
+          this.ringResizeCount += 1;
+          this.ringResizeBytes += requiredSize - slot.buffer.length;
+          slot.buffer = Buffer.allocUnsafe(requiredSize);
+        }
+        slot.inUse = true;
+        this.ringInUse += 1;
+        this.ringMaxInUse = Math.max(this.ringMaxInUse, this.ringInUse);
+        this.ringHead = (idx + 1) % this.ring.length;
+        return { slot, index: idx };
+      }
+    }
+
+    // All slots in use, allocate a new buffer (fallback)
+    // Return -1 as index to indicate it's not from the ring
+    this.overflowAllocations += 1;
+    this.overflowAllocatedBytes += requiredSize;
+    return {
+      slot: {
+        buffer: Buffer.allocUnsafe(requiredSize),
+        length: 0,
+        inUse: true,
+      },
+      index: -1,
+    };
+  }
+
+  private clearFlushTimer(): void {
+    if (this.flushTimer) {
+      clearTimeout(this.flushTimer);
+      this.flushTimer = undefined;
+    }
+  }
+
+  private releaseSlots(indices: number[]): void {
+    const preserve =
+      this.outBatchSlotIndices.length > 0
+        ? new Set(this.outBatchSlotIndices.filter(idx => idx >= 0))
+        : undefined;
+    for (const idx of indices) {
+      if (idx >= 0 && idx < this.ring.length) {
+        if (preserve?.has(idx)) {
+          continue;
+        }
+        if (this.ring[idx].inUse) {
+          this.ring[idx].inUse = false;
+          this.ringInUse = Math.max(0, this.ringInUse - 1);
+        }
+      }
+    }
+  }
+
+  private queueRemainder(
+    buffers: Buffer[],
+    bytesWritten: number,
+    slotIndices?: number[],
+  ): void {
+    const { buffers: remaining, slots: remainingSlots } = this.consumeWritten(
+      buffers,
+      bytesWritten,
+      slotIndices,
+    );
+    if (remaining.length === 0) return;
+    const existingBuffers = this.outBatch;
+    const existingBytes = this.outBatchBytes;
+    const existingSlots = this.outBatchSlotIndices;
+    const remainderBytes = remaining.reduce((sum, buf) => sum + buf.length, 0);
+
+    this.outBatch = remaining.concat(existingBuffers);
+    this.outBatchBytes = remainderBytes + existingBytes;
+    this.outBatchSlotIndices = remainingSlots.concat(existingSlots);
+    this.maxPendingFrames = Math.max(this.maxPendingFrames, this.outBatch.length);
+    this.maxPendingBytes = Math.max(this.maxPendingBytes, this.outBatchBytes);
+    this.backpressureEvents += 1;
+    this.lastBackpressureTimestamp = Date.now();
+    this.lastBackpressureBytes = this.outBatchBytes;
+    this.emit("backpressure", { queuedBytes: this.outBatchBytes });
+    if (!this.flushTimer && this.flushIntervalMs > 0) {
+      this.flushTimer = setTimeout(() => {
+        this.flushTimer = undefined;
+        void this.flushBatch();
+      }, this.flushIntervalMs);
+    }
+  }
+
+  private consumeWritten(
+    buffers: Buffer[],
+    bytesWritten: number,
+    slotIndices?: number[],
+  ): { buffers: Buffer[]; slots: number[] } {
+    const indices =
+      slotIndices ?? Array.from({ length: buffers.length }, () => -1);
+    if (bytesWritten <= 0) {
+      return { buffers, slots: indices };
+    }
+    let remaining = bytesWritten;
+    let idx = 0;
+    while (idx < buffers.length && remaining >= buffers[idx].length) {
+      remaining -= buffers[idx].length;
+      idx += 1;
+    }
+    if (idx >= buffers.length) {
+      return { buffers: [], slots: [] };
+    }
+    if (remaining === 0) {
+      return {
+        buffers: buffers.slice(idx),
+        slots: indices.slice(idx),
+      };
+    }
+    const remainder: Buffer[] = [buffers[idx].subarray(remaining)];
+    const remainderSlots: number[] = [indices[idx]];
+    for (let next = idx + 1; next < buffers.length; next += 1) {
+      remainder.push(buffers[next]);
+      remainderSlots.push(indices[next]);
+    }
+    return { buffers: remainder, slots: remainderSlots };
+  }
+}
+
+/**
+ * Create a batch framer with entropy-policy-aware defaults
+ */
+export function createBatchFramer(
+  batchSize?: number,
+  options?: Omit<BatchFramerOptions, "batchSize">,
+): BatchFramer {
+  return new BatchFramer({
+    ...options,
+    batchSize: batchSize ?? DEFAULT_BATCH_SIZE,
+  });
+}

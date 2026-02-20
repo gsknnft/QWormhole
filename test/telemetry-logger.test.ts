@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
-import { createConsoleTelemetryLogger } from "../src/telemetry-logger.js";
-import type { QWormholeTelemetry } from "types";
+import { createConsoleTelemetryLogger } from "../src/utils/telemetry-logger";
+import { QWormholeTelemetry } from "../src/types/types";
 
 describe("telemetry logger", () => {
   it("formats telemetry snapshot", () => {

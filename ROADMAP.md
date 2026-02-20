@@ -38,7 +38,7 @@ _Note: the full 0.3.0 feature set is merged into the dev branch, but the publish
 
 ## Install & Tooling
 
-- **Native build switches**: `QWORMHOLE_NATIVE=0` to skip native, `QWORMHOLE_NATIVE=1` to force it, and `QWORMHOLE_BUILD_LIBSOCKET=0` to skip libsocket on Linux/WSL when leaning into LWS-only (macOS now auto-skips libsocket entirely).
+- **Native build switches**: `QWORMHOLE_DISABLE_NATIVE=1` to skip native, `QWORMHOLE_BUILD_LIBSOCKET=0` to skip libsocket on Linux/WSL when leaning into LWS-only (macOS now auto-skips libsocket entirely).
 - **Better logging**: add `QWORMHOLE_DEBUG_NATIVE=1` to emit which backend loaded and why fallback happened.
 - **Prebuilt binaries**: evaluate CI-built precompiled addons for common platforms (Linux x64, macOS arm64, Windows x64) to reduce local toolchain friction.
 

@@ -5,8 +5,8 @@ import {
   QWormholeClient,
   createNegentropicHandshake,
 } from "../src/index.js";
-import { jsonDeserializer } from "../src/codecs.js";
-import { LengthPrefixedFramer } from "../src/framing.js";
+import { jsonDeserializer } from "../src/core/codecs.js";
+import { LengthPrefixedFramer } from "../src/core/framing.js";
 
 describe("QWormholeServer handshake rejection", () => {
   it(

@@ -21,7 +21,7 @@ import {
   PeerRegistry,
   DEFAULT_COHERENCE_THRESHOLDS,
   createPeerRegistry,
-} from "../src/sovereign/registry";
+} from "../src/registry";
 import type { Peer } from "../src/types/sigilnet.types";
 
 const samplePeer: Peer = {

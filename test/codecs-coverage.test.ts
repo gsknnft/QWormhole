@@ -7,7 +7,7 @@ import {
   jsonDeserializer,
   createCborSerializer,
   createCborDeserializer,
-} from "../src/codecs.js";
+} from "../src/core/codecs.js";
 
 describe("codecs coverage", () => {
   it("serializes and deserializes common payloads", () => {

@@ -1,36 +1,45 @@
-import net from "node:net";
-import tls from "node:tls";
-import { createHash, randomUUID } from "node:crypto";
-import { LengthPrefixedFramer } from "../framing";
-import { BatchFramer } from "../batch-framer";
-import { TypedEventEmitter } from "../typedEmitter";
-import { bufferDeserializer, defaultSerializer } from "../codecs";
-import { QWormholeError } from "../errors";
-import { TokenBucket, PriorityQueue, delay } from "../qos";
+import { createHash, randomUUID } from "crypto";
+import net from "net";
+import type {
+  Deserializer,
+  FramingMode,
+  Payload,
+  QWTlsOptions,
+  QWormholeServerConnection,
+  QWormholeServerEvents,
+  QWormholeServerOptions,
+  QWormholeTelemetry,
+  SendOptions,
+  Serializer,
+} from "src/types/types";
+import tls from "tls";
+import {
+  attachCoherenceAdapter,
+  type CoherenceAdapterHandle,
+  type CoherenceAdapterOptions,
+} from "../coherence/adapter";
+import { BatchFramer } from "../core/batch-framer";
+import { bufferDeserializer, defaultSerializer } from "../core/codecs";
+import {
+  createFlowController,
+  type FlowController,
+} from "../core/flow-controller";
+import { LengthPrefixedFramer } from "../core/framing";
+import { PriorityQueue, TokenBucket, delay } from "../core/qos";
+import type { EntropyMetrics } from "../handshake/entropy-policy";
+import {
+  computeEntropyMetrics,
+  deriveEntropyPolicy,
+} from "../handshake/entropy-policy";
+import { type HandshakePayload } from "../handshake/handshake-policy";
 import {
   isNegentropicHandshake,
   verifyNegentropicHandshake,
 } from "../handshake/negentropic-handshake";
-import { type HandshakePayload } from "../handshake/handshake-policy";
-import {
-  deriveEntropyPolicy,
-  computeEntropyMetrics,
-} from "../handshake/entropy-policy";
-import type { EntropyMetrics } from "../handshake/entropy-policy";
 import { handshakePayloadSchema } from "../schema/scp";
-import { createFlowController, type FlowController } from "../flow-controller";
+import { QWormholeError } from "../utils/errors";
 import { inferMessageType } from "../utils/negentropic-diagnostics";
-import type {
-  Payload,
-  QWormholeServerConnection,
-  QWormholeServerEvents,
-  QWormholeServerOptions,
-  Serializer,
-  Deserializer,
-  QWormholeTelemetry,
-  SendOptions,
-  QWTlsOptions,
-} from "src/types/types";
+import { TypedEventEmitter } from "../utils/typedEmitter";
 
 const randomId = () =>
   typeof randomUUID === "function"
@@ -38,15 +47,16 @@ const randomId = () =>
     : Math.random().toString(36).slice(2);
 
 type ManagedConnection = QWormholeServerConnection & {
-  backpressured: boolean;
   queue: PriorityQueue<Buffer>;
   limiter?: TokenBucket;
   handshakePending: boolean;
   outboundFramer?: BatchFramer;
   flowController?: FlowController;
+  coherenceAdapter?: CoherenceAdapterHandle;
   entropyMetrics: EntropyMetrics;
   peerIsNative: boolean;
   handshakeMessageDelivered: boolean;
+  tuneFramer?: () => void;
 };
 
 type TrustSnapshotReason = "close" | "error" | "disconnect";
@@ -57,14 +67,26 @@ type InternalServerOptions<TMessage> = Omit<
 > & {
   serializer: Serializer;
   deserializer: Deserializer<TMessage>;
-  framing: "length-prefixed" | "none";
+  framing: FramingMode;
   onAuthorizeConnection?: QWormholeServerOptions<TMessage>["onAuthorizeConnection"];
   rateLimitBytesPerSec?: number;
   rateLimitBurstBytes?: number;
   verifyHandshake?: (payload: unknown) => boolean | Promise<boolean>;
   tls?: QWTlsOptions;
   emitHandshakeMessages?: boolean;
+  coherence?: CoherenceAdapterOptions;
+  disableFlowController?: boolean;
+  flowFastPath?: boolean;
 };
+
+// const resolveFramerCaps = (sliceSize: number, peerIsNative: boolean) => {
+//   const minBuffers = 8;
+//   const maxBuffers = peerIsNative ? 96 : 48;
+//   const buffers = Math.min(maxBuffers, Math.max(minBuffers, sliceSize * 2));
+//   const maxBytes = peerIsNative ? 128 * 1024 : 64 * 1024;
+//   const flushMs = peerIsNative ? 1 : 2;
+//   return { maxBuffers: buffers, maxBytes, flushMs };
+// };
 
 export class QWormholeServer<TMessage = Buffer> extends TypedEventEmitter<
   QWormholeServerEvents<TMessage>
@@ -76,7 +98,7 @@ export class QWormholeServer<TMessage = Buffer> extends TypedEventEmitter<
   >();
   private failedHandshakesTTLMs = 60 * 60 * 1000; // 1 hour TTL
   private failedHandshakesMaxSize = 10000; // Maximum entries to prevent unbounded growth
-  private readonly server: net.Server;
+  private readonly server: net.Server | tls.Server;
   private readonly clients = new Map<string, ManagedConnection>();
   private readonly options: InternalServerOptions<TMessage>;
   private readonly encoder = new LengthPrefixedFramer();
@@ -177,8 +199,8 @@ export class QWormholeServer<TMessage = Buffer> extends TypedEventEmitter<
         reject(err);
       };
       const cleanup = () => {
-        this.server.off("close", onClose);
-        this.server.off("error", onError);
+        (this.server as any).removeListener("close", onClose);
+        (this.server as any).removeListener("error", onError);
       };
       this.server.once("close", onClose);
       this.server.once("error", onError);
@@ -251,6 +273,17 @@ export class QWormholeServer<TMessage = Buffer> extends TypedEventEmitter<
   }
 
   private async handleConnection(socket: net.Socket): Promise<void> {
+    // Socket hygiene: disable Nagle and align writable highWaterMark for batching.
+    try {
+      socket.setNoDelay(true);
+      const writableState = (socket as any)._writableState;
+      if (writableState && writableState.highWaterMark < 96 * 1024) {
+        writableState.highWaterMark = 96 * 1024;
+      }
+    } catch {
+      // best-effort
+    }
+
     if (
       this.options.maxClients &&
       this.clients.size >= this.options.maxClients
@@ -355,6 +388,8 @@ export class QWormholeServer<TMessage = Buffer> extends TypedEventEmitter<
 
     socket.on("close", hadError => {
       this.publishTrustSnapshot(connection, hadError ? "error" : "close");
+      connection.coherenceAdapter?.stop();
+      connection.coherenceAdapter = undefined;
       connection.outboundFramer?.detachSocket();
       connection.outboundFramer = undefined;
       connection.flowController = undefined;
@@ -371,18 +406,55 @@ export class QWormholeServer<TMessage = Buffer> extends TypedEventEmitter<
     });
   }
 
+  private shouldEnableCoherence(): boolean {
+    if (this.options.coherence?.enabled !== undefined) {
+      return this.options.coherence.enabled;
+    }
+    return process.env.QWORMHOLE_COHERENCE === "1";
+  }
+
+  private attachCoherenceAdapter(connection: ManagedConnection): void {
+    connection.coherenceAdapter?.stop();
+    connection.coherenceAdapter = undefined;
+    if (!this.shouldEnableCoherence()) return;
+    if (connection.peerIsNative) return;
+    if (!connection.outboundFramer || !connection.flowController) return;
+    connection.coherenceAdapter = attachCoherenceAdapter(
+      connection.outboundFramer,
+      connection.flowController,
+      this.options.coherence,
+    );
+  }
+
   private createConnection(socket: net.Socket): ManagedConnection {
     const id = randomId();
     const entropyMetrics = computeEntropyMetrics(0.5);
+    const disableFlow = this.options.disableFlowController === true;
     const outboundFramer =
       this.options.framing === "length-prefixed"
         ? new BatchFramer()
         : undefined;
     outboundFramer?.attachSocket(socket);
     const flowController = outboundFramer
-      ? createFlowController(entropyMetrics)
+      ? disableFlow
+        ? undefined
+        : createFlowController(entropyMetrics, {
+            fastPath: this.options.flowFastPath,
+          })
       : undefined;
-    const connection: ManagedConnection = {
+    let connection: ManagedConnection;
+    const tuneFramer = () => {
+      if (!outboundFramer || !flowController) return;
+      const batchSize = flowController.resolveBatchSize(
+        connection?.peerIsNative ?? false,
+      );
+      const caps = flowController.resolveFramerCaps(
+        connection?.peerIsNative ?? false,
+      );
+      outboundFramer.setBatchTiming(batchSize, caps.flushMs);
+      outboundFramer.setFlushCaps(caps.maxBuffers, caps.maxBytes);
+    };
+    connection = {
       id,
       socket,
       remoteAddress: socket.remoteAddress ?? undefined,
@@ -399,7 +471,8 @@ export class QWormholeServer<TMessage = Buffer> extends TypedEventEmitter<
       limiter: this.options.rateLimitBytesPerSec
         ? new TokenBucket(
             this.options.rateLimitBytesPerSec,
-            this.options.rateLimitBurstBytes,
+            this.options.rateLimitBurstBytes ??
+              this.options.rateLimitBytesPerSec,
           )
         : undefined,
       handshakePending: Boolean(this.options.protocolVersion),
@@ -408,11 +481,13 @@ export class QWormholeServer<TMessage = Buffer> extends TypedEventEmitter<
       entropyMetrics,
       peerIsNative: false,
       handshakeMessageDelivered: false,
+      tuneFramer,
     };
 
     if (outboundFramer) {
       outboundFramer.on("backpressure", ({ queuedBytes }) => {
         connection.flowController?.onBackpressure(queuedBytes);
+        tuneFramer();
         this.telemetry.backpressureEvents += 1;
         this.publishTelemetry();
         this.emit("backpressure", {
@@ -424,11 +499,19 @@ export class QWormholeServer<TMessage = Buffer> extends TypedEventEmitter<
       });
       outboundFramer.on("drain", () => {
         connection.flowController?.onDrain();
+        tuneFramer();
         this.telemetry.drainEvents += 1;
         this.publishTelemetry();
         this.emit("drain", { client: connection });
       });
+      outboundFramer.on("flush", ({ bufferCount, totalBytes }) => {
+        flowController?.handleFlushMetrics(bufferCount, totalBytes);
+        tuneFramer();
+      });
+      flowController?.on("sliceDrift", tuneFramer);
+      tuneFramer();
     }
+    this.attachCoherenceAdapter(connection);
     return connection;
   }
 
@@ -481,10 +564,24 @@ export class QWormholeServer<TMessage = Buffer> extends TypedEventEmitter<
           connection.socket.destroy(err);
           throw err;
         }
-        await connection.flowController.enqueue(
+        const pending = connection.flowController.enqueue(
           next,
           connection.outboundFramer,
         );
+        if (pending) {
+          try {
+            await pending;
+          } catch (err) {
+            this.emit(
+              "error",
+              err instanceof Error ? err : new Error(String(err)),
+            );
+          }
+        }
+        continue;
+      }
+      if (connection.outboundFramer) {
+        connection.outboundFramer.encodeToBatch(next);
         continue;
       }
 
@@ -597,6 +694,9 @@ export class QWormholeServer<TMessage = Buffer> extends TypedEventEmitter<
       onAuthorizeConnection: options.onAuthorizeConnection,
       verifyHandshake: options.verifyHandshake,
       tls: options.tls,
+      coherence: options.coherence ?? undefined,
+      disableFlowController: options.disableFlowController ?? false,
+      flowFastPath: options.flowFastPath ?? false,
     };
   }
 
@@ -774,7 +874,12 @@ export class QWormholeServer<TMessage = Buffer> extends TypedEventEmitter<
       connection.flowController = createFlowController(entropyMetrics, {
         peerIsNative,
       });
+      if (connection.tuneFramer) {
+        connection.flowController.on("sliceDrift", connection.tuneFramer);
+        connection.tuneFramer();
+      }
     }
+    this.attachCoherenceAdapter(connection);
     connection.handshakePending = false;
   }
 
@@ -869,6 +974,7 @@ export class QWormholeServer<TMessage = Buffer> extends TypedEventEmitter<
           controller.snapshot(framer, { reset: true }),
           framer.snapshot({ reset: true }),
         ]);
+        const queueStats = connection.queue.snapshot({ reset: true });
         await sink({
           direction: "server",
           reason,
@@ -881,6 +987,7 @@ export class QWormholeServer<TMessage = Buffer> extends TypedEventEmitter<
           policyTrustLevel: handshake?.policy?.trustLevel,
           flowDiagnostics,
           batchStats,
+          queueStats,
         });
       } catch (err) {
         console.warn("[QWormholeServer] failed to publish trust snapshot", err);

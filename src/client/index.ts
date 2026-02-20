@@ -1,23 +1,33 @@
 import net from "node:net";
 import tls from "node:tls";
-import { LengthPrefixedFramer } from "../framing";
-import { BatchFramer } from "../batch-framer";
-import { defaultSerializer, bufferDeserializer } from "../codecs";
-import { TypedEventEmitter } from "../typedEmitter";
+import { LengthPrefixedFramer } from "../core/framing";
+import { BatchFramer } from "../core/batch-framer";
+import { defaultSerializer, bufferDeserializer } from "../core/codecs";
+import { TypedEventEmitter } from "../utils/typedEmitter";
 import { resolveInterfaceAddress } from "../utils/netUtils";
-import { QWormholeError } from "../errors";
-import { TokenBucket, PriorityQueue, delay } from "../qos";
+import { QWormholeError } from "../utils/errors";
+import { TokenBucket, PriorityQueue, delay } from "../core/qos";
 import { handshakePayloadSchema, type HandshakePayload } from "../schema/scp";
-import { createFlowController, type FlowController } from "../flow-controller";
+import {
+  createFlowController,
+  type FlowController,
+} from "../core/flow-controller";
+import {
+  attachCoherenceAdapter,
+  type CoherenceAdapterHandle,
+  type CoherenceAdapterOptions,
+} from "../coherence/adapter";
 import type { EntropyMetrics } from "../handshake/entropy-policy";
 import type {
   QWormholeClientEvents,
   QWormholeClientOptions,
   QWormholeReconnectOptions,
   Payload,
+  QWormholeSocketLike,
   Deserializer,
   Serializer,
   SendOptions,
+  FramingMode,
 } from "src/types/types";
 import { inferMessageType } from "../utils/negentropic-diagnostics";
 
@@ -36,20 +46,26 @@ type InternalOptions<TMessage> = Omit<
   reconnect: QWormholeReconnectOptions;
   serializer: Serializer;
   deserializer: Deserializer<TMessage>;
-  framing: "length-prefixed" | "none";
+  framing: FramingMode;
   rateLimitBytesPerSec?: number;
   rateLimitBurstBytes?: number;
   handshakeSigner?: () => Record<string, unknown>;
   heartbeatIntervalMs?: number;
   heartbeatPayload?: Payload;
+  coherence?: CoherenceAdapterOptions;
 };
 
-type TrustSnapshotReason = "close" | "error" | "disconnect";
+type TrustSnapshotReason =
+  | "close"
+  | "error"
+  | "disconnect"
+  | "entropy-related"
+  | "handshake";
 
 export class QWormholeClient<TMessage = Buffer> extends TypedEventEmitter<
   QWormholeClientEvents<TMessage>
 > {
-  public socket?: net.Socket;
+  public socket?: net.Socket | QWormholeSocketLike;
   private hadSocketError = false;
   private reconnectTimer?: NodeJS.Timeout;
   private reconnectAttempts = 0;
@@ -58,6 +74,7 @@ export class QWormholeClient<TMessage = Buffer> extends TypedEventEmitter<
   private readonly framer?: LengthPrefixedFramer;
   private readonly outboundFramer?: BatchFramer;
   private flowController?: FlowController;
+  private coherenceAdapter?: CoherenceAdapterHandle;
   private readonly entropyMetrics: EntropyMetrics;
   private readonly peerIsNative: boolean;
   private connectTimer?: NodeJS.Timeout;
@@ -87,20 +104,40 @@ export class QWormholeClient<TMessage = Buffer> extends TypedEventEmitter<
     this.entropyMetrics = this.options.entropyMetrics ?? { negIndex: 0.5 };
     if (this.options.framing === "length-prefixed") {
       this.outboundFramer = new BatchFramer();
-      this.flowController = createFlowController(this.entropyMetrics, {
-        peerIsNative: this.peerIsNative,
-      });
-      this.outboundFramer.on("backpressure", ({ queuedBytes }) => {
-        this.flowController?.onBackpressure(queuedBytes);
-      });
-      this.outboundFramer.on("drain", () => {
-        this.flowController?.onDrain();
-      });
+      if (!this.options.disableFlowController) {
+        this.flowController = createFlowController(this.entropyMetrics, {
+          peerIsNative: this.peerIsNative,
+          fastPath: this.options.flowFastPath,
+        });
+        const tuneFramer = () => {
+          if (!this.outboundFramer || !this.flowController) return;
+          const batchSize = this.flowController.resolveBatchSize(
+            this.peerIsNative,
+          );
+          const caps = this.flowController.resolveFramerCaps(this.peerIsNative);
+          this.outboundFramer.setBatchTiming(batchSize, caps.flushMs);
+          this.outboundFramer.setFlushCaps(caps.maxBuffers, caps.maxBytes);
+        };
+        this.outboundFramer.on("backpressure", ({ queuedBytes }) => {
+          this.flowController?.onBackpressure(queuedBytes);
+          tuneFramer();
+        });
+        this.outboundFramer.on("drain", () => {
+          this.flowController?.onDrain();
+          tuneFramer();
+        });
+        this.outboundFramer.on("flush", ({ bufferCount, totalBytes }) => {
+          this.flowController?.handleFlushMetrics(bufferCount, totalBytes);
+          tuneFramer();
+        });
+        this.flowController.on("sliceDrift", tuneFramer);
+        tuneFramer();
+      }
     }
     if (this.options.rateLimitBytesPerSec) {
       this.limiter = new TokenBucket(
         this.options.rateLimitBytesPerSec,
-        this.options.rateLimitBurstBytes,
+        this.options.rateLimitBurstBytes ?? this.options.rateLimitBytesPerSec,
       );
     }
   }
@@ -126,78 +163,109 @@ export class QWormholeClient<TMessage = Buffer> extends TypedEventEmitter<
         return;
       }
 
-      const socket = this.options.tls?.enabled
-        ? tls.connect(
-            {
-              host: this.options.host,
-              port: this.options.port,
-              servername: this.options.tls.servername ?? this.options.host,
-              key: this.options.tls.key,
-              cert: this.options.tls.cert,
-              ca: this.options.tls.ca,
-              passphrase: this.options.tls.passphrase,
-              ALPNProtocols: this.options.tls.alpnProtocols,
-              requestCert: this.options.tls.requestCert,
-              rejectUnauthorized:
-                this.options.tls.rejectUnauthorized ??
-                this.options.tls.requestCert ??
-                false,
-            },
-            () => {
-              settled = true;
-              this.clearConnectTimer();
-              this.reconnectAttempts = 0;
-              this.attachOutboundFramer(socket);
-              if (this.options.protocolVersion) {
-                this.enqueueHandshake();
-              }
-              this.emit("connect", undefined as never);
-              this.emit("ready", undefined as never);
-              this.startHeartbeat();
-              resolve();
-            },
-          )
-        : net.createConnection(
-            {
-              host: this.options.host,
-              port: this.options.port,
-              localAddress,
-              localPort: this.options.localPort,
-            },
-            () => {
-              settled = true;
-              this.clearConnectTimer();
-              this.reconnectAttempts = 0;
-              this.attachOutboundFramer(socket);
-              if (this.options.protocolVersion) {
-                this.enqueueHandshake();
-              }
-              this.emit("connect", undefined as never);
-              this.emit("ready", undefined as never);
-              this.startHeartbeat();
-              resolve();
-            },
-          );
+      const onConnect = () => {
+        if (settled) return;
+        settled = true;
+        this.clearConnectTimer();
+        this.reconnectAttempts = 0;
+        if (this.socket) {
+          this.attachOutboundFramer(this.socket as net.Socket);
+        }
+        if (this.options.protocolVersion) {
+          this.enqueueHandshake();
+        }
+        this.emit("connect", undefined as never);
+        this.emit("ready", undefined as never);
+        this.startHeartbeat();
+        resolve();
+      };
+
+      const socket = this.options.socketFactory
+        ? this.options.socketFactory({
+            host: this.options.host,
+            port: this.options.port,
+            interfaceName: this.options.interfaceName,
+            localAddress,
+            localPort: this.options.localPort,
+            connectTimeoutMs: this.options.connectTimeoutMs,
+            idleTimeoutMs: this.options.idleTimeoutMs,
+            tls: this.options.tls,
+          })
+        : this.options.tls?.enabled
+          ? tls.connect(
+              {
+                host: this.options.host,
+                port: this.options.port,
+                servername: this.options.tls.servername ?? this.options.host,
+                key: this.options.tls.key,
+                cert: this.options.tls.cert,
+                ca: this.options.tls.ca,
+                passphrase: this.options.tls.passphrase,
+                ALPNProtocols: this.options.tls.alpnProtocols,
+                requestCert: this.options.tls.requestCert,
+                rejectUnauthorized:
+                  this.options.tls.rejectUnauthorized ??
+                  this.options.tls.requestCert ??
+                  false,
+              },
+              onConnect,
+            )
+          : net.createConnection(
+              {
+                host: this.options.host,
+                port: this.options.port,
+                localAddress,
+                localPort: this.options.localPort,
+              },
+              onConnect,
+            );
 
       this.socket = socket;
       const closeToken = ++this.socketTokenCounter;
       this.currentSocketToken = closeToken;
 
       if (this.options.keepAlive) {
-        socket.setKeepAlive(true, this.options.keepAliveDelayMs);
+        socket.setKeepAlive?.(true, this.options.keepAliveDelayMs);
       }
       if (this.options.idleTimeoutMs) {
-        socket.setTimeout(this.options.idleTimeoutMs);
+        socket.setTimeout?.(this.options.idleTimeoutMs);
+      }
+      const socketHighWaterMark = this.options.socketHighWaterMark;
+      if (
+        typeof socketHighWaterMark === "number" &&
+        Number.isFinite(socketHighWaterMark) &&
+        socketHighWaterMark > 0
+      ) {
+        const writableState = (
+          socket as net.Socket & {
+            _writableState?: { highWaterMark?: number };
+          }
+        )._writableState;
+        if (
+          writableState &&
+          typeof writableState.highWaterMark === "number" &&
+          writableState.highWaterMark < socketHighWaterMark
+        ) {
+          writableState.highWaterMark = socketHighWaterMark;
+        }
       }
 
-      socket.on("data", chunk => this.handleData(chunk));
-      socket.on("close", hadError => this.handleClose(hadError, closeToken));
-      socket.on("timeout", () => {
+      const wire = socket as unknown as {
+        on: (event: string, cb: (...args: any[]) => void) => void;
+        once?: (event: string, cb: (...args: any[]) => void) => void;
+        off?: (event: string, cb: (...args: any[]) => void) => void;
+      };
+
+      wire.on("data", (chunk: Buffer) => this.handleData(chunk));
+      wire.on("close", (hadError: boolean) =>
+        this.handleClose(hadError, closeToken),
+      );
+      wire.on("timeout", () => {
         this.emit("timeout", undefined as never);
         socket.end();
       });
 
-      socket.on("error", err => {
+      wire.on("error", (err: Error) => {
         this.hadSocketError = true;
         this.emit("error", err);
         this.handleClose(true, closeToken); // Ensure hadError is true on error
@@ -213,12 +281,40 @@ export class QWormholeClient<TMessage = Buffer> extends TypedEventEmitter<
         this.connectTimer = setTimeout(() => {
           if (settled) return;
           settled = true;
-          socket.destroy();
+          socket.destroy?.();
           reject(
             new QWormholeError("E_CONNECT_TIMEOUT", "Connection timed out"),
           );
         }, this.options.connectTimeoutMs);
         return 0;
+      }
+
+      if (this.options.socketFactory) {
+        try {
+          const maybePromise = (
+            socket as QWormholeSocketLike & { connect?: () => unknown }
+          ).connect?.();
+          if (
+            maybePromise &&
+            typeof (maybePromise as Promise<void>).then === "function"
+          ) {
+            (maybePromise as Promise<void>).then(onConnect).catch(err => {
+              if (!settled) {
+                settled = true;
+                this.clearConnectTimer();
+                reject(err instanceof Error ? err : new Error(String(err)));
+              }
+            });
+          } else {
+            socket.once?.("connect", onConnect);
+          }
+        } catch (err) {
+          if (!settled) {
+            settled = true;
+            this.clearConnectTimer();
+            reject(err instanceof Error ? err : new Error(String(err)));
+          }
+        }
       }
     });
   }
@@ -342,9 +438,14 @@ export class QWormholeClient<TMessage = Buffer> extends TypedEventEmitter<
       handshakeSigner: options.handshakeSigner ?? undefined,
       heartbeatIntervalMs: options.heartbeatIntervalMs ?? undefined,
       heartbeatPayload: options.heartbeatPayload ?? undefined,
+      socketHighWaterMark: options.socketHighWaterMark ?? undefined,
+      socketFactory: options.socketFactory ?? undefined,
       tls: options.tls,
       entropyMetrics: options.entropyMetrics,
       peerIsNative: options.peerIsNative,
+      coherence: options.coherence ?? undefined,
+      disableFlowController: options.disableFlowController ?? false,
+      flowFastPath: options.flowFastPath ?? false,
     };
   }
 
@@ -362,11 +463,22 @@ export class QWormholeClient<TMessage = Buffer> extends TypedEventEmitter<
     }
   }
 
-  private attachOutboundFramer(socket: net.Socket): void {
-    this.outboundFramer?.attachSocket(socket);
+  private attachOutboundFramer(socket: net.Socket | QWormholeSocketLike): void {
+    this.outboundFramer?.attachSocket(socket as net.Socket);
+    this.coherenceAdapter?.stop();
+    this.coherenceAdapter = undefined;
+    if (!this.outboundFramer || !this.flowController) return;
+    if (!this.shouldEnableCoherence()) return;
+    this.coherenceAdapter = attachCoherenceAdapter(
+      this.outboundFramer,
+      this.flowController,
+      this.options.coherence,
+    );
   }
 
   private detachOutboundFramer(): void {
+    this.coherenceAdapter?.stop();
+    this.coherenceAdapter = undefined;
     this.outboundFramer?.detachSocket();
   }
 
@@ -382,6 +494,7 @@ export class QWormholeClient<TMessage = Buffer> extends TypedEventEmitter<
           this.flowController!.snapshot(this.outboundFramer!, { reset: true }),
           this.outboundFramer!.snapshot({ reset: true }),
         ]);
+        const queueStats = this.queue.snapshot({ reset: true });
         await this.options.onTrustSnapshot?.({
           direction: "client",
           reason,
@@ -393,6 +506,7 @@ export class QWormholeClient<TMessage = Buffer> extends TypedEventEmitter<
           entropyMetrics,
           flowDiagnostics,
           batchStats,
+          queueStats,
         });
       } catch (err) {
         // Surface snapshot issues for visibility but do not throw
@@ -434,7 +548,21 @@ export class QWormholeClient<TMessage = Buffer> extends TypedEventEmitter<
         }
       }
       if (this.outboundFramer && this.flowController) {
-        await this.flowController.enqueue(next, this.outboundFramer);
+        const pending = this.flowController.enqueue(next, this.outboundFramer);
+        if (pending) {
+          try {
+            await pending;
+          } catch (err) {
+            this.emit(
+              "error",
+              err instanceof Error ? err : new Error(String(err)),
+            );
+          }
+        }
+        continue;
+      }
+      if (this.outboundFramer) {
+        this.outboundFramer.encodeToBatch(next);
         continue;
       }
       const framed =
@@ -445,15 +573,24 @@ export class QWormholeClient<TMessage = Buffer> extends TypedEventEmitter<
       if (!wrote) {
         await new Promise<void>((resolve, reject) => {
           const onDrain = () => {
-            this.socket?.off("error", onError);
+            const sock = this.socket as unknown as {
+              off?: (event: string, cb: (...args: any[]) => void) => void;
+            };
+            sock?.off?.("error", onError);
             resolve();
           };
           const onError = (err: Error) => {
-            this.socket?.off("drain", onDrain);
+            const sock = this.socket as unknown as {
+              off?: (event: string, cb: (...args: any[]) => void) => void;
+            };
+            sock?.off?.("drain", onDrain);
             reject(err);
           };
-          this.socket?.once("drain", onDrain);
-          this.socket?.once("error", onError);
+          const sock = this.socket as unknown as {
+            once?: (event: string, cb: (...args: any[]) => void) => void;
+          };
+          sock?.once?.("drain", onDrain);
+          sock?.once?.("error", onError);
         });
       }
     }
@@ -530,25 +667,51 @@ export class QWormholeClient<TMessage = Buffer> extends TypedEventEmitter<
     this.flowController.recordMessageType(inferMessageType(payload));
   }
 
+  private shouldEnableCoherence(): boolean {
+    if (this.options.coherence?.enabled !== undefined) {
+      return this.options.coherence.enabled;
+    }
+    return process.env.QWORMHOLE_COHERENCE === "1";
+  }
+
   private buildTlsHandshakeTags(): Record<string, string | number> | undefined {
-    if (!this.socket || !(this.socket instanceof tls.TLSSocket)) return;
+    if (!this.socket) return;
+    const socket = this.socket as QWormholeSocketLike;
     const tags: Record<string, string> = {};
-    const peer = this.socket.getPeerCertificate?.(true) as
+
+    const peer = socket.getPeerCertificate?.(true) as
       | (tls.PeerCertificate & { fingerprint256?: string })
-      | null;
+      | { fingerprint?: string; fingerprint256?: string }
+      | null
+      | undefined;
     if (peer && Object.keys(peer).length) {
       if (peer.fingerprint256) tags.tlsFingerprint256 = peer.fingerprint256;
       if (peer.fingerprint) tags.tlsFingerprint = peer.fingerprint;
     }
-    if (this.socket.alpnProtocol) {
-      tags.tlsAlpn = this.socket.alpnProtocol;
+
+    if (socket.alpnProtocol) {
+      tags.tlsAlpn = socket.alpnProtocol;
+    } else {
+      const tlsInfo = socket.getTlsInfo?.();
+      if (tlsInfo?.alpnProtocol) {
+        tags.tlsAlpn = tlsInfo.alpnProtocol;
+      }
+      if (tlsInfo?.peerFingerprint256) {
+        tags.tlsFingerprint256 = tlsInfo.peerFingerprint256;
+      }
+      if (tlsInfo?.peerFingerprint) {
+        tags.tlsFingerprint = tlsInfo.peerFingerprint;
+      }
     }
-    const exported = this.exportTlsSessionKey(this.socket);
+
+    const exported = this.exportTlsSessionKey(socket);
     if (exported) tags.tlsSessionKey = exported;
     return Object.keys(tags).length ? tags : undefined;
   }
 
-  private exportTlsSessionKey(socket: tls.TLSSocket): string | undefined {
+  private exportTlsSessionKey(
+    socket: Pick<QWormholeSocketLike, "exportKeyingMaterial">,
+  ): string | undefined {
     if (!this.options.tls?.exportKeyingMaterial) return undefined;
     if (typeof socket.exportKeyingMaterial !== "function") return undefined;
     const label =
@@ -558,6 +721,7 @@ export class QWormholeClient<TMessage = Buffer> extends TypedEventEmitter<
       this.options.tls.exportKeyingMaterial.context ?? Buffer.alloc(0);
     try {
       const material = socket.exportKeyingMaterial(length, label, context);
+      if (!material) return undefined;
       return material.toString("base64");
     } catch {
       return undefined;

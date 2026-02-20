@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { QWormholeRuntime } from "../src/runtime";
+import { QWormholeRuntime } from "../src/core/runtime";
 import { QWormholeClient, QWormholeServer } from "../src/index";
 
 describe("QWormholeRuntime", () => {

@@ -31,21 +31,26 @@ describe("NativeTcpClient coverage", () => {
     vi.stubGlobal("bindings", () => {
       throw new Error("not found");
     });
-    const { NativeTcpClient } = await import("../src/native");
+    const { NativeTcpClient } = await import("../src/core/NativeTCPClient");
     expect(() => new NativeTcpClient()).toThrow(
       /Native qwormhole binding not available/,
     );
   });
 
   it("prefers libwebsockets binding when available", async () => {
-    const bindingsMock = vi.fn((name: string) => {
-      if (name === "qwormhole_lws") {
-        return { TcpClientWrapper: MockTcpClientWrapper };
-      }
-      throw new Error("not found");
-    });
+    const bindingsMock = vi.fn(
+      (nameOrOpts: string | { bindings: string }) => {
+        const name =
+          typeof nameOrOpts === "string" ? nameOrOpts : nameOrOpts.bindings;
+        if (name === "qwormhole_lws") {
+          return { TcpClientWrapper: MockTcpClientWrapper };
+        }
+        throw new Error("not found");
+      },
+    );
     vi.stubGlobal("bindings", bindingsMock);
-    const { NativeTcpClient, getNativeBackend } = await import("../src/native");
+    const { NativeTcpClient, getNativeBackend } =
+      await import("../src/core/NativeTCPClient");
     const client = new NativeTcpClient();
     expect(client).toBeDefined();
     expect(client.backend).toBe("lws");
@@ -61,32 +66,45 @@ describe("NativeTcpClient coverage", () => {
   });
 
   it("falls back to libsocket binding if LWS is unavailable", async () => {
-    const bindingsMock = vi.fn((name: string) => {
-      if (name === "qwormhole") {
-        return { TcpClientWrapper: MockTcpClientWrapper };
-      }
-      throw new Error("not found");
-    });
+    const bindingsMock = vi.fn(
+      (nameOrOpts: string | { bindings: string }) => {
+        const name =
+          typeof nameOrOpts === "string" ? nameOrOpts : nameOrOpts.bindings;
+        if (name === "qwormhole") {
+          return { TcpClientWrapper: MockTcpClientWrapper };
+        }
+        throw new Error("not found");
+      },
+    );
     vi.stubGlobal("bindings", bindingsMock);
-    const { NativeTcpClient, getNativeBackend } = await import("../src/native");
+    const { NativeTcpClient, getNativeBackend } =
+      await import("../src/core/NativeTCPClient");
     const client = new NativeTcpClient();
     expect(client.backend).toBe("libsocket");
     expect(getNativeBackend()).toBe("libsocket");
   });
 
   it("connect accepts options object for LWS backend", async () => {
-    const bindingsMock = vi.fn((name: string) => {
-      if (name === "qwormhole_lws") {
-        return { TcpClientWrapper: MockTcpClientWrapper };
-      }
-      throw new Error("not found");
-    });
+    const bindingsMock = vi.fn(
+      (nameOrOpts: string | { bindings: string }) => {
+        const name =
+          typeof nameOrOpts === "string" ? nameOrOpts : nameOrOpts.bindings;
+        if (name === "qwormhole_lws") {
+          return { TcpClientWrapper: MockTcpClientWrapper };
+        }
+        throw new Error("not found");
+      },
+    );
     vi.stubGlobal("bindings", bindingsMock);
-    const { NativeTcpClient } = await import("../src/native");
+    const { NativeTcpClient } = await import("../src/core/NativeTCPClient");
     const client = new NativeTcpClient();
     client.connect({ host: "example.com", port: 8080, useTls: true });
     expect(mockImpl.connect).toHaveBeenCalledWith(
-      expect.objectContaining({ host: "example.com", port: 8080, useTls: true }),
+      expect.objectContaining({
+        host: "example.com",
+        port: 8080,
+        useTls: true,
+      }),
     );
     client.close();
   });

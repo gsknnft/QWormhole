@@ -1,0 +1,87 @@
+import path from "node:path";
+import { createRequire } from "node:module";
+import type { QuicBinding } from "./types";
+
+let cachedBinding: QuicBinding | null | undefined;
+const requireFn = typeof require === "function" ? require : createRequire(__filename);
+
+const envPath = process.env.QW_QUIC_PATH ?? process.env.QWORMHOLE_QUIC_PATH;
+
+const bindingCandidates = [
+  // Explicit override
+  envPath,
+  // Development build/Release layout (package root)
+  path.join(__dirname, "..", "..", "..", "build", "Release", "qwquic.node"),
+  // Dist native layout (package root)
+  path.join(__dirname, "..", "..", "..", "dist", "native", "qwquic.node"),
+  // Workspace-level native target (useful in tests/tsx)
+  path.resolve(process.cwd(), "native", "qwquic", "target", "release", "qwquic.dll"),
+  path.resolve(process.cwd(), "native", "qwquic", "target", "release", "qwquic.node"),
+  // Monorepo root relative to this file (e.g., when cwd is package)
+  path.resolve(__dirname, "..", "..", "..", "..", "..", "native", "qwquic", "target", "release", "qwquic.dll"),
+  path.resolve(__dirname, "..", "..", "..", "..", "..", "native", "qwquic", "target", "release", "qwquic.node"),
+  // node-gyp-build style resolution (mirrors lws scripts)
+  () => {
+    try {
+      const resolve = requireFn("node-gyp-build");
+      const root = path.resolve(
+        __dirname,
+        "..",
+        "..",
+        "..",
+        "..",
+        "..",
+        "native",
+        "qwquic",
+      );
+      return resolve(root);
+    } catch {
+      return null;
+    }
+  },
+  // Direct module name (napi-rs default)
+  "qwquic",
+].filter(Boolean) as (string | (() => string | null))[];
+
+const isQuicBinding = (mod: unknown): mod is QuicBinding =>
+  Boolean(mod && typeof (mod as QuicBinding).createEndpoint === "function");
+
+export function loadQuicBinding(): QuicBinding | null {
+  if (cachedBinding !== undefined) {
+    return cachedBinding;
+  }
+  for (const candidate of bindingCandidates) {
+    const resolved = typeof candidate === "function" ? candidate() : candidate;
+    if (!resolved) continue;
+    if (typeof resolved === "object") {
+      if (isQuicBinding(resolved)) {
+        cachedBinding = resolved;
+        if (process.env.QW_QUIC_DEBUG === "1") {
+          console.warn("[qwquic] loaded binding from node-gyp-build");
+        }
+        return cachedBinding;
+      }
+      continue;
+    }
+    try {
+      const mod = requireFn(resolved) as QuicBinding;
+      if (isQuicBinding(mod)) {
+        cachedBinding = mod;
+        if (process.env.QW_QUIC_DEBUG === "1") {
+          console.warn("[qwquic] loaded binding from", resolved);
+        }
+        return cachedBinding;
+      }
+    } catch {
+      if (process.env.QW_QUIC_DEBUG === "1") {
+        console.warn("[qwquic] failed to load", resolved);
+      }
+    }
+  }
+  cachedBinding = null;
+  return cachedBinding;
+}
+
+export function quicAvailable(): boolean {
+  return Boolean(loadQuicBinding());
+}

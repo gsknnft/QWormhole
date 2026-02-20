@@ -12,14 +12,15 @@ vi.mock("node:util", () => ({
 
 describe("wireGuardAdapter", () => {
   type Adapter =
-    (typeof import("../src/wireguard-adapter"))["wireGuardAdapter"];
+    (typeof import("../src/adapters/wireguard-adapter"))["wireGuardAdapter"];
   let adapter: Adapter;
 
   beforeEach(async () => {
     execMock.mockReset();
     execMock.mockResolvedValue({ stdout: "", stderr: "" });
     vi.resetModules();
-    ({ wireGuardAdapter: adapter } = await import("../src/wireguard-adapter"));
+    ({ wireGuardAdapter: adapter } =
+      await import("../src/adapters/wireguard-adapter"));
   });
 
   it("brings tunnel up and routes CIDR", async () => {

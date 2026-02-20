@@ -3,6 +3,8 @@ import path from "path";
 import ts from "./tsconfig.json";
 
 const externalDeps = [
+  "@sigilnet/shared-tools",
+  "@sigilnet/rug-guard",
   "fs",
   "path",
   "os",
@@ -24,13 +26,14 @@ const externalDeps = [
   "node:http",
   "node:https",
   "node:stream",
+  "node:url",
   "node:zlib",
   "node:buffer",
   "node:util",
   "node:crypto",
   "node:child_process",
   "node:readline",
-  
+  "node:module",
   "node:perf_hooks",
   "worker_threads",
   "worker",
@@ -43,6 +46,7 @@ const externalDeps = [
   "cluster",
   "dgram",
   "fs/promises",
+  "json2csv",
   // keep only runtime externals here
 ];
 

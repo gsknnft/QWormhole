@@ -1,16 +1,16 @@
 #!/usr/bin/env node
 /* eslint-disable no-console */
-const { spawnSync } = require("node:child_process");
-const os = require("node:os");
-const fs = require("node:fs");
-const path = require("node:path");
+import { spawnSync } from "node:child_process";
+import os from "node:os";
+import fs from "node:fs";
+import path from "node:path";
 
 const platform = os.platform();
 const forceNative = process.env.QWORMHOLE_NATIVE === "1";
 const explicitSkip = process.env.QWORMHOLE_NATIVE === "0";
 const macOsAutoSkip = platform === "darwin" && !forceNative;
 const skipNative = explicitSkip || macOsAutoSkip;
-const nodeGypCmd = process.platform === "win32" ? "node-gyp.cmd" : "node-gyp";
+const nodeGypCmd = process.platform === "win32" ? "node-gyp.cmd" : "node-gyp-build";
 
 const hasNodeGyp = () => {
   const check = spawnSync(nodeGypCmd, ["--version"], { stdio: "ignore" });
@@ -20,6 +20,7 @@ const skipLibsocket =
   process.env.QWORMHOLE_BUILD_LIBSOCKET === "0" ||
   platform === "win32" ||
   platform === "darwin"; // libsocket relies on Linux-only APIs
+  
 
 const artifacts = [
   path.join(process.cwd(), "dist", "native", "qwormhole_lws.node"),

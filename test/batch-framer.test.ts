@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { BatchFramer, createBatchFramer } from "../src/batch-framer";
+import { BatchFramer, createBatchFramer } from "../src/core/batch-framer";
 import net from "node:net";
 
 describe("BatchFramer", () => {

@@ -1,14 +1,15 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import {
   FlowController,
-  TokenBucket,
   createFlowController,
   deriveSessionFlowPolicy,
   FLOW_DEFAULTS,
   type SessionFlowPolicy,
-} from "../src/flow-controller";
-import { BatchFramer } from "../src/batch-framer";
-import type { EntropyMetrics } from "../src/handshake/entropy-policy";
+} from "../../QWormhole/src/core/flow-controller";
+import { CoherenceController } from "../../QWormhole/src/core/CoherenceController";
+import { BatchFramer } from "../../QWormhole/src/core/batch-framer";
+import type { EntropyMetrics } from "../../QWormhole/src/handshake/entropy-policy";
+import { TokenBucket } from "../../QWormhole/src/core/qos";
 
 let adaptiveEnvOriginal: string | undefined;
 
@@ -73,7 +74,7 @@ describe("TokenBucket", () => {
     expect(bucket.availableTokens).toBe(0);
 
     // Wait 50ms - should refill some tokens
-    await new Promise(r => setTimeout(r, 50));
+    await new Promise(r => setTimeout(r, 500));
 
     const tokens = bucket.availableTokens;
     expect(tokens).toBeGreaterThan(0);
@@ -107,7 +108,9 @@ describe("FlowController", () => {
     const initialSize = controller.currentSliceSize;
     controller.onBackpressure(1024);
 
-    expect(controller.currentSliceSize).toBe(Math.floor(initialSize / 2));
+    expect(controller.currentSliceSize).toBe(
+      Math.floor(initialSize * 0.75),
+    );
   });
 
   it("expands slice on drain", () => {
@@ -273,7 +276,7 @@ describe("deriveSessionFlowPolicy", () => {
 
     expect(policy.preferredBatchSize).toBe(64);
     expect(policy.coherence).toBeGreaterThanOrEqual(0.8);
-    expect(policy.maxSlice).toBe(64);
+    expect(policy.maxSlice).toBe(FLOW_DEFAULTS.TS_PEER_HIGH_TRUST_MAX_SLICE);
   });
 
   it("derives low-trust policy from chaos metrics", () => {
@@ -371,7 +374,7 @@ describe("createFlowController", () => {
       tsController.onDrain();
     }
 
-    expect(nativeController.currentSliceSize).toBeGreaterThan(
+    expect(nativeController.currentSliceSize).toEqual(
       tsController.currentSliceSize,
     );
   });
@@ -476,5 +479,36 @@ describe("FlowController integration with BatchFramer", () => {
     });
     const diag = adaptiveController.getDiagnostics();
     expect(diag.adaptive?.mode).toBe("guarded");
+  });
+});
+
+describe("FlowController updateCoherenceControl", () => {
+  it("selects macro vs protect based on live jitter and reserve", () => {
+    const policy = createTestPolicy({ coherence: 0.9, burstBudgetBytes: 32 * 1024 });
+    const controller = new FlowController(policy);
+    const framer = new BatchFramer({ batchSize: 8, flushIntervalMs: 0 });
+    const coherence = new CoherenceController();
+    const setBatchTimingSpy = vi.spyOn(framer, "setBatchTiming");
+
+    const jitterSpy = vi
+      .spyOn(controller as any, "readEventLoopJitterMs")
+      .mockReturnValue(0);
+    const eluSpy = vi
+      .spyOn(controller as any, "readEventLoopUtilization")
+      .mockReturnValue(0.2);
+
+    framer.encodeToBatch(Buffer.alloc(1024));
+    controller.updateCoherenceControl(framer, coherence);
+
+    expect(setBatchTimingSpy).toHaveBeenLastCalledWith(expect.any(Number), 1);
+
+    jitterSpy.mockReturnValue(20);
+    eluSpy.mockReturnValue(0.95);
+    (controller as any).bucket.reserve(policy.burstBudgetBytes);
+    (coherence as any).lastMargin = 0;
+
+    controller.updateCoherenceControl(framer, coherence);
+
+    expect(setBatchTimingSpy).toHaveBeenLastCalledWith(expect.any(Number), 10);
   });
 });

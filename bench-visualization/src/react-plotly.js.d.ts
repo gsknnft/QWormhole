@@ -1,4 +1,7 @@
-declare module 'react-plotly.js' {
+declare module 'react-plotly.js' 
+
+
+/* {
   import { Component } from 'react';
   import { PlotlyHTMLElement, PlotlyOptions, Data, Layout, Config } from 'plotly.js';
   interface PlotProps {
@@ -11,4 +14,4 @@ declare module 'react-plotly.js' {
     onUpdate?: (figure: { data: Data[]; layout: Partial<Layout> }, graphDiv: PlotlyHTMLElement) => void;
   }
   export default class PlotComponent extends Component<PlotProps> {}
-}
+} */

@@ -2,7 +2,7 @@
 [![NPM Version](https://img.shields.io/npm/v/@gsknnft/qwormhole.svg?style=flat-square)](https://www.npmjs.com/package/@gsknnft/qwormhole)
 [![Node Version](https://img.shields.io/node/v/@gsknnft/qwormhole.svg?style=flat-square)](https://nodejs.org)
 
-> **Current version: 0.2.0 — Native server, adaptive slicing, diagnostics**
+> **Current version: 0.2.1 - Packaging hardening + native server, adaptive slicing, diagnostics**
 
 <p align="center">
   <h1 style="font-size:2.5rem; font-family:Segoe UI, Arial, sans-serif; margin-bottom:0.2em;">
@@ -17,39 +17,32 @@
 
 ### TypeScript-first TCP transport with native acceleration and framing, reconnect, and codec orchestration.
 
-
+Coherence is the inferred energy geometry of system trajectories; governance consumes certified geometry, and all scalar health metrics are projections of that geometry.
 
 A TypeScript-first TCP transport kernel with native acceleration, adaptive slicing, diagnostics, framing, reconnect, and codec orchestration.
 
 QWormhole is a modern transport layer for Node environments.
 It wraps raw TCP sockets with:
 
-✔ Length-prefixed framing
-
-✔ Auto-reconnect
-
-✔ Rate limiting
-
-✔ Backpressure safety
-
-✔ Typed events
-
-✔ Optional native acceleration
-
-✔ Interface binding (e.g. wg0)
-
-✔ Pluggable codecs
+- Length-prefixed framing
+- Auto-reconnect
+- Rate limiting
+- Backpressure safety
+- Typed events
+- Optional native acceleration
+- Interface binding (e.g. `wg0`)
+- Pluggable codecs
 
 The goal: no more hand-rolled socket logic.
 Just a clean, portable, typed transport.
 
 ---
 
-## ✨ Why QWormhole?
+## Why QWormhole?
 
-QWormhole turns raw sockets into a composable, typed, and orchestrated transport layer — with __zero__ boilerplate.
+QWormhole turns raw sockets into a composable, typed, and orchestrated transport layer with __zero__ boilerplate.
 
-Node’s built-in net module is intentionally bare.
+Node's built-in `net` module is intentionally bare.
 Real applications need:
 
 Framing (length-prefix, safe messages)
@@ -70,35 +63,41 @@ Optional native performance
 
 QWormhole provides all of these in a small, modern, TS-native API with fallback behavior.
 
-QWormhole isn’t just a socket wrapper — it’s a transport ritual.
+QWormhole isn't just a socket wrapper - it's a transport ritual.
 
 ---
 
 ## Features
 
-- 🚀 **TypeScript-first design** with full type safety
-- ⚡ **Optional native acceleration** (libwebsockets or libsocket)
-- 📦 Zero runtime dependencies in TS mode
-- 🔌 **Length-prefixed framing** (default) or raw stream mode
-- 🔄 **Auto-reconnect** with exponential backoff
-- 💧 **Backpressure protection** (server-side safety)
-- 📉 **Rate limiting** with burst control
-- 🌐 **Bind to interfaces** (`wg0`, `eth0`, WireGuard, VLANs, etc.)
-- 📈 **Adaptive slicing** (auto tunes TS/native batch sizes via ELU/GC telemetry; override with `QWORMHOLE_ADAPTIVE_SLICES`)
-- 🧩 **Pluggable codecs** (JSON, text, buffer, CBOR, custom binary)
-- 🔐 **Protocol versioning + handshake tags**
-- 🖥️ **Native server wrapper (libwebsockets)**
-- 📈 **Adaptive slice control (FlowController)**
-- 🧑‍🔬 **Bench diagnostics (event-loop delay, send latency)**
-- 🛡️ **TLS wrapping + fingerprint pinning (TS + native-lws)**
-- 🎛️ **TS/native factory with intelligent fallback**
-- 🧪 **Full test suite** (TS + native smoke tests)
-- 🛠 Works on **Windows / macOS / Linux / WSL**
-- 🛰 Ideal for **agents, daemons, device networks, mesh networks**
+-  **TypeScript-first design** with full type safety
+-  **Optional native acceleration** (libwebsockets or libsocket)
+-  Zero runtime dependencies in TS mode
+-  **Length-prefixed framing** (default) or raw stream mode
+-  **Auto-reconnect** with exponential backoff
+-  **Backpressure protection** (server-side safety)
+-  **Rate limiting** with burst control
+-  **Bind to interfaces** (`wg0`, `eth0`, WireGuard, VLANs, etc.)
+-  **Adaptive slicing** (auto tunes TS/native batch sizes via ELU/GC telemetry; override with `QWORMHOLE_ADAPTIVE_SLICES`)
+-  **Pluggable codecs** (JSON, text, buffer, CBOR, custom binary)
+-  **Protocol versioning + handshake tags**
+-  **Native server wrapper (libwebsockets)**
+-  **Adaptive slice control (FlowController)**
+-  **Bench diagnostics (event-loop delay, send latency)**
+-  **TLS wrapping + fingerprint pinning (TS + native-lws)**
+-  **TS/native factory with intelligent fallback**
+-  **Full test suite** (TS + native smoke tests)
+-  Works on **Windows / macOS / Linux / WSL**
+-  Ideal for **agents, daemons, device networks, mesh networks**
     - Agents: drop telemetry or control frames over framed TCP
     - Daemons: expose typed socket APIs with reconnect and backpressure
     - Device networks: bind to interfaces (wg0, eth0) and tag connections
     - Mesh networks: use handshake tags to route and identify peers
+
+## Current Status (2026-02-05)
+- **TS transport:** stable and production-viable. Reported local tests show ~13 MB/s sustained when rate-limited; unbounded spikes >200 MB/s can starve the event loop.
+- **Native client/server:** experimental; native client binding resolution and server parity need realignment (see TODOs below).
+- **QUIC/WebTransport:** experimental; bindings exist but are not production-ready.
+- **WireGuard guide:** functional patterns, but not fully validated end-to-end in this repo.
 
 
 ## Minimal Example
@@ -127,8 +126,9 @@ client.on("message", console.log);
 - [Codec extensibility](#codec-helpers)
 - [Tests](#tests)
 - [Known issues / roadmap](#known-issues--roadmap)
+- [TS writev/length-prefixed tuning](#ts-writevlength-prefixed-tuning)
 
-  
+
 ## Installation
 
 This package is part of the workspace; add it to a package with:
@@ -151,9 +151,9 @@ QWormhole abstracts the transport layer, selecting native or TS based on availab
 **Architecture Overview**
 
   Client (TS/native)
-    ↕ length-prefixed frames
+     length-prefixed frames
   Server (TS/native)
-    ↕ rate-limit, backpressure, handshake
+     rate-limit, backpressure, handshake
   Application Layer
 
 >     +----------------------------+
@@ -162,12 +162,12 @@ QWormhole abstracts the transport layer, selecting native or TS based on availab
 >                 |
 >                 v
 >     +----------------------------+
->     |    QWormhole Runtime      |   ← orchestrates handshake, framing, rate limits
+>     |    QWormhole Runtime      |    orchestrates handshake, framing, rate limits
 >     +----------------------------+
 >           |             |
 >           v             v
 >     +-----------+   +-----------+
->     |  Native   |   |    TS     |   ← auto-selected transport layer
+>     |  Native   |   |    TS     |    auto-selected transport layer
 >     |  (LWS)    |   | Transport |
 >     +-----------+   +-----------+
 >           |
@@ -181,6 +181,14 @@ QWormhole abstracts the transport layer, selecting native or TS based on availab
   <br />
   <em>QWormhole Architecture</em>
 </p>
+
+## System Context (Physical-Semantic Stack)
+
+QWormhole is the transport layer that adapts to field coherence and negentropic metrics.
+It turns N-index and coherence velocity into handshake, framing, and rate-limit policy
+so transport stays aligned with field dynamics.
+
+See [Physical-Semantic Stack Map](../../docs/PHYSICAL_SEMANTIC_STACK.md) for the full closed-loop model.
 
 
 ## Quick start
@@ -254,7 +262,7 @@ const { client, mode } = createQWormholeClient({
   preferNative: true,
 });
 
-console.log('using mode', mode); // "native-lws" → "native-libsocket" → "ts"
+console.log('using mode', mode); // "native-lws"  "native-libsocket"  "ts"
 // load order: libwebsockets -> libsocket -> TS
 // set QWORMHOLE_DEBUG_NATIVE=1 to log backend selection during runtime.
 ```
@@ -264,23 +272,23 @@ Native modules are emitted to:
 dist/native/
   qwormhole_lws.node
   qwormhole.node
-  
+
 #### **Platform behavior table**
 
 | Symbol | Meaning |
 |--------|---------|
-| ✅     | Always available |
-| ⚡     | Optional native acceleration |
-| ❌     | Not supported |
+|      | Always available |
+|      | Optional native acceleration |
+|      | Not supported |
 
 ## Platform behavior
 
 | Platform | TS transport | native-lws | native-libsocket |
 |---------|--------------|-------------|-------------------|
-| Windows | ✅ | ⚡ optional | ❌ |
-| macOS   | ✅ | ⚡ optional | ❌ |
-| Linux   | ✅ | ⚡ optional | ⚡ optional |
-| WSL2    | ✅ | ⚡ optional | ⚡ optional |
+| Windows |  |  optional |  |
+| macOS   |  |  optional |  |
+| Linux   |  |  optional |  optional |
+| WSL2    |  |  optional |  optional |
 
 Transport selection order:
 
@@ -294,12 +302,12 @@ Transport selection order:
 
 ---
 
-## Why QWormhole? - Every connection is framed, typed, and tagged — no more raw streams.
+## Why QWormhole? - Every connection is framed, typed, and tagged  no more raw streams.
 
 
 - Stop hand-rolling socket framing and reconnect logic
 - Use typed events and pluggable codecs out of the box
-- Drop native acceleration in when needed — no lock-in
+- Drop native acceleration in when needed  no lock-in
 - Bind to interfaces, enforce protocol versions, and tag connections
 - Works everywhere: TS fallback is always available
 
@@ -307,7 +315,7 @@ Transport selection order:
 
 Node's built-in `net` module is low-level and bare metal. Most real-world
 applications need:
-- message events are pre-deserialized — no need to parse manually.
+- message events are pre-deserialized  no need to parse manually.
 - message framing (length-prefixed)
 - reconnect logic
 - backpressure protection
@@ -322,36 +330,36 @@ QWormhole provides all of this in a small, modern, TypeScript-native API.
 
 ---
 
-## ⚙ Key Options
+##  Key Options
 
-✔ framing
+ framing
 - `framing`: `"length-prefixed"` (default) or `"none"`.
 
-✔ serializer/deserializer
+ serializer/deserializer
 - `serializer` / `deserializer`: JSON/text/buffer built-in; CBOR helpers; plug your own (FlatBuffers, etc.).
 
-✔ reconnect
+ reconnect
 - `reconnect`: `{ enabled, initialDelayMs, maxDelayMs, multiplier, maxAttempts }` for clients.
 
-✔ keepAlive
+ keepAlive
 - `keepAlive`, `keepAliveDelayMs`, `idleTimeoutMs`: TCP tuning.
 
-✔ backpressure guard
+ backpressure guard
 - `maxBackpressureBytes`: server-side guard (default 5 MiB) before writes will destroy a socket; emits `backpressure`/`drain` events.
 
-✔ factory mode switches
+ factory mode switches
 - `preferNative`/`forceTs`: factory switches between native binding and TS transport.
 
-✔ interface binding
+ interface binding
 - `interfaceName`/`localAddress`/`localPort`: bind client sockets to a specific interface/IP (e.g., `wg0` for WireGuard) and set a connect timeout.
 
-✔ rate limiting
+ rate limiting
 - `rateLimitBytesPerSec`/`rateLimitBurstBytes`: optional outbound rate limiting with priority queues on client and server.
 
-✔ handshake
+ handshake
 - `protocolVersion`/`handshakeTags`: optional handshake exchange to enforce versioning and pass tags (e.g., device/service/interface).
 
-✔ typed server connections
+ typed server connections
 - `getConnection(id)`/`getConnectionCount()` helpers for server-side orchestration.
 
 
@@ -383,12 +391,12 @@ Benchmarks:
   - Or run `node scripts/bench.ts` to benchmark TS, native-lws, and native-libsocket (when present).
 - **Latest snapshot (2025-12-03, Windows 11, Node 24.10.0):**
 
-  | Scenario | Old throughput (msg/s) <br />*(pre-native-fix: 276–8.8k msgs landed)* | New duration (ms) | New throughput (msg/s) | Approx Δ |
+  | Scenario | Old throughput (msg/s) <br />*(pre-native-fix: 2768.8k msgs landed)* | New duration (ms) | New throughput (msg/s) | Approx  |
   | --- | --- | --- | --- | --- |
-  | `ts-server + ts` | 46 msg/s | 815 | 12,300 msg/s | **+265×** |
-  | `ts-server + native-lws` | 1,580 msg/s | 291 | 34,000 msg/s | **+21×** |
-  | `native-server + ts` | 1,690 msg/s | 219 | 45,700 msg/s | **+27×** |
-  | `native-server + native-lws` | 940 msg/s | 209 | 47,900 msg/s | **+51×** |
+  | `ts-server + ts` | 46 msg/s | 815 | 12,300 msg/s | **+265** |
+  | `ts-server + native-lws` | 1,580 msg/s | 291 | 34,000 msg/s | **+21** |
+  | `native-server + ts` | 1,690 msg/s | 219 | 45,700 msg/s | **+27** |
+  | `native-server + native-lws` | 940 msg/s | 209 | 47,900 msg/s | **+51** |
 
   The earlier runs never reached the configured 10,000 messages because handshake stalls dropped the socket; the native routing fix now delivers the full payload before the 1-second mark, so per-socket throughput jumped by one to two orders of magnitude. `native-libsocket` rows remain skipped on Windows until that backend is built.
 Tests:
@@ -396,7 +404,7 @@ Tests:
 
 ---
 
-## 🧪 Tests
+##  Tests
 
 ```bash
 pnpm test
@@ -412,14 +420,15 @@ Install attempts a native build automatically; if native fails, TS remains avail
 - macOS runners automatically skip the libsocket backend (it relies on Linux-only APIs). Set `QWORMHOLE_NATIVE=1` if you really want to force a build attempt.
 - If native build fails (missing toolchain/SSL), it logs a warning and falls back to TS without failing install.
 - You can rebuild explicitly anytime: `pnpm --filter @gsknnft/qwormhole run build:native`.
-- Set `QWORMHOLE_NATIVE=0` to skip native manually (e.g., CI); set `QWORMHOLE_BUILD_LIBSOCKET=0` on POSIX to skip libsocket when you only want LWS.
+- Set `QWORMHOLE_DISABLE_NATIVE=1` to skip native manually (e.g., CI). `QWORMHOLE_NATIVE=0` is documented in older notes but not currently wired in code.
+- Set `QWORMHOLE_BUILD_LIBSOCKET=0` on POSIX to skip libsocket when you only want LWS.
 
 ## Handshake & security
-- **Default handshake** – `{ type: "handshake", version, tags? }` automatically queues when `protocolVersion` is set.
-- **Native parity** – the libwebsockets server binding now enforces the same handshake pipeline as the TS server, surfaces TLS fingerprints/negentropic metadata on `connection.handshake`, and only emits `connection` after your optional `verifyHandshake` hook approves the snapshot.
-- **Negentropic signer** – pass `handshakeSigner` or use `createNegentropicHandshake` to emit signed payloads with `negHash` + coherence metadata for downstream policy engines.
-- **TLS-aware metadata** – when `tls` options are provided, the client captures peer fingerprints, ALPN, and exported keying material, then merges them into `handshake.tags`. The server pins those fingerprints via `verifyTlsFingerprint`, derives a session-bound key, and attaches the TLS snapshot to `connection.handshake.tls` for your app.
-- **Policy hooks** – `verifyHandshake` and `createHandshakeVerifier` make it easy to reject unwanted versions, tags, or signatures; failures immediately drop the socket and emit `clientClosed(hadError: true)`.
+- **Default handshake**  `{ type: "handshake", version, tags? }` automatically queues when `protocolVersion` is set.
+- **Native parity**  the libwebsockets server binding now enforces the same handshake pipeline as the TS server, surfaces TLS fingerprints/negentropic metadata on `connection.handshake`, and only emits `connection` after your optional `verifyHandshake` hook approves the snapshot.
+- **Negentropic signer**  pass `handshakeSigner` or use `createNegentropicHandshake` to emit signed payloads with `negHash` + coherence metadata for downstream policy engines.
+- **TLS-aware metadata**  when `tls` options are provided, the client captures peer fingerprints, ALPN, and exported keying material, then merges them into `handshake.tags`. The server pins those fingerprints via `verifyTlsFingerprint`, derives a session-bound key, and attaches the TLS snapshot to `connection.handshake.tls` for your app.
+- **Policy hooks**  `verifyHandshake` and `createHandshakeVerifier` make it easy to reject unwanted versions, tags, or signatures; failures immediately drop the socket and emit `clientClosed(hadError: true)`.
 
 ### Negentropic handshake tests
 - Property-based fuzzing (fast-check) now hammers `computeNIndex` with balanced entropy, repeated bytes, malformed Base64, and multi-kilobyte payloads. Every run asserts the metric is finite, non-NaN, and clamped to `[0,1]`.
@@ -427,16 +436,16 @@ Install attempts a native build automatically; if native fails, TS remains avail
 - These invariants backstop roadmap targets: native server parity/reconnect logic keep using the same bounded negentropy values, TLS playbooks can bind fingerprints without skew, session-key rotation/replay guards inherit deterministic coherence math, SCP semantics get stable identity vectors, and QUIC/WebTransport research can rely on identical entropy contracts.
 
 ## TLS (optional)
-- **TS transport** – enabling `tls.enabled=true` on the client/server wraps the socket in Node's `tls` module with cert/key/CA, ALPN, passphrase, and mutual-auth toggles. `exportKeyingMaterial` lets you mix TLS secrets into negentropic hashes for additional binding.
-- **Native transport** – the libwebsockets backend now accepts the same `tls` object (PEM strings or buffers) and configures client certs, private keys, CA bundles, passphrases, and ALPN directly inside the native context. The legacy `libsocket` backend remains plaintext-only and will throw if TLS is requested.
-- **Tight binding** – TLS fingerprints automatically land in handshake tags (`tlsFingerprint256`, `tlsFingerprint`, `tlsAlpn`). Servers can require them, enforce SNI expectations, or correlate TLS session keys with negentropic fingerprints for defense in depth.
+- **TS transport**  enabling `tls.enabled=true` on the client/server wraps the socket in Node's `tls` module with cert/key/CA, ALPN, passphrase, and mutual-auth toggles. `exportKeyingMaterial` lets you mix TLS secrets into negentropic hashes for additional binding.
+- **Native transport**  the libwebsockets backend now accepts the same `tls` object (PEM strings or buffers) and configures client certs, private keys, CA bundles, passphrases, and ALPN directly inside the native context. The legacy `libsocket` backend remains plaintext-only and will throw if TLS is requested.
+- **Tight binding**  TLS fingerprints automatically land in handshake tags (`tlsFingerprint256`, `tlsFingerprint`, `tlsAlpn`). Servers can require them, enforce SNI expectations, or correlate TLS session keys with negentropic fingerprints for defense in depth.
 
 ### Security story at a glance
-- **Transport confidentiality** – enable `tls` (TS or native-lws) for on-the-wire encryption, mutual auth, ALPN pinning, and exportable keying material.
-- **Identity & attestation** – use negentropic handshakes or custom `handshakeSigner` payloads so every socket announces a signed identity with coherence metadata.
-- **Policy enforcement** – `verifyHandshake`, TLS fingerprint pinning, rate limits, and backpressure guards let the server enforce both crypto posture and resource usage before promoting a socket to application traffic.
-- **Layered defense** – TLS metadata is merged into handshake tags, so downstream routers or registries can insist on matching TLS fingerprints *and* negentropic hashes; external tunnels (WireGuard, SSH) remain optional but compose cleanly via `localAddress` / `interfaceName`.
-- **Forward-secrecy roadmap** – sovereign tunnel sessions use long-lived X25519-derived keys today; rotation + replay protection are on the shortlist so meshes that need FS guarantees can opt in without bolting on a second transport.
+- **Transport confidentiality**  enable `tls` (TS or native-lws) for on-the-wire encryption, mutual auth, ALPN pinning, and exportable keying material.
+- **Identity & attestation**  use negentropic handshakes or custom `handshakeSigner` payloads so every socket announces a signed identity with coherence metadata.
+- **Policy enforcement**  `verifyHandshake`, TLS fingerprint pinning, rate limits, and backpressure guards let the server enforce both crypto posture and resource usage before promoting a socket to application traffic.
+- **Layered defense**  TLS metadata is merged into handshake tags, so downstream routers or registries can insist on matching TLS fingerprints *and* negentropic hashes; external tunnels (WireGuard, SSH) remain optional but compose cleanly via `localAddress` / `interfaceName`.
+- **Forward-secrecy roadmap**  sovereign tunnel sessions use long-lived X25519-derived keys today; rotation + replay protection are on the shortlist so meshes that need FS guarantees can opt in without bolting on a second transport.
 
 ## Error handling & backpressure
 - Backpressure protection: server drops connections when `maxBackpressureBytes` is exceeded; emits `backpressure` and `clientClosed`.
@@ -454,11 +463,11 @@ QWormhole now ships with a real ML hook so telemetry can be scored without pulli
 
 > Sovereign/mesh deployments often need to close the loop between transport telemetry (drops, latency skew, entropy collapse) and routing or throttling decisions. The ML adapter API is a portable way to derive those signals (in-process, RPC, or spawned CLI) without forcing any specific analytics stack. If you prefer raw metrics, leave the default adapter alone or swap in `createNoopAdapter`.
 
-- **Default (`qworm_torch`)** – derives entropy/coherence/anomaly scores from any numeric metrics using the same negentropic math the transport uses elsewhere. Installs get useful signals immediately, no RPC required.
-- **RPC adapter** – forward metrics to an HTTP endpoint. Configure with `QWORMHOLE_ML_ADAPTER=rpc` and `QWORMHOLE_ML_RPC_URL=https://...`. Optional `QWORMHOLE_ML_RPC_HEADERS` (JSON or `key:value,key:value`) and `QWORMHOLE_ML_RPC_TIMEOUT`.
-- **Spawn adapter** – shell out to any CLI (legacy Python, Rust CLI, etc.). Set `QWORMHOLE_ML_ADAPTER=spawn`, `QWORMHOLE_ML_SPAWN_CMD="python"`, and `QWORMHOLE_ML_SPAWN_ARGS="-m my.module"`.
-- **Composite adapter** – set `{ name: "composite", options: { adapters: [...] } }` to fan metrics into multiple adapters (e.g., run `qworm_torch` locally *and* RPC to a remote scorer) and aggregate their outputs.
-- **Custom adapters** – call `setMLAdapter(createNoopAdapter())` or pass any object matching `{ name, run() }`.
+- **Default (`qworm_torch`)**  derives entropy/coherence/anomaly scores from any numeric metrics using the same negentropic math the transport uses elsewhere. Installs get useful signals immediately, no RPC required.
+- **RPC adapter**  forward metrics to an HTTP endpoint. Configure with `QWORMHOLE_ML_ADAPTER=rpc` and `QWORMHOLE_ML_RPC_URL=https://...`. Optional `QWORMHOLE_ML_RPC_HEADERS` (JSON or `key:value,key:value`) and `QWORMHOLE_ML_RPC_TIMEOUT`.
+- **Spawn adapter**  shell out to any CLI (legacy Python, Rust CLI, etc.). Set `QWORMHOLE_ML_ADAPTER=spawn`, `QWORMHOLE_ML_SPAWN_CMD="python"`, and `QWORMHOLE_ML_SPAWN_ARGS="-m my.module"`.
+- **Composite adapter**  set `{ name: "composite", options: { adapters: [...] } }` to fan metrics into multiple adapters (e.g., run `qworm_torch` locally *and* RPC to a remote scorer) and aggregate their outputs.
+- **Custom adapters**  call `setMLAdapter(createNoopAdapter())` or pass any object matching `{ name, run() }`.
 
 Programmatic usage:
 
@@ -543,6 +552,7 @@ This keeps the Windows `libwebsockets/build` directory intact while producing a 
 
 - `QWORMHOLE_NATIVE_PREFERRED` &mdash; default backend for both client and server loaders (`lws` or `libsocket`).
 - `QWORMHOLE_NATIVE_SERVER_PREFERRED` / `QWORMHOLE_NATIVE_CLIENT_PREFERRED` &mdash; override detection per side without touching the other.
+- `QWORMHOLE_NATIVE_PATH` &mdash; explicit path to a native .node binding (useful in monorepos or custom builds).
 - `preferNative: true` on `createQWormholeServer()` now accepts `preferredNativeBackend` to force a backend per instance (used by the bench harness to run both `native-lws` and `native-libsocket`).
 - `QWORMHOLE_BUILD_LIBSOCKET=0` still skips libsocket entirely when you only need libwebsockets.
 
@@ -575,34 +585,37 @@ Notes:
 ## Secure Streams (roadmap)
 - Libwebsockets Secure Streams will be exposed via a TypeScript-friendly wrapper with JSON policy loading and minimal callbacks. See `ROADMAP.md` for status.
 
-## 🔐 Security Notes
+##  Security Notes
 
-QWormhole is transport-only by design.  
-It does **not** encrypt traffic (yet).  
+QWormhole is transport-only by design.
+It does **not** encrypt traffic (yet).
 
 Use WireGuard, SSH tunnels, or TLS termination if required.
 
 Secure Streams will provide encrypted, multiplexed channels.
 
 ## Known issues / roadmap
-- Native server wrapper is now implemented but still experimental; the TypeScript server is recommended for production.
+- **Native client binding resolution** may fail outside standard `bindings()` lookup paths; alignment with `module_root` resolution is pending.
+- **Native server parity**: per-connection `send()` is not yet implemented on the wrapper; TS server is recommended for production.
+- **QUIC/WebTransport**: experimental; bindings and adapters exist but are not production-ready.
+- **WireGuard integration**: docs exist, but end-to-end validation is pending in this repo.
 - More telemetry/export hooks and Secure Streams are planned for a later release.
 
 ### Focus items (v1.x)
 1. Native server parity + automated coverage (wrapper implemented, testing in progress)
-2. TLS playbooks (mTLS, Let's Encrypt, WireGuard interop) — see [docs/tls-examples.md](docs/tls-examples.md)
+2. TLS playbooks (mTLS, Let's Encrypt, WireGuard interop)  see [docs/tls-examples.md](docs/tls-examples.md)
 3. Sovereign tunnel upgrades: session key rotation, replay guards, forward secrecy toggle
 4. SCP semantic layer reference implementation + clearer boundary docs
 5. QUIC/WebTransport exploration for high-latency meshes
 
-## 📚 Documentation
+##  Documentation
 
-- [TLS Examples](docs/tls-examples.md) — Mutual TLS, Let's Encrypt, client certs, fingerprint pinning
-- [Mesh Network Tutorial](docs/mesh-network-tutorial.md) — Building mesh networks with WireGuard
-- [Deployment Patterns](docs/deployment-patterns.md) — Docker, Kubernetes, Systemd, PM2
-- [Security Policy](SECURITY.md) — Vulnerability reporting and security considerations
+- [TLS Examples](docs/tls-examples.md)  Mutual TLS, Let's Encrypt, client certs, fingerprint pinning
+- [Mesh Network Tutorial](docs/mesh-network-tutorial.md)  Building mesh networks with WireGuard
+- [Deployment Patterns](docs/deployment-patterns.md)  Docker, Kubernetes, Systemd, PM2
+- [Security Policy](SECURITY.md)  Vulnerability reporting and security considerations
 
-## 🗺 Roadmap
+##  Roadmap
 
 - Secure Streams
 - TLS/TCP wrappers
@@ -610,4 +623,70 @@ Secure Streams will provide encrypted, multiplexed channels.
 - WebSocket transport
 - UDP transport
 - Browser transport (WebRTC)
+
+This is a big milestone  youve essentially turned QWormhole into a **meshready runtime shell** with diagnostics baked in. Lets unpack what youve landed and what it unlocks:
+
+---
+
+##  What Youve Built
+
+- **QWormholeNode**
+  - Wraps a `QWormholeServer` (listener) and optional `QWormholeClient` (dialer).
+  - Participates in **UDP/mDNS discovery** so nodes can autodiscover peers on a LAN.
+  - Maintains a **PeerTable** with metadata (negentropic index, trust level, keys, etc.).
+  - Exposes **gossip hooks** (`tick`, `broadcast`) for higher layers like SigilNet or NegentropicCouplingTheory.
+  - Can **dial seeds** to bootstrap into a mesh.
+
+- **Bench harness upgrades**
+  - Adaptive/jitter flags for batch sizing and flush interval tuning.
+  - Live logging via `console.table`.
+  - Richer CSV metadata for plotting sweeps.
+  - READMEstyle benchmark template (`docs/benchmarks-template.md`) for reproducible reporting.
+
+- **Plotting script polish**
+  - Combined subplots by default, with clearer annotations and colorbar.
+  - `--separate` switch for individual windows.
+  - Heatmap gated to multiflush sweeps, so you dont clutter singlerun plots.
+
+---
+
+##  Why This Matters
+
+Youve now got a **full stack feedback loop**:
+
+1. **Transport substrate (QWormhole)**  canonical batching, flush, backpressure.
+2. **Mesh runtime (QWormholeNode)**  discovery, peer tracking, gossip.
+3. **Bench harness**  adaptive tuning, CSV emission, live diagnostics.
+4. **Plotting script**  annotated heatmaps, throughput vs latency tradeoff curves.
+5. **Docs template**  reproducible benchmark narratives for contributors.
+
+This is the kind of scaffolding that makes performance optimization **teachable and auditable**.
+
+---
+
+##  Next Moves
+
+- **Connection tracking**
+  - Extend `dialSeed()` to register live `QWormholeClient` connections keyed by `PeerId`.
+  - Feed latency/flush metrics back into `PeerTable`.
+
+- **Gossip forwarding**
+  - Right now gossip emits locally. Next step: forward gossip messages across QWormhole connections.
+  - That turns your runtime into a true mesh overlay.
+
+- **Adaptive runtime**
+  - Let `QWormholeNode` autotune batch size/flush interval based on peer backpressure and latency.
+  - You already have adaptive flags in the bench harness  fold them into runtime.
+
+- **Diagnostics surfacing**
+  - Pipe node metrics (peer count, gossip ticks, backpressure events) into your console UI.
+  - Export snapshots for README diagrams.
+
+---
+
+###  Takeaway
+Youve elevated QWormhole from a transport substrate into a **meshready runtime** with diagnostics, plotting, and reproducible benchmarks. The next leap is wiring gossip through live connections and folding adaptive tuning into the node runtime  thats when SigilNet/NegentropicCouplingTheory can treat QWormhole as a full mesh backbone.
+
+Would you like me to sketch a **README benchmark section template** that shows how to run nodes, capture CSVs, and interpret the heatmap so contributors can follow your workflow endtoend?
+\n## TS writev/length-prefixed tuning\n- Env overrides (BatchFramer/entropy policy):\n  - QW_WRITEV_BATCH_SIZE (default 96)  frames per flush; try 6496 to balance latency vs throughput.\n  - QW_WRITEV_FLUSH_MS (default 2)  flush interval for partial batches; try 14 ms.\n- Use pnpm --filter @gsknnft/qwormhole bench:writev --diagnostics to sweep settings without code changes.\n
 

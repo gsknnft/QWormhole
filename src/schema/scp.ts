@@ -47,6 +47,17 @@ export const handshakeTagsSchema = z.record(
   z.union([z.string(), z.number()]),
 );
 
+
+/**
+ * Entropy velocity indicator
+ */
+// export type EntropyVelocity = "low" | "stable" | "rising" | "spiking";
+
+/**
+ * Coherence level indicator
+ */
+// export type CoherenceLevel = "high" | "medium" | "low" | "chaos";
+
 /**
  * Entropy velocity indicator for adaptive transport policy
  */
@@ -150,6 +161,19 @@ export const scpStatePayloadSchema = z
   })
   .catchall(z.unknown());
 
+
+export const revelationSchema = z
+  .object({
+    type: z.literal("revelation"),
+    sid: z.string().min(1),
+    intent: z.string().min(1),
+    payload: z.unknown(),
+    ts: z.number().int().nonnegative(),
+    sig: z.string().min(1),
+  })
+  .catchall(z.unknown());
+
+
 export type HandshakePayload = z.infer<typeof handshakePayloadSchema>;
 export type NegentropicHandshake = z.infer<typeof negentropicHandshakeSchema>;
 export type SCPStatePayload = z.infer<typeof scpStatePayloadSchema>;
@@ -158,3 +182,34 @@ export type EntropyMetricsPayload = z.infer<typeof entropyMetricsSchema>;
 export type EntropyVelocity = z.infer<typeof entropyVelocitySchema>;
 export type CoherenceLevel = z.infer<typeof coherenceLevelSchema>;
 export type HandshakeMode = z.infer<typeof handshakeModeSchema>;
+
+
+
+/* 
+// reference for LLM Training shape (vera-torch rpc_server output)
+{
+  "ts": "...",
+  "source": "signal-trial",
+  "market": {"symbol":"SOL/USDC","venue":"..."},
+  "metrics": {
+    "coherence": 0.81,
+    "entropy": 0.22,
+    "negentropy": 0.59,
+    "negentropic_index": 3.68
+  },
+  "transport": {
+    "latency_ms": 128,
+    "jitter_ms": 19,
+    "drop_rate": 0.003,
+    "out_of_order": 0.01,
+    "replay_detected": false,
+    "schema_hash": "..."
+  },
+  "execution": {
+    "slippage_bps": 7.2,
+    "fill_rate": 0.92
+  }
+}
+
+
+*/
