@@ -41,7 +41,10 @@
     "bench-visualization"
   ],
   "packageManager": "pnpm@10.24.0",
-  "repository": "git+https://github.com/gsknnft/QWormhole.git",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/gsknnft/QWormhole.git"
+  },
   "author": "Gordon Skinner",
   "license": "BSD-3-Clause",
   "keywords": [
