@@ -143,13 +143,13 @@ export const FLOW_DEFAULTS = {
   /** TS peer max slice for high-trust peers (negIndex >= 0.85) */
   TS_PEER_HIGH_TRUST_MAX_SLICE: 64,
   /** Native-peer slice floor for TS senders under healthy conditions */
-  NATIVE_PEER_MIN_SLICE: 12,
+  NATIVE_PEER_MIN_SLICE: 11,
   /** Native-peer framer cap to keep writev batches dense */
-  NATIVE_PEER_MAX_BUFFERS: 128,
+  NATIVE_PEER_MAX_BUFFERS: 112,
   /** Native-peer framer byte budget */
-  NATIVE_PEER_MAX_BYTES: 192 * 1024,
+  NATIVE_PEER_MAX_BYTES: 176 * 1024,
   /** Native-peer framer minimum bytes target */
-  NATIVE_PEER_MIN_BYTES: 32 * 1024,
+  NATIVE_PEER_MIN_BYTES: 28 * 1024,
   /** TS framer caps to keep batching in the micro-batch envelope */
   TS_FRAMER_MAX_BUFFERS: (() => {
     const raw = process.env.QWORMHOLE_TS_FRAMER_MAX_BUFFERS;
@@ -182,6 +182,36 @@ export const FLOW_DEFAULTS = {
   /** Upper bound on token bucket induced delay */
   MAX_RESERVE_DELAY_MS: 200,
 } as const;
+
+type NativePeerTuneProfile = "stable" | "balanced" | "throughput";
+
+const NATIVE_PEER_TUNE: NativePeerTuneProfile = (() => {
+  const raw = (process.env.QWORMHOLE_NATIVE_PEER_TUNE ?? "balanced")
+    .trim()
+    .toLowerCase();
+  if (raw === "stable" || raw === "balanced" || raw === "throughput") {
+    return raw;
+  }
+  return "balanced";
+})();
+
+const nativePeerContractionRatio = (): number => {
+  if (NATIVE_PEER_TUNE === "stable") return 0.88;
+  if (NATIVE_PEER_TUNE === "throughput") return 0.9;
+  return 0.89;
+};
+
+const nativePeerExpansionBufferRatio = (): number => {
+  if (NATIVE_PEER_TUNE === "stable") return 1.1;
+  if (NATIVE_PEER_TUNE === "throughput") return 1.2;
+  return 1.15;
+};
+
+const nativePeerExpansionByteRatio = (): number => {
+  if (NATIVE_PEER_TUNE === "stable") return 1.06;
+  if (NATIVE_PEER_TUNE === "throughput") return 1.1;
+  return 1.08;
+};
 
 const ADAPTIVE_DEFAULTS: AdaptiveConfig = {
   mode: "off",
@@ -882,7 +912,9 @@ export class FlowController extends TypedEventEmitter<FlowControllerEvents> {
 
       // Only contract on real pressure (GC/backpressure); otherwise nudge caps upward.
       if (!idleOK || !gcOK || bp) {
-        const contractionRatio = peerIsNative ? 0.9 : 0.75;
+        const contractionRatio = peerIsNative
+          ? nativePeerContractionRatio()
+          : 0.75;
         maxBuffers = Math.max(bounds.minBuf, Math.round(maxBuffers * contractionRatio));
         maxBytes = Math.max(bounds.minBytes, Math.round(maxBytes * contractionRatio));
         flushMs = peerIsNative
@@ -891,11 +923,17 @@ export class FlowController extends TypedEventEmitter<FlowControllerEvents> {
       } else {
         maxBuffers = Math.min(
           bounds.maxBuf,
-          Math.round(maxBuffers * (peerIsNative ? 1.2 : 1.1)),
+          Math.round(
+            maxBuffers *
+              (peerIsNative ? nativePeerExpansionBufferRatio() : 1.1),
+          ),
         );
         maxBytes = Math.min(
           bounds.maxBytes,
-          Math.round(maxBytes * (peerIsNative ? 1.1 : 1.05)),
+          Math.round(
+            maxBytes *
+              (peerIsNative ? nativePeerExpansionByteRatio() : 1.05),
+          ),
         );
         flushMs = Math.max(1, flushMs);
       }

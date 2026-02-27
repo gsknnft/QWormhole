@@ -459,6 +459,22 @@ Benchmarks:
   rerunning the 100k authoritative raw-core lane.
 - **Note (2026-02-20):** in restricted environments, benchmark scripts may fail with `esbuild spawn EPERM` because bench scripts currently execute through `tsx`.
 - **Note (2026-02-27):** transport coherence history capture is intentionally disabled by default in the raw core bench because per-flush/per-pressure sampling materially distorts throughput measurements. Raw perf and structure analysis should not be mixed in the same default lane.
+- Native-peer TS tuning is now profile-driven via `QWORMHOLE_NATIVE_PEER_TUNE`:
+
+  ```bash
+  QWORMHOLE_NATIVE_PEER_TUNE=balanced pnpm --filter @gsknnft/qwormhole run bench:core:report
+  ```
+
+  Supported profiles:
+
+  | Profile | Intended use | Current evidence |
+  | --- | --- | --- |
+  | `balanced` | Default mixed-lane posture | Best current default for `native-server(lws) + ts` in the posted runs |
+  | `stable` | Conservative expansion / repeatability bias | Best current profile for `ts-server + ts` and `native-server(lws) + native-lws` in the posted runs |
+  | `throughput` | Aggressive native-peer saturation policy | Experimental; intended for peak chasing, but not yet the fastest profile in the posted runs |
+
+  The profile names describe control posture, not guaranteed benchmark ordering. Choose the default from median repeated runs, not a single sample.
+- **Profile note (2026-02-27):** `balanced` remains the default because it is the strongest current compromise for the mixed native-server + TS-client lane. `stable` is a valid alternative when repeatability matters more than mixed-lane recovery. `throughput` should be treated as an aggressive opt-in profile until it wins on repeated runs.
 Tests:
 - `pnpm --filter @gsknnft/qwormhole test` (TS), `pnpm --filter @gsknnft/qwormhole test:native` (gated by native availability).
 

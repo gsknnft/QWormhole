@@ -675,6 +675,9 @@ const diffGcTotals = (start: GcTotals): GcTotals => {
 
 let batchFramerPatched = false;
 let activeBatchCollector: BatchFlushStats | null = null;
+type TransportCallStats = NonNullable<ScenarioDiagnostics["transportCalls"]>;
+let transportCallsPatched = false;
+let activeTransportCollector: TransportCallStats | null = null;
 
 const ensureBatchFramerDiagnostics = () => {
   if (batchFramerPatched) return;
@@ -707,6 +710,88 @@ const ensureBatchFramerDiagnostics = () => {
   batchFramerPatched = true;
 };
 
+const ensureTransportCallDiagnostics = () => {
+  if (transportCallsPatched) return;
+
+  const batchFramerProto = BatchFramer.prototype as BatchFramer & {
+    writevBatch?: (buffers: Buffer[], slotIndices?: number[]) => Promise<void>;
+    writeBuffer?: (buffer: Buffer) => Promise<void>;
+  };
+
+  if (typeof batchFramerProto.writevBatch === "function") {
+    const originalWritevBatch = batchFramerProto.writevBatch;
+    batchFramerProto.writevBatch = async function (
+      this: BatchFramer,
+      buffers: Buffer[],
+      slotIndices?: number[],
+    ): Promise<void> {
+      if (activeTransportCollector) {
+        activeTransportCollector.batchWritevCalls += 1;
+        activeTransportCollector.batchWritevBuffers += buffers.length;
+        activeTransportCollector.batchWritevBytes += buffers.reduce(
+          (sum, buffer) => sum + buffer.length,
+          0,
+        );
+      }
+      return originalWritevBatch.call(this, buffers, slotIndices);
+    };
+  }
+
+  if (typeof batchFramerProto.writeBuffer === "function") {
+    const originalWriteBuffer = batchFramerProto.writeBuffer;
+    batchFramerProto.writeBuffer = async function (
+      this: BatchFramer,
+      buffer: Buffer,
+    ): Promise<void> {
+      if (activeTransportCollector) {
+        activeTransportCollector.writeBufferCalls += 1;
+        activeTransportCollector.writeBufferBytes += buffer.length;
+      }
+      return originalWriteBuffer.call(this, buffer);
+    };
+  }
+
+  const nativeTcpProto = NativeTcpClient.prototype as NativeTcpClient & {
+    sendMany?: (frames: Uint8Array[], fin?: boolean) => number | void;
+    send?: (frame: Uint8Array | Buffer | string, fin?: boolean) => number | void;
+  };
+
+  if (typeof nativeTcpProto.sendMany === "function") {
+    const originalSendMany = nativeTcpProto.sendMany;
+    nativeTcpProto.sendMany = function (
+      this: NativeTcpClient,
+      frames: Uint8Array[],
+      fin?: boolean,
+    ): number | void {
+      if (activeTransportCollector) {
+        activeTransportCollector.nativeSendManyCalls += 1;
+        activeTransportCollector.nativeSendManyItems += frames.length;
+        activeTransportCollector.nativeSendManyBytes += frames.reduce(
+          (sum, frame) => sum + frame.byteLength,
+          0,
+        );
+      }
+      return originalSendMany.call(this, frames, fin);
+    };
+  }
+
+  if (typeof nativeTcpProto.send === "function") {
+    const originalSend = nativeTcpProto.send;
+    nativeTcpProto.send = function (
+      this: NativeTcpClient,
+      frame: Uint8Array | Buffer | string,
+      fin?: boolean,
+    ): number | void {
+      if (activeTransportCollector) {
+        activeTransportCollector.nativeSendCalls += 1;
+      }
+      return originalSend.call(this, frame, fin);
+    };
+  }
+
+  transportCallsPatched = true;
+};
+
 const microsToMillis = (value: number): number => value / 1000;
 const nanosToMillis = (value: number): number => value / 1_000_000;
 
@@ -715,6 +800,7 @@ const startDiagnostics = (
 ): DiagnosticsScope => {
   if (ENABLE_DIAGNOSTICS) {
     ensureBatchFramerDiagnostics();
+    ensureTransportCallDiagnostics();
   }
 
   const startGc = snapshotGcTotals();
@@ -746,15 +832,29 @@ const startDiagnostics = (
     maxBuffers: 0,
     maxBytes: 0,
   };
+  const transportCalls: TransportCallStats = {
+    batchWritevCalls: 0,
+    batchWritevBuffers: 0,
+    batchWritevBytes: 0,
+    writeBufferCalls: 0,
+    writeBufferBytes: 0,
+    nativeSendManyCalls: 0,
+    nativeSendManyItems: 0,
+    nativeSendManyBytes: 0,
+    nativeSendCalls: 0,
+  };
 
   const previousCollector = activeBatchCollector;
+  const previousTransportCollector = activeTransportCollector;
   activeBatchCollector = batchStats;
+  activeTransportCollector = transportCalls;
 
   return {
     stop: (extras?: DiagnosticsExtras) => {
       serverInstance.off("backpressure", onBackpressure as never);
       serverInstance.off("drain", onDrain as never);
       activeBatchCollector = previousCollector;
+      activeTransportCollector = previousTransportCollector;
       loopDelay.disable();
 
       const gc = diffGcTotals(startGc);
@@ -793,6 +893,7 @@ const startDiagnostics = (
         eventLoopDelay,
         backpressure,
         batching,
+        transportCalls,
         flow: extras?.flowDiagnostics,
         clientFlow: extras?.clientFlowDiagnostics,
         clientBatch: extras?.clientBatchStats,
