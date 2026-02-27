@@ -7,10 +7,6 @@
     "outDir": "dist",
     "lib":  ["ESNext", "DOM"],
     "baseUrl": ".",
-    "paths": {
-      "@sigilnet/coherence": ["../coherence/dist/index.d.ts"],
-      "@sigilnet/coherence/*": ["../coherence/dist/*"]
-    },
     "rootDir": "src",
     "composite": true,
     "isolatedModules": true,

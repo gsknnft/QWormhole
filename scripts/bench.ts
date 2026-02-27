@@ -453,6 +453,9 @@ const baselineScenarios: Scenario[] = [
   },
 ];
 
+const framingForClientMode = (mode: Mode): FramingMode =>
+  isBaselineMode(mode) ? "none" : BENCH_FRAMING;
+
 const toBytes: Serializer = (payload: Payload): Buffer => {
   if (Buffer.isBuffer(payload)) return payload;
   if (payload instanceof Uint8Array) return Buffer.from(payload);
@@ -473,7 +476,7 @@ const benchSerializer: Serializer = (() => {
     return encoded;
   };
 })();
-const summarizePayloadBytes = (): PayloadSummary => {
+const summarizePayloadBytes = (framing: FramingMode): PayloadSummary => {
   const sizes = BENCH_PAYLOADS.map(payload => benchSerializer(payload).length);
   const count = sizes.length;
   const minBytes = count ? Math.min(...sizes) : 0;
@@ -490,20 +493,27 @@ const summarizePayloadBytes = (): PayloadSummary => {
     maxBytes,
     avgBytes,
     types,
-    framing: BENCH_FRAMING,
-    frameHeaderBytes: BENCH_FRAMING === "length-prefixed" ? FRAME_HEADER_BYTES : 0,
+    framing,
+    frameHeaderBytes: framing === "length-prefixed" ? FRAME_HEADER_BYTES : 0,
   };
 };
-const PAYLOAD_SUMMARY = summarizePayloadBytes();
+const PAYLOAD_SUMMARY = summarizePayloadBytes(BENCH_FRAMING);
 
-const NATIVE_PAYLOADS = BENCH_PAYLOADS.map(payload => {
-  const bytes = toBytes(payload);
-  return BENCH_FRAMING === "length-prefixed"
-    ? encodeLengthPrefixed(bytes)
-    : bytes;
-});
-const getNativePayload = (i: number): Buffer =>
-  NATIVE_PAYLOADS[i % NATIVE_PAYLOADS.length];
+const buildNativePayloads = (framing: FramingMode): Buffer[] =>
+  BENCH_PAYLOADS.map(payload => {
+    const bytes = toBytes(payload);
+    return framing === "length-prefixed"
+      ? encodeLengthPrefixed(bytes)
+      : bytes;
+  });
+const NATIVE_PAYLOADS_BY_FRAMING: Record<FramingMode, Buffer[]> = {
+  "length-prefixed": buildNativePayloads("length-prefixed"),
+  none: buildNativePayloads("none"),
+};
+const getNativePayload = (i: number, framing: FramingMode): Buffer => {
+  const payloads = NATIVE_PAYLOADS_BY_FRAMING[framing];
+  return payloads[i % payloads.length];
+};
 
 const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
 const NATIVE_SEND_BATCH_SIZE = Math.max(
@@ -515,12 +525,13 @@ const sendBenchPayloadAt = (
   index: number,
   tsClient: QWormholeClient<Buffer> | null,
   nativeClient: NativeTcpClient | null,
+  framing: FramingMode,
 ): void => {
   const payload = getBenchPayload(index);
   if (tsClient) {
     void tsClient.send(payload);
   } else if (nativeClient) {
-    nativeClient.send(getNativePayload(index));
+    nativeClient.send(getNativePayload(index, framing));
   }
 };
 
@@ -563,12 +574,13 @@ const deriveBenchCoherence = (): "high" | "medium" | "low" | "chaos" => {
 
 const buildBenchConfigSummary = (
   flowController?: FlowController | null,
+  framing: FramingMode = BENCH_FRAMING,
 ): BenchConfigSummary => {
   const summary: BenchConfigSummary = {
     macroBatchTargetBytes: MACRO_BATCH_TARGET_BYTES,
     yieldEvery: BENCH_YIELD_EVERY,
     flowFastPath: BENCH_FLOW_FAST,
-    payload: PAYLOAD_SUMMARY,
+    payload: summarizePayloadBytes(framing),
   };
   if (!flowController) return summary;
   const diag = flowController.getDiagnostics();
@@ -903,8 +915,11 @@ const buildIncompleteScenarioResult = (
 const isBaselineMode = (mode: Mode): boolean =>
   mode === "net" || mode === "ws" || mode === "uwebsockets";
 
-const runBaselineScenario = async (mode: Mode): Promise<ScenarioResult> => {
-  if (mode === "net") return runNetBaselineScenario();
+const runBaselineScenario = async (
+  mode: Mode,
+  framing: FramingMode,
+): Promise<ScenarioResult> => {
+  if (mode === "net") return runNetBaselineScenario(framing);
   if (mode === "ws") return runWsBaselineScenario();
   if (mode === "uwebsockets") return runUwsBaselineScenario();
   throw new Error(`Unsupported baseline mode: ${mode}`);
@@ -940,8 +955,10 @@ const sendWsPayloadAt = async (
   }
 };
 
-async function runNetBaselineScenario(): Promise<ScenarioResult> {
-  if (BENCH_FRAMING === "none") {
+async function runNetBaselineScenario(
+  framing: FramingMode,
+): Promise<ScenarioResult> {
+  if (framing !== "none") {
     return {
       id: "net-server+net",
       serverMode: "net",
@@ -949,9 +966,9 @@ async function runNetBaselineScenario(): Promise<ScenarioResult> {
       durationMs: 0,
       messagesReceived: 0,
       bytesReceived: 0,
-      framing: "length-prefixed",
+      framing: "none",
       skipped: true,
-      reason: "raw net baseline requires framing",
+      reason: "raw net baseline requires framing=none",
     };
   }
 
@@ -1584,6 +1601,7 @@ async function runScenarioForked({
   clientMode,
   serverBackend,
 }: Scenario): Promise<ScenarioResult> {
+  const scenarioFraming = framingForClientMode(clientMode);
   if (isBaselineMode(clientMode)) {
     const child = forkBenchChild();
     let doneResolve: ((msg: BenchChildDone) => void) | null = null;
@@ -1608,7 +1626,7 @@ async function runScenarioForked({
     child.send?.({
       type: "init",
       scenario: { id, preferNativeServer, clientMode, serverBackend },
-      framing: BENCH_FRAMING,
+      framing: scenarioFraming,
       totalMessages: TOTAL_MESSAGES,
       enableDiagnostics: false,
       benchCoherence: false,
@@ -1626,7 +1644,7 @@ async function runScenarioForked({
           durationMs: 0,
           messagesReceived: done.messagesReceived,
           bytesReceived: done.bytesReceived,
-          framing: clientMode === "net" ? "length-prefixed" : "none",
+          framing: scenarioFraming,
           skipped: true,
           reason: "baseline child returned no result",
         }
@@ -1640,7 +1658,7 @@ async function runScenarioForked({
         durationMs: 0,
         messagesReceived: 0,
         bytesReceived: 0,
-        framing: clientMode === "net" ? "length-prefixed" : "none",
+        framing: scenarioFraming,
         skipped: true,
         reason: err instanceof Error ? err.message : "baseline child error",
       };
@@ -1655,7 +1673,7 @@ async function runScenarioForked({
       durationMs: 0,
       messagesReceived: 0,
       bytesReceived: 0,
-      framing: BENCH_FRAMING,
+      framing: scenarioFraming,
       skipped: true,
       reason: "Native client backend unavailable",
     };
@@ -1670,7 +1688,7 @@ async function runScenarioForked({
       durationMs: 0,
       messagesReceived: 0,
       bytesReceived: 0,
-      framing: BENCH_FRAMING,
+      framing: scenarioFraming,
       skipped: true,
       reason: serverBackend
         ? `Native server backend ${serverBackend} unavailable`
@@ -1720,7 +1738,7 @@ async function runScenarioForked({
   child.send?.({
     type: "init",
     scenario: { id, preferNativeServer, clientMode, serverBackend },
-    framing: BENCH_FRAMING,
+    framing: scenarioFraming,
     totalMessages: TOTAL_MESSAGES,
     enableDiagnostics: ENABLE_DIAGNOSTICS,
     benchCoherence: BENCH_COHERENCE,
@@ -1739,7 +1757,7 @@ async function runScenarioForked({
       durationMs: 0,
       messagesReceived: 0,
       bytesReceived: 0,
-      framing: BENCH_FRAMING,
+      framing: scenarioFraming,
       skipped: true,
       reason: err instanceof Error ? err.message : "child error",
     };
@@ -1756,7 +1774,7 @@ async function runScenarioForked({
       durationMs: 0,
       messagesReceived: 0,
       bytesReceived: 0,
-      framing: BENCH_FRAMING,
+      framing: scenarioFraming,
       skipped: true,
       reason: ready.reason,
     };
@@ -1778,7 +1796,7 @@ async function runScenarioForked({
     tsClient = new QWormholeClient<Buffer>({
       host: "127.0.0.1",
       port: (ready as BenchChildReady).port,
-      framing: BENCH_FRAMING,
+      framing: scenarioFraming,
       serializer: benchSerializer,
       deserializer: (data: Buffer): Buffer => data,
       entropyMetrics: {
@@ -1801,7 +1819,10 @@ async function runScenarioForked({
     attachBenchClientErrorHandler(tsClient);
     await tsClient.connect();
     const internal = tsClient as any;
-    benchConfig = buildBenchConfigSummary(internal.flowController ?? null);
+    benchConfig = buildBenchConfigSummary(
+      internal.flowController ?? null,
+      scenarioFraming,
+    );
     if (benchConfig) {
       logBenchConfig(`${id} (forked)`, benchConfig);
     }
@@ -1819,7 +1840,7 @@ async function runScenarioForked({
         durationMs: 0,
         messagesReceived: 0,
         bytesReceived: 0,
-        framing: BENCH_FRAMING,
+        framing: scenarioFraming,
         skipped: true,
         reason: `Native client backend ${backend} unavailable`,
       };
@@ -1849,11 +1870,10 @@ async function runScenarioForked({
         flushNativeBenchBatch(nativeClient, nativeBatch);
         await sleep(0);
       }
-      const payload = getBenchPayload(i);
       if (tsClient) {
-        tsClient.send(payload);
+        tsClient.send(getBenchPayload(i));
       } else if (nativeClient) {
-        nativeBatch.push(getNativePayload(i));
+        nativeBatch.push(getNativePayload(i, scenarioFraming));
         if (nativeBatch.length >= NATIVE_SEND_BATCH_SIZE) {
           flushNativeBenchBatch(nativeClient, nativeBatch);
         }
@@ -1945,6 +1965,7 @@ async function runScenarioForked({
     messagesReceived,
     bytesReceived,
     framing: BENCH_FRAMING,
+    framing: scenarioFraming,
     msgsPerSec,
     mbPerSec,
     benchConfig,
@@ -1962,9 +1983,14 @@ async function runScenarioRepeated(scenario: Scenario): Promise<ScenarioResult> 
         `[bench] starting ${scenario.id}${BENCH_REPEAT > 1 ? ` (run ${i + 1}/${BENCH_REPEAT})` : ""}`,
       );
     }
-    const result = BENCH_FORK && !BENCH_CHILD
-      ? await runScenarioForked(scenario)
-      : await runScenario(scenario);
+    const result = isBaselineMode(scenario.clientMode)
+      ? await runBaselineScenario(
+          scenario.clientMode,
+          framingForClientMode(scenario.clientMode),
+        )
+      : BENCH_FORK && !BENCH_CHILD
+        ? await runScenarioForked(scenario)
+        : await runScenario(scenario);
     runs.push(result);
     if (BENCH_CSV_PATH !== "") {
       console.log(
@@ -1984,6 +2010,7 @@ async function runScenario({
   clientMode,
   serverBackend,
 }: Scenario): Promise<ScenarioResult> {
+  const scenarioFraming = framingForClientMode(clientMode);
   // --- Coherence Trace Setup ---
   const coherenceTrace: CoherenceDecisionSample[] = [];
   let lastCoherenceMode: string | undefined = undefined;
@@ -2003,6 +2030,7 @@ async function runScenario({
   let flowDiagnostics: DiagnosticsExtras["flowDiagnostics"];
   let clientFlowDiagnostics: FlowControllerDiagnostics | undefined;
   let clientBatchStats: BatchFramerStats | undefined;
+  let clientQueueStats: PriorityQueueStats | undefined;
   let clientSnapshotResolve: (() => void) | null = null;
   const clientSnapshotWaiter = new Promise<void>(resolve => {
     clientSnapshotResolve = resolve;
@@ -2024,7 +2052,7 @@ async function runScenario({
       durationMs: 0,
       messagesReceived: 0,
       bytesReceived: 0,
-      framing: BENCH_FRAMING,
+      framing: scenarioFraming,
       skipped: true,
       reason: "Native client backend unavailable",
     };
@@ -2039,7 +2067,7 @@ async function runScenario({
       durationMs: 0,
       messagesReceived: 0,
       bytesReceived: 0,
-      framing: BENCH_FRAMING,
+      framing: scenarioFraming,
       skipped: true,
       reason: serverBackend
         ? `Native server backend ${serverBackend} unavailable`
@@ -2054,7 +2082,7 @@ async function runScenario({
   const serverResult = createQWormholeServer({
     host: "127.0.0.1",
     port: 0,
-    framing: BENCH_FRAMING,
+    framing: scenarioFraming,
     serializer: benchSerializer,
     deserializer: (data: Buffer) => data as Buffer,
     preferNative: preferNativeServer,
@@ -2079,7 +2107,7 @@ async function runScenario({
       durationMs: 0,
       messagesReceived: 0,
       bytesReceived: 0,
-      framing: BENCH_FRAMING,
+      framing: scenarioFraming,
       skipped: true,
       reason: "Native backend unavailable",
     };
@@ -2103,7 +2131,7 @@ async function runScenario({
     tsClient = new QWormholeClient<Buffer>({
       host: "127.0.0.1",
       port,
-      framing: BENCH_FRAMING,
+      framing: scenarioFraming,
       serializer: benchSerializer,
       deserializer: (data: Buffer) => data,
       entropyMetrics: {
@@ -2133,7 +2161,7 @@ async function runScenario({
     if (BENCH_COHERENCE && flowController && batchFramer) {
       coherenceController = new CoherenceController();
     }
-    benchConfig = buildBenchConfigSummary(flowController);
+    benchConfig = buildBenchConfigSummary(flowController, scenarioFraming);
     if (benchConfig) {
       logBenchConfig(id, benchConfig);
     }
@@ -2184,9 +2212,9 @@ async function runScenario({
           await sleep(0);
         }
         if (tsClient) {
-          sendBenchPayloadAt(i, tsClient, null);
+          sendBenchPayloadAt(i, tsClient, null, scenarioFraming);
         } else if (nativeClient) {
-          nativeBatch.push(getNativePayload(i));
+          nativeBatch.push(getNativePayload(i, scenarioFraming));
           if (nativeBatch.length >= NATIVE_SEND_BATCH_SIZE) {
             flushNativeBenchBatch(nativeClient, nativeBatch);
           }
@@ -2206,7 +2234,7 @@ async function runScenario({
           durationMs: 0,
           messagesReceived,
           bytesReceived,
-          framing: BENCH_FRAMING,
+          framing: scenarioFraming,
           benchConfig,
           skipped: true,
           reason: `warmup timed out after ${TIMEOUT_MS}ms (${messagesReceived}/${WARMUP_MESSAGES} messages)`,
@@ -2231,9 +2259,9 @@ async function runScenario({
         await sleep(0);
       }
       if (tsClient) {
-        sendBenchPayloadAt(i + WARMUP_MESSAGES, tsClient, null);
+        sendBenchPayloadAt(i + WARMUP_MESSAGES, tsClient, null, scenarioFraming);
       } else if (nativeClient) {
-        nativeBatch.push(getNativePayload(i + WARMUP_MESSAGES));
+        nativeBatch.push(getNativePayload(i + WARMUP_MESSAGES, scenarioFraming));
         if (nativeBatch.length >= NATIVE_SEND_BATCH_SIZE) {
           flushNativeBenchBatch(nativeClient, nativeBatch);
         }
@@ -2314,7 +2342,7 @@ async function runScenario({
         durationMs: performance.now() - start,
         messagesReceived,
         bytesReceived,
-        framing: BENCH_FRAMING,
+        framing: scenarioFraming,
         msgsPerSec:
           messagesReceived > 0
             ? messagesReceived / ((performance.now() - start) / 1000)
@@ -2392,6 +2420,7 @@ async function runScenario({
     messagesReceived,
     bytesReceived,
     framing: BENCH_FRAMING,
+    framing: scenarioFraming,
     msgsPerSec,
     mbPerSec,
     benchConfig,
@@ -2874,7 +2903,11 @@ const buildJsonlEntry = (
 ): Record<string, unknown> => {
   const diag = res.diagnostics;
   const flow = diag?.clientFlow ?? diag?.flow;
-  const payload = res.benchConfig?.payload ?? PAYLOAD_SUMMARY;
+  const payload =
+    res.benchConfig?.payload ??
+    summarizePayloadBytes(
+      res.framing === "none" ? "none" : "length-prefixed",
+    );
   return {
     timestamp: new Date().toISOString(),
     scenario: res.id,
@@ -2957,6 +2990,9 @@ const writeBenchReport = async (results: ScenarioResult[]): Promise<void> => {
   if (!BENCH_REPORT_PATH) return;
 
   const env = pickBenchEnv();
+  const isCompareRun = results.some(
+    res => isBaselineMode(res.clientMode) || isBaselineMode(res.serverMode),
+  );
   const summaryRows = results.map(res => [
     res.id,
     res.serverMode,
@@ -3040,16 +3076,20 @@ const writeBenchReport = async (results: ScenarioResult[]): Promise<void> => {
   const transportFindings = [
     BENCH_TRANSPORT_COHERENCE
       ? `Transport coherence sampling: enabled`
-      : `Transport coherence sampling: disabled in this raw lane. Run \`bench:core:structure\` for tSNI / tSPI / tMeta.`,
+      : `Transport coherence sampling: disabled in this raw lane. Run \`${isCompareRun ? "bench:compare:structure" : "bench:core:structure"}\` for tSNI / tSPI / tMeta.`,
     bestTransport
       ? `Best transport persistence: \`${bestTransport.id}\` (tSPI ${formatNumber(bestTransport.transportSPI, 3)}, tMeta ${formatNumber(bestTransport.transportMetastability, 3)})`
       : `Best transport persistence: unavailable`,
-    fastestTransport
-      ? `Fastest measured path: \`${fastestTransport.id}\` (${formatNumber(fastestTransport.msgsPerSec, 0)} msg/s)`
-      : `Fastest measured path: unavailable`,
+    !BENCH_TRANSPORT_COHERENCE
+      ? `Fastest transport-coherence row: unavailable (sampling disabled in this lane)`
+      : fastestTransport
+        ? `Fastest transport-coherence row: \`${fastestTransport.id}\` (${formatNumber(fastestTransport.msgsPerSec, 0)} msg/s)`
+        : `Fastest transport-coherence row: unavailable`,
     bestTransport && fastestTransport && bestTransport.id !== fastestTransport.id
       ? `Transport winner differs from throughput winner. Prefer tSPI when selecting a default path.`
-      : `Throughput leader and transport-stability leader are aligned in this run.`,
+      : bestTransport && fastestTransport
+        ? `Throughput leader and transport-stability leader are aligned in this run.`
+        : `Transport/throughput alignment unavailable in this lane.`,
   ];
 
   const report = [
@@ -3097,6 +3137,8 @@ const writeBenchReport = async (results: ScenarioResult[]): Promise<void> => {
         "AvgKB",
         "MaxBuf",
         "MaxKB",
+        "WV",
+        "SM",
         "Gov",
         "tSNI",
         "tSPI",
@@ -3177,6 +3219,7 @@ function classifyTransportHealth(
 
 async function mainBench() {
   const modes = parseModeArg();
+  const isCompareRun = modes.some(mode => BASELINE_MODES.includes(mode));
   const results: ScenarioResult[] = [];
 
   for (const scenario of scenarios) {

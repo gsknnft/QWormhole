@@ -1,6 +1,6 @@
 # QWormhole Bench Report
 
-Generated: 2026-02-27T18:32:04.051Z
+Generated: 2026-02-27T19:41:05.548Z
 
 ## Environment
 
@@ -14,33 +14,33 @@ Generated: 2026-02-27T18:32:04.051Z
 
 | Scenario | Server | Client | Duration (ms) | Messages | Bytes | Msg/s | MB/s | Framing | Status |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| ts-server+ts | ts | ts | 3204.36 | 100000 | 102400000 | 31208 | 30.48 | length-prefixed | ok |
-| ts-server+native-lws | ts | native-lws | 1083.11 | 100001 | 102401024 | 92327 | 90.16 | length-prefixed | ok |
+| ts-server+ts | ts | ts | 988.42 | 100000 | 102400000 | 101172 | 98.80 | length-prefixed | ok |
+| ts-server+native-lws | ts | native-lws | 960.20 | 100002 | 102402048 | 104147 | 101.71 | length-prefixed | ok |
 | ts-server+native-libsocket | ts | native-libsocket | - | 0 | 0 | - | - | length-prefixed | skipped |
-| native-server(lws)+ts | native-lws | ts | 2344.66 | 100000 | 102400000 | 42650 | 41.65 | length-prefixed | ok |
-| native-server(lws)+native-lws | native-lws | native-lws | 934.48 | 100095 | 102497280 | 107113 | 104.60 | length-prefixed | ok |
+| native-server(lws)+ts | native-lws | ts | 1323.65 | 100000 | 102400000 | 75549 | 73.78 | length-prefixed | ok |
+| native-server(lws)+native-lws | native-lws | native-lws | 874.60 | 100000 | 102400000 | 114338 | 111.66 | length-prefixed | ok |
 | native-server(lws)+native-libsocket | native-lws | native-libsocket | - | 0 | 0 | - | - | length-prefixed | skipped |
 
 ## Diagnostics
 
 | Scenario | GC | GC ms | ELU% | BP | Drain | MaxQueued | Flushes | AvgBuf | AvgKB | MaxBuf | MaxKB | Gov | tSNI | tSPI | tMeta |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| ts-server+ts | 38 | 120.00 | 97.67 | 0 | 0 | 0 | 19680 | 5.84 | 5.86 | 30 | 30.12 | 0 | 0 | - | 0.512 | 0.433 | 0.805 |
-| ts-server+native-lws | 14 | 19.03 | 79.96 | 0 | 0 | 0 | 0 | 0.00 | 0.00 | 0 | 0.00 | 0 | 0 | - | - | - | - |
-| native-server(lws)+ts | 7 | 24.15 | 94.46 | 0 | 0 | 0 | 13120 | 9.82 | 9.86 | 32 | 32.13 | 0 | 0 | - | 0.489 | 0.411 | 0.815 |
-| native-server(lws)+native-lws | 4 | 5.64 | 85.22 | 0 | 0 | 0 | 0 | 0.00 | 0.00 | 0 | 0.00 | 0 | 0 | - | - | - | - |
+| ts-server+ts | 32 | 91.24 | 89.27 | 0 | 0 | 0 | 19679 | 5.73 | 5.75 | 30 | 30.12 | 0 | 0 | - | 0.496 | 0.421 | 0.811 |
+| ts-server+native-lws | 18 | 20.14 | 80.09 | 0 | 0 | 0 | 0 | 0.00 | 0.00 | 0 | 0.00 | 0 | 0 | - | - | - | - |
+| native-server(lws)+ts | 15 | 42.70 | 90.00 | 0 | 0 | 0 | 10720 | 13.47 | 13.53 | 48 | 48.19 | 0 | 0 | - | 0.514 | 0.432 | 0.806 |
+| native-server(lws)+native-lws | 4 | 10.54 | 79.83 | 0 | 0 | 0 | 0 | 0.00 | 0.00 | 0 | 0.00 | 0 | 0 | - | - | - | - |
 
 ## Transport Coherence
 
 - Transport coherence sampling: enabled
-- Best transport persistence: `ts-server+ts` (tSPI 0.433, tMeta 0.805)
-- Fastest measured path: `native-server(lws)+ts` (42650 msg/s)
+- Best transport persistence: `native-server(lws)+ts` (tSPI 0.432, tMeta 0.806)
+- Fastest measured path: `ts-server+ts` (101172 msg/s)
 - Transport winner differs from throughput winner. Prefer tSPI when selecting a default path.
 
 | Rank | Scenario | Msg/s | tSNI | tSPI | tMeta | Health |
 | --- | --- | --- | --- | --- | --- | --- |
-| 1 | ts-server+ts | 31208 | 0.512 | 0.433 | 0.805 | unstable |
-| 2 | native-server(lws)+ts | 42650 | 0.489 | 0.411 | 0.815 | unstable |
+| 1 | native-server(lws)+ts | 75549 | 0.514 | 0.432 | 0.806 | unstable |
+| 2 | ts-server+ts | 101172 | 0.496 | 0.421 | 0.811 | unstable |
 
 ## Raw JSON
 
@@ -50,12 +50,12 @@ Generated: 2026-02-27T18:32:04.051Z
     "id": "ts-server+ts",
     "serverMode": "ts",
     "clientMode": "ts",
-    "durationMs": 3204.3567000000003,
+    "durationMs": 988.4188999999999,
     "messagesReceived": 100000,
     "bytesReceived": 102400000,
     "framing": "length-prefixed",
-    "msgsPerSec": 31207.511947717925,
-    "mbPerSec": 30.476085886443286,
+    "msgsPerSec": 101171.67933555298,
+    "mbPerSec": 98.80046810112596,
     "benchConfig": {
       "macroBatchTargetBytes": 131072,
       "flowFastPath": false,
@@ -78,26 +78,26 @@ Generated: 2026-02-27T18:32:04.051Z
     },
     "diagnostics": {
       "gc": {
-        "count": 38,
-        "durationMs": 119.99739992618561,
+        "count": 32,
+        "durationMs": 91.23600000189617,
         "byKind": {
-          "minor": 8,
-          "incremental": 15,
-          "major": 15
+          "incremental": 12,
+          "major": 12,
+          "minor": 8
         }
       },
       "eventLoop": {
-        "utilization": 0.9766943047457872,
-        "activeMs": 4.7445056999981405,
-        "idleMs": 0.11321250000000001
+        "utilization": 0.8927221375215619,
+        "activeMs": 1.0838352000003761,
+        "idleMs": 0.1302438
       },
       "eventLoopDelay": {
-        "minMs": 17.432576,
-        "maxMs": 677.904383,
-        "meanMs": 34.116745552238804,
-        "stdMs": 61.018620004603335,
-        "p50Ms": 23.101439,
-        "p99Ms": 263.454719
+        "minMs": 19.283968,
+        "maxMs": 215.875583,
+        "meanMs": 25.538738086956524,
+        "stdMs": 28.514082860838066,
+        "p50Ms": 20.103167,
+        "p99Ms": 215.875583
       },
       "backpressure": {
         "events": 0,
@@ -105,19 +105,19 @@ Generated: 2026-02-27T18:32:04.051Z
         "maxQueuedBytes": 0
       },
       "batching": {
-        "flushes": 19680,
-        "avgBuffersPerFlush": 5.83755081300813,
-        "avgBytesPerFlush": 6001.002235772357,
+        "flushes": 19679,
+        "avgBuffersPerFlush": 5.732354286295036,
+        "avgBytesPerFlush": 5892.860206311297,
         "maxBuffers": 30,
         "maxBytes": 30840
       },
       "clientFlow": {
         "currentSliceSize": 6,
         "effectiveRateBytesPerSec": 16777216,
-        "totalFlushes": 6556,
-        "totalBytes": 30376372,
-        "backpressureEvents": 9843,
-        "availableTokens": 150994.944,
+        "totalFlushes": 6555,
+        "totalBytes": 30374316,
+        "backpressureEvents": 9842,
+        "availableTokens": 184549.376,
         "policy": {
           "coherence": 0.9,
           "entropyVelocity": 0.1,
@@ -126,175 +126,175 @@ Generated: 2026-02-27T18:32:04.051Z
         },
         "sliceHistory": [
           {
-            "timestamp": 1772217119071,
-            "size": 7
-          },
-          {
-            "timestamp": 1772217119071,
-            "size": 5
-          },
-          {
-            "timestamp": 1772217119071,
+            "timestamp": 1772221261652,
             "size": 4
           },
           {
-            "timestamp": 1772217119071,
+            "timestamp": 1772221261652,
             "size": 6
           },
           {
-            "timestamp": 1772217119071,
+            "timestamp": 1772221261652,
             "size": 5
           },
           {
-            "timestamp": 1772217119071,
+            "timestamp": 1772221261652,
             "size": 7
           },
           {
-            "timestamp": 1772217119071,
-            "size": 6
-          },
-          {
-            "timestamp": 1772217119071,
+            "timestamp": 1772221261652,
             "size": 5
           },
           {
-            "timestamp": 1772217119071,
+            "timestamp": 1772221261652,
             "size": 4
           },
           {
-            "timestamp": 1772217119071,
+            "timestamp": 1772221261652,
+            "size": 6
+          },
+          {
+            "timestamp": 1772221261652,
+            "size": 5
+          },
+          {
+            "timestamp": 1772221261652,
+            "size": 7
+          },
+          {
+            "timestamp": 1772221261653,
             "size": 6
           }
         ],
         "flushHistory": [
           {
-            "timestamp": 1772217119071,
-            "bytes": 5140,
-            "frames": 5
-          },
-          {
-            "timestamp": 1772217119071,
-            "bytes": 5140,
-            "frames": 5
-          },
-          {
-            "timestamp": 1772217119071,
+            "timestamp": 1772221261652,
             "bytes": 7196,
             "frames": 7
           },
           {
-            "timestamp": 1772217119071,
-            "bytes": 7196,
-            "frames": 7
-          },
-          {
-            "timestamp": 1772217119071,
+            "timestamp": 1772221261652,
             "bytes": 4112,
             "frames": 4
           },
           {
-            "timestamp": 1772217119071,
+            "timestamp": 1772221261652,
             "bytes": 4112,
             "frames": 4
           },
           {
-            "timestamp": 1772217119071,
+            "timestamp": 1772221261652,
             "bytes": 6168,
             "frames": 6
           },
           {
-            "timestamp": 1772217119071,
+            "timestamp": 1772221261652,
             "bytes": 6168,
             "frames": 6
           },
           {
-            "timestamp": 1772217119071,
+            "timestamp": 1772221261652,
             "bytes": 5140,
             "frames": 5
           },
           {
-            "timestamp": 1772217119071,
+            "timestamp": 1772221261652,
             "bytes": 5140,
             "frames": 5
           },
           {
-            "timestamp": 1772217119071,
+            "timestamp": 1772221261652,
             "bytes": 7196,
             "frames": 7
           },
           {
-            "timestamp": 1772217119071,
+            "timestamp": 1772221261652,
             "bytes": 7196,
             "frames": 7
           },
           {
-            "timestamp": 1772217119071,
+            "timestamp": 1772221261652,
             "bytes": 4112,
             "frames": 4
           },
           {
-            "timestamp": 1772217119071,
+            "timestamp": 1772221261652,
             "bytes": 4112,
             "frames": 4
           },
           {
-            "timestamp": 1772217119071,
-            "bytes": 3084,
-            "frames": 3
+            "timestamp": 1772221261652,
+            "bytes": 6168,
+            "frames": 6
           },
           {
-            "timestamp": 1772217119071,
-            "bytes": 3084,
-            "frames": 3
+            "timestamp": 1772221261652,
+            "bytes": 6168,
+            "frames": 6
+          },
+          {
+            "timestamp": 1772221261652,
+            "bytes": 5140,
+            "frames": 5
+          },
+          {
+            "timestamp": 1772221261653,
+            "bytes": 5140,
+            "frames": 5
+          },
+          {
+            "timestamp": 1772221261653,
+            "bytes": 6168,
+            "frames": 6
           }
         ],
         "backpressureHistory": [
-          1772217119071,
-          1772217119071,
-          1772217119071,
-          1772217119071,
-          1772217119071,
-          1772217119071,
-          1772217119071,
-          1772217119071,
-          1772217119071,
-          1772217119071,
-          1772217119071,
-          1772217119071,
-          1772217119071,
-          1772217119071,
-          1772217119071,
-          1772217119071
+          1772221261652,
+          1772221261652,
+          1772221261652,
+          1772221261652,
+          1772221261652,
+          1772221261652,
+          1772221261652,
+          1772221261652,
+          1772221261652,
+          1772221261652,
+          1772221261652,
+          1772221261652,
+          1772221261652,
+          1772221261652,
+          1772221261652,
+          1772221261652
         ],
         "adaptive": {
           "mode": "guarded",
           "sliceSize": 6,
-          "flushIntervalAvgMs": 0.020787074456382316,
-          "bytesPerFlushAvg": 4554.133633066638,
-          "eluIdleRatioAvg": 0.9492103451864722,
-          "gcPauseMaxMs": 1.1531549364350347e-11
+          "flushIntervalAvgMs": 0.019902687813903107,
+          "bytesPerFlushAvg": 5611.884368121796,
+          "eluIdleRatioAvg": 0.8805752728427085,
+          "gcPauseMaxMs": 0.0003895181870206381
         },
         "transportCoherence": {
-          "transportSNI": 0.5120769384767985,
-          "transportSPI": 0.4334435630162927,
-          "transportMetastability": 0.8049503966426683,
+          "transportSNI": 0.4960735919436766,
+          "transportSPI": 0.4210095129077694,
+          "transportMetastability": 0.8105457191915038,
           "sliceEntropyInverse": 0.03186093777043353,
-          "flushIntervalStability": 0.4853229338876243,
-          "batchingRegularity": 0.8938850735311425,
+          "flushIntervalStability": 0.43830933850734494,
+          "batchingRegularity": 0.9076802123373588,
           "backpressureBoundedness": 0,
-          "runtimeRegularity": 0.966986724371106,
+          "runtimeRegularity": 0.9223705190636242,
           "payloadRegularity": 0,
           "sliceEntropy": 0.9681390622295665,
-          "flushIntervalEntropy": 0.11759466565886476,
+          "flushIntervalEntropy": 0.2030739299866456,
           "sampleCount": {
             "slices": 32,
             "flushes": 64,
             "backpressure": 64
           },
           "diagnostics": [
-            "transport_sni:0.512",
-            "transport_spi:0.433",
-            "transport_meta:0.805"
+            "transport_sni:0.496",
+            "transport_spi:0.421",
+            "transport_meta:0.811"
           ]
         },
         "negentropic": {
@@ -312,8 +312,8 @@ Generated: 2026-02-27T18:32:04.051Z
       },
       "clientBatch": {
         "totalFrames": 105000,
-        "totalFlushes": 19680,
-        "totalBytes": 118099724,
+        "totalFlushes": 19679,
+        "totalBytes": 115965596,
         "pendingFrames": 0,
         "pendingBytes": 0,
         "maxPendingFrames": 31,
@@ -328,10 +328,10 @@ Generated: 2026-02-27T18:32:04.051Z
         "overflowAllocatedBytes": 0,
         "copyAllocations": 0,
         "copyAllocatedBytes": 0,
-        "lastFlushTimestamp": 1772217119071,
-        "backpressureEvents": 9843,
-        "lastBackpressureBytes": 3084,
-        "lastBackpressureTimestamp": 1772217119071
+        "lastFlushTimestamp": 1772221261653,
+        "backpressureEvents": 9842,
+        "lastBackpressureBytes": 16448,
+        "lastBackpressureTimestamp": 1772221261652
       },
       "clientQueue": {
         "length": 0,
@@ -346,27 +346,27 @@ Generated: 2026-02-27T18:32:04.051Z
       "sendBlocks": {
         "blockSize": 1000,
         "samples": 100,
-        "avgMs": 2.3861269999999966,
-        "minMs": 1.2166999999999462,
-        "maxMs": 8.693199999999706
+        "avgMs": 1.9709819999999991,
+        "minMs": 1.3938000000000557,
+        "maxMs": 9.117199999999912
       },
       "heap": {
         "start": {
-          "rss": 178860032,
-          "heapTotal": 125329408,
-          "heapUsed": 57877464,
-          "external": 12056813,
-          "arrayBuffers": 3261779
+          "rss": 183025664,
+          "heapTotal": 122707968,
+          "heapUsed": 63402256,
+          "external": 15262269,
+          "arrayBuffers": 6467235
         },
         "end": {
-          "rss": 230907904,
-          "heapTotal": 193355776,
-          "heapUsed": 78066216,
-          "external": 35105481,
-          "arrayBuffers": 26317147
+          "rss": 209801216,
+          "heapTotal": 125198336,
+          "heapUsed": 61561272,
+          "external": 18480553,
+          "arrayBuffers": 9692219
         },
-        "peakHeapUsed": 92286136,
-        "peakRss": 204742656
+        "peakHeapUsed": 91035560,
+        "peakRss": 201129984
       },
       "coherenceTrace": []
     }
@@ -375,34 +375,34 @@ Generated: 2026-02-27T18:32:04.051Z
     "id": "ts-server+native-lws",
     "serverMode": "ts",
     "clientMode": "native-lws",
-    "durationMs": 1083.1128000000008,
-    "messagesReceived": 100001,
-    "bytesReceived": 102401024,
+    "durationMs": 960.2048,
+    "messagesReceived": 100002,
+    "bytesReceived": 102402048,
     "framing": "length-prefixed",
-    "msgsPerSec": 92327.41040453028,
-    "mbPerSec": 90.1634867231741,
+    "msgsPerSec": 104146.53207315772,
+    "mbPerSec": 101.70559772769309,
     "diagnostics": {
       "gc": {
-        "count": 14,
-        "durationMs": 19.03420004248619,
+        "count": 18,
+        "durationMs": 20.135800000280142,
         "byKind": {
-          "minor": 0,
-          "incremental": 7,
-          "major": 7
+          "incremental": 9,
+          "major": 9,
+          "minor": 0
         }
       },
       "eventLoop": {
-        "utilization": 0.799570039085197,
-        "activeMs": 0.977684100014495,
-        "idleMs": 0.24507819999999997
+        "utilization": 0.8008617980384072,
+        "activeMs": 0.8857822999996338,
+        "idleMs": 0.22025409999999998
       },
       "eventLoopDelay": {
-        "minMs": 19.185664,
-        "maxMs": 77.987839,
-        "meanMs": 21.484488145454545,
-        "stdMs": 7.92876999185413,
-        "p50Ms": 20.004863,
-        "p99Ms": 31.064063
+        "minMs": 19.709952,
+        "maxMs": 81.854463,
+        "meanMs": 21.737221224489797,
+        "stdMs": 8.86755736273758,
+        "p50Ms": 20.021247,
+        "p99Ms": 81.854463
       },
       "backpressure": {
         "events": 0,
@@ -416,40 +416,30 @@ Generated: 2026-02-27T18:32:04.051Z
         "maxBuffers": 0,
         "maxBytes": 0
       },
-      "clientQueue": {
-        "length": 0,
-        "maxLength": 99999,
-        "totalEnqueued": 105000,
-        "totalDequeued": 105000,
-        "bytes": 0,
-        "maxBytes": 102398976,
-        "bytesEnqueued": 107520000,
-        "bytesDequeued": 107520000
-      },
       "sendBlocks": {
         "blockSize": 1000,
         "samples": 100,
-        "avgMs": 0.5944899999999871,
-        "minMs": 0.3944999999985157,
-        "maxMs": 1.016700000000128
+        "avgMs": 0.8054100000000016,
+        "minMs": 0.5527999999999338,
+        "maxMs": 2.0604999999995925
       },
       "heap": {
         "start": {
-          "rss": 230154240,
-          "heapTotal": 191815680,
-          "heapUsed": 57547568,
-          "external": 20292005,
-          "arrayBuffers": 11503671
+          "rss": 235327488,
+          "heapTotal": 125362176,
+          "heapUsed": 64984424,
+          "external": 29389729,
+          "arrayBuffers": 20601395
         },
         "end": {
-          "rss": 262008832,
-          "heapTotal": 191029248,
-          "heapUsed": 68385368,
-          "external": 49091741,
-          "arrayBuffers": 40303407
+          "rss": 236134400,
+          "heapTotal": 123133952,
+          "heapUsed": 55659896,
+          "external": 22014957,
+          "arrayBuffers": 13226623
         },
-        "peakHeapUsed": 59460496,
-        "peakRss": 345952256
+        "peakHeapUsed": 66904768,
+        "peakRss": 352890880
       },
       "coherenceTrace": []
     }
@@ -470,12 +460,12 @@ Generated: 2026-02-27T18:32:04.051Z
     "serverMode": "native-lws",
     "clientMode": "ts",
     "preferredServerBackend": "lws",
-    "durationMs": 2344.661399999999,
+    "durationMs": 1323.6458000000002,
     "messagesReceived": 100000,
     "bytesReceived": 102400000,
     "framing": "length-prefixed",
-    "msgsPerSec": 42650.08158534108,
-    "mbPerSec": 41.65047029818465,
+    "msgsPerSec": 75548.91195212495,
+    "mbPerSec": 73.77823432824702,
     "benchConfig": {
       "macroBatchTargetBytes": 131072,
       "flowFastPath": false,
@@ -492,32 +482,32 @@ Generated: 2026-02-27T18:32:04.051Z
       },
       "effectiveRateBytesPerSec": 16777216,
       "flushCapBytes": 196608,
-      "flushCapBuffers": 77,
+      "flushCapBuffers": 115,
       "flushIntervalMs": 1,
       "adaptiveMode": "aggressive"
     },
     "diagnostics": {
       "gc": {
-        "count": 7,
-        "durationMs": 24.153300046920776,
+        "count": 15,
+        "durationMs": 42.69580000033602,
         "byKind": {
-          "minor": 5,
-          "incremental": 1,
-          "major": 1
+          "incremental": 6,
+          "major": 6,
+          "minor": 3
         }
       },
       "eventLoop": {
-        "utilization": 0.9446284600192913,
-        "activeMs": 2.396278500010205,
-        "idleMs": 0.1404633
+        "utilization": 0.8999704653113408,
+        "activeMs": 1.391639899999762,
+        "idleMs": 0.15467740000000002
       },
       "eventLoopDelay": {
-        "minMs": 19.234816,
-        "maxMs": 248.905727,
-        "meanMs": 26.269674442105263,
-        "stdMs": 23.7689039779604,
-        "p50Ms": 20.496383,
-        "p99Ms": 44.433407
+        "minMs": 19.513344,
+        "maxMs": 600.834047,
+        "meanMs": 35.92731473170732,
+        "stdMs": 89.34604689137294,
+        "p50Ms": 20.201471,
+        "p99Ms": 600.834047
       },
       "backpressure": {
         "events": 0,
@@ -525,19 +515,19 @@ Generated: 2026-02-27T18:32:04.051Z
         "maxQueuedBytes": 0
       },
       "batching": {
-        "flushes": 13120,
-        "avgBuffersPerFlush": 9.816996951219512,
-        "avgBytesPerFlush": 10091.872865853658,
-        "maxBuffers": 32,
-        "maxBytes": 32896
+        "flushes": 10720,
+        "avgBuffersPerFlush": 13.47294776119403,
+        "avgBytesPerFlush": 13850.190298507463,
+        "maxBuffers": 48,
+        "maxBytes": 49344
       },
       "clientFlow": {
-        "currentSliceSize": 12,
+        "currentSliceSize": 17,
         "effectiveRateBytesPerSec": 16777216,
-        "totalFlushes": 6252,
-        "totalBytes": 51430840,
-        "backpressureEvents": 11686,
-        "availableTokens": 268435.456,
+        "totalFlushes": 5183,
+        "totalBytes": 64664284,
+        "backpressureEvents": 9650,
+        "availableTokens": 331432.32,
         "policy": {
           "coherence": 0.9,
           "entropyVelocity": 0.1,
@@ -546,165 +536,165 @@ Generated: 2026-02-27T18:32:04.051Z
         },
         "sliceHistory": [
           {
-            "timestamp": 1772217122830,
+            "timestamp": 1772221264296,
             "size": 12
           },
           {
-            "timestamp": 1772217122830,
-            "size": 10
+            "timestamp": 1772221264296,
+            "size": 16
           },
           {
-            "timestamp": 1772217122830,
-            "size": 8
+            "timestamp": 1772221264296,
+            "size": 11
           },
           {
-            "timestamp": 1772217122830,
+            "timestamp": 1772221264296,
             "size": 12
           },
           {
-            "timestamp": 1772217122830,
-            "size": 10
+            "timestamp": 1772221264296,
+            "size": 16
           },
           {
-            "timestamp": 1772217122830,
-            "size": 8
+            "timestamp": 1772221264296,
+            "size": 13
           },
           {
-            "timestamp": 1772217122830,
+            "timestamp": 1772221264296,
             "size": 12
           },
           {
-            "timestamp": 1772217122830,
-            "size": 10
+            "timestamp": 1772221264296,
+            "size": 16
           },
           {
-            "timestamp": 1772217122830,
-            "size": 8
+            "timestamp": 1772221264297,
+            "size": 13
           },
           {
-            "timestamp": 1772217122830,
-            "size": 12
+            "timestamp": 1772221264297,
+            "size": 17
           }
         ],
         "flushHistory": [
           {
-            "timestamp": 1772217122829,
-            "bytes": 8224,
-            "frames": 8
-          },
-          {
-            "timestamp": 1772217122829,
+            "timestamp": 1772221264296,
             "bytes": 12336,
             "frames": 12
           },
           {
-            "timestamp": 1772217122829,
-            "bytes": 8224,
-            "frames": 8
-          },
-          {
-            "timestamp": 1772217122829,
-            "bytes": 8224,
-            "frames": 8
-          },
-          {
-            "timestamp": 1772217122829,
-            "bytes": 8224,
-            "frames": 8
-          },
-          {
-            "timestamp": 1772217122830,
-            "bytes": 8224,
-            "frames": 8
-          },
-          {
-            "timestamp": 1772217122830,
-            "bytes": 8224,
-            "frames": 8
-          },
-          {
-            "timestamp": 1772217122830,
+            "timestamp": 1772221264296,
             "bytes": 12336,
             "frames": 12
           },
           {
-            "timestamp": 1772217122830,
-            "bytes": 8224,
-            "frames": 8
+            "timestamp": 1772221264296,
+            "bytes": 11308,
+            "frames": 11
           },
           {
-            "timestamp": 1772217122830,
-            "bytes": 8224,
-            "frames": 8
-          },
-          {
-            "timestamp": 1772217122830,
+            "timestamp": 1772221264296,
             "bytes": 12336,
             "frames": 12
           },
           {
-            "timestamp": 1772217122830,
-            "bytes": 8224,
-            "frames": 8
-          },
-          {
-            "timestamp": 1772217122830,
-            "bytes": 8224,
-            "frames": 8
-          },
-          {
-            "timestamp": 1772217122830,
+            "timestamp": 1772221264296,
             "bytes": 12336,
             "frames": 12
           },
           {
-            "timestamp": 1772217122830,
-            "bytes": 7196,
-            "frames": 7
+            "timestamp": 1772221264296,
+            "bytes": 16448,
+            "frames": 16
           },
           {
-            "timestamp": 1772217122830,
-            "bytes": 7196,
-            "frames": 7
+            "timestamp": 1772221264296,
+            "bytes": 12336,
+            "frames": 12
+          },
+          {
+            "timestamp": 1772221264296,
+            "bytes": 12336,
+            "frames": 12
+          },
+          {
+            "timestamp": 1772221264296,
+            "bytes": 16448,
+            "frames": 16
+          },
+          {
+            "timestamp": 1772221264296,
+            "bytes": 12336,
+            "frames": 12
+          },
+          {
+            "timestamp": 1772221264296,
+            "bytes": 12336,
+            "frames": 12
+          },
+          {
+            "timestamp": 1772221264296,
+            "bytes": 16448,
+            "frames": 16
+          },
+          {
+            "timestamp": 1772221264296,
+            "bytes": 12336,
+            "frames": 12
+          },
+          {
+            "timestamp": 1772221264296,
+            "bytes": 12336,
+            "frames": 12
+          },
+          {
+            "timestamp": 1772221264297,
+            "bytes": 4112,
+            "frames": 4
+          },
+          {
+            "timestamp": 1772221264297,
+            "bytes": 4112,
+            "frames": 4
           }
         ],
         "backpressureHistory": [
-          1772217122828,
-          1772217122828,
-          1772217122828,
-          1772217122829,
-          1772217122829,
-          1772217122829,
-          1772217122829,
-          1772217122829,
-          1772217122829,
-          1772217122829,
-          1772217122830,
-          1772217122830,
-          1772217122830,
-          1772217122830,
-          1772217122830,
-          1772217122830
+          1772221264295,
+          1772221264296,
+          1772221264296,
+          1772221264296,
+          1772221264296,
+          1772221264296,
+          1772221264296,
+          1772221264296,
+          1772221264296,
+          1772221264296,
+          1772221264296,
+          1772221264296,
+          1772221264296,
+          1772221264296,
+          1772221264296,
+          1772221264297
         ],
         "adaptive": {
           "mode": "aggressive",
-          "sliceSize": 12,
-          "flushIntervalAvgMs": 0.051712074291093924,
-          "bytesPerFlushAvg": 8859.346572608012,
-          "eluIdleRatioAvg": 0.957025966922277,
-          "gcPauseMaxMs": 3.8579593280596897e-10
+          "sliceSize": 17,
+          "flushIntervalAvgMs": 0.02733373305374122,
+          "bytesPerFlushAvg": 10001.23238158541,
+          "eluIdleRatioAvg": 0.9539800892254524,
+          "gcPauseMaxMs": 2.5992276177449965e-16
         },
         "transportCoherence": {
-          "transportSNI": 0.488776414175346,
-          "transportSPI": 0.41075756984644857,
-          "transportMetastability": 0.8151590935690982,
-          "sliceEntropyInverse": 0.006337351230228272,
+          "transportSNI": 0.5136653879497417,
+          "transportSPI": 0.431540763284809,
+          "transportMetastability": 0.805806656521836,
+          "sliceEntropyInverse": 0.11294150063022779,
           "flushIntervalStability": 0.39809251479363345,
-          "batchingRegularity": 0.9036164801038542,
+          "batchingRegularity": 0.9110849325885066,
           "backpressureBoundedness": 0,
-          "runtimeRegularity": 0.9720668784961043,
+          "runtimeRegularity": 0.970087057996544,
           "payloadRegularity": 0,
-          "sliceEntropy": 0.9936626487697717,
+          "sliceEntropy": 0.8870584993697722,
           "flushIntervalEntropy": 0.2761954276479391,
           "sampleCount": {
             "slices": 32,
@@ -712,9 +702,9 @@ Generated: 2026-02-27T18:32:04.051Z
             "backpressure": 64
           },
           "diagnostics": [
-            "transport_sni:0.489",
-            "transport_spi:0.411",
-            "transport_meta:0.815"
+            "transport_sni:0.514",
+            "transport_spi:0.432",
+            "transport_meta:0.806"
           ]
         },
         "negentropic": {
@@ -732,26 +722,26 @@ Generated: 2026-02-27T18:32:04.051Z
       },
       "clientBatch": {
         "totalFrames": 105000,
-        "totalFlushes": 13120,
-        "totalBytes": 132405372,
+        "totalFlushes": 10720,
+        "totalBytes": 148474040,
         "pendingFrames": 0,
         "pendingBytes": 0,
-        "maxPendingFrames": 32,
-        "maxPendingBytes": 32896,
+        "maxPendingFrames": 48,
+        "maxPendingBytes": 49344,
         "maxInBufferBytes": 0,
         "ringSlots": 128,
         "ringInUse": 0,
-        "ringMaxInUse": 38,
+        "ringMaxInUse": 50,
         "ringResizeCount": 0,
         "ringResizeBytes": 0,
         "overflowAllocations": 0,
         "overflowAllocatedBytes": 0,
         "copyAllocations": 0,
         "copyAllocatedBytes": 0,
-        "lastFlushTimestamp": 1772217122830,
-        "backpressureEvents": 11686,
-        "lastBackpressureBytes": 4112,
-        "lastBackpressureTimestamp": 1772217122830
+        "lastFlushTimestamp": 1772221264297,
+        "backpressureEvents": 9650,
+        "lastBackpressureBytes": 16448,
+        "lastBackpressureTimestamp": 1772221264297
       },
       "clientQueue": {
         "length": 0,
@@ -766,27 +756,27 @@ Generated: 2026-02-27T18:32:04.051Z
       "sendBlocks": {
         "blockSize": 1000,
         "samples": 100,
-        "avgMs": 1.8185469999999986,
-        "minMs": 1.1823999999996886,
-        "maxMs": 4.747699999999895
+        "avgMs": 1.6414969999999993,
+        "minMs": 1.3255000000003747,
+        "maxMs": 7.674199999999928
       },
       "heap": {
         "start": {
-          "rss": 220803072,
-          "heapTotal": 191029248,
-          "heapUsed": 68369304,
-          "external": 14265705,
-          "arrayBuffers": 5477371
+          "rss": 221814784,
+          "heapTotal": 123658240,
+          "heapUsed": 68581224,
+          "external": 14272901,
+          "arrayBuffers": 5484567
         },
         "end": {
-          "rss": 290603008,
-          "heapTotal": 195092480,
-          "heapUsed": 77538568,
-          "external": 20096361,
-          "arrayBuffers": 11308027
+          "rss": 294383616,
+          "heapTotal": 192995328,
+          "heapUsed": 68332600,
+          "external": 16858473,
+          "arrayBuffers": 8070139
         },
-        "peakHeapUsed": 120285464,
-        "peakRss": 265428992
+        "peakHeapUsed": 121230288,
+        "peakRss": 249954304
       },
       "coherenceTrace": []
     }
@@ -796,34 +786,34 @@ Generated: 2026-02-27T18:32:04.051Z
     "serverMode": "native-lws",
     "clientMode": "native-lws",
     "preferredServerBackend": "lws",
-    "durationMs": 934.4847000000009,
-    "messagesReceived": 100095,
-    "bytesReceived": 102497280,
+    "durationMs": 874.5964000000004,
+    "messagesReceived": 100000,
+    "bytesReceived": 102400000,
     "framing": "length-prefixed",
-    "msgsPerSec": 107112.50810205872,
-    "mbPerSec": 104.60205869341672,
+    "msgsPerSec": 114338.45371419315,
+    "mbPerSec": 111.65864620526675,
     "diagnostics": {
       "gc": {
         "count": 4,
-        "durationMs": 5.642500042915344,
+        "durationMs": 10.537999999709427,
         "byKind": {
-          "minor": 0,
           "incremental": 2,
-          "major": 2
+          "major": 2,
+          "minor": 0
         }
       },
       "eventLoop": {
-        "utilization": 0.8522429184501766,
-        "activeMs": 0.9206723999896058,
-        "idleMs": 0.15962099999999999
+        "utilization": 0.7982938121069152,
+        "activeMs": 0.8631384999996481,
+        "idleMs": 0.2180906
       },
       "eventLoopDelay": {
-        "minMs": 19.120128,
-        "maxMs": 65.437695,
-        "meanMs": 22.811336347826085,
-        "stdMs": 7.055659952765782,
-        "p50Ms": 20.119551,
-        "p99Ms": 65.437695
+        "minMs": 19.08736,
+        "maxMs": 88.997887,
+        "meanMs": 23.032180363636364,
+        "stdMs": 10.714272590381311,
+        "p50Ms": 20.021247,
+        "p99Ms": 88.997887
       },
       "backpressure": {
         "events": 0,
@@ -837,40 +827,30 @@ Generated: 2026-02-27T18:32:04.051Z
         "maxBuffers": 0,
         "maxBytes": 0
       },
-      "clientQueue": {
-        "length": 0,
-        "maxLength": 99999,
-        "totalEnqueued": 105000,
-        "totalDequeued": 105000,
-        "bytes": 0,
-        "maxBytes": 102398976,
-        "bytesEnqueued": 107520000,
-        "bytesDequeued": 107520000
-      },
       "sendBlocks": {
         "blockSize": 1000,
         "samples": 100,
-        "avgMs": 0.619974000000002,
-        "minMs": 0.4603000000006432,
-        "maxMs": 1.063399999999092
+        "avgMs": 0.8510249999999996,
+        "minMs": 0.5672999999997046,
+        "maxMs": 1.440099999999802
       },
       "heap": {
         "start": {
-          "rss": 306294784,
-          "heapTotal": 195092480,
-          "heapUsed": 80581624,
-          "external": 25216361,
-          "arrayBuffers": 16428027
+          "rss": 309956608,
+          "heapTotal": 192995328,
+          "heapUsed": 71441600,
+          "external": 21978473,
+          "arrayBuffers": 13190139
         },
         "end": {
-          "rss": 355434496,
-          "heapTotal": 192339968,
-          "heapUsed": 74100640,
-          "external": 59159913,
-          "arrayBuffers": 50371579
+          "rss": 359366656,
+          "heapTotal": 191029248,
+          "heapUsed": 73364992,
+          "external": 56905065,
+          "arrayBuffers": 48116731
         },
-        "peakHeapUsed": 82490264,
-        "peakRss": 422555648
+        "peakHeapUsed": 73350992,
+        "peakRss": 425947136
       },
       "coherenceTrace": []
     }

@@ -422,6 +422,9 @@ Benchmarks:
 - `pnpm --filter @gsknnft/qwormhole run bench:sweep`
 - `pnpm --filter @gsknnft/qwormhole run bench:core:report` is the raw core transport lane and should be treated as the authoritative throughput baseline.
 - `pnpm --filter @gsknnft/qwormhole run bench:core:structure` is the separate opt-in structural lane for transport coherence validation.
+- `pnpm --filter @gsknnft/qwormhole run bench:compare:report` runs the comparison lane against baseline transports (`net`, `ws`, `uWebSockets.js`) without polluting the core transport lane.
+- `pnpm --filter @gsknnft/qwormhole run bench:compare:structure` enables the same comparison lane with structural transport sampling turned on intentionally.
+- The compare lane forces `QWORMHOLE_BENCH_FRAMING=none` so baseline transports are measured as raw competitors rather than under QWormhole's length-prefixed framing contract.
 - Transport coherence sampling is now **opt-in** during benches:
 
   ```bash
@@ -432,16 +435,28 @@ Benchmarks:
   This keeps `bench:core:report` free of hot-path sampling overhead by default. Use the env flag only when explicitly studying structural transport behavior (`tSNI` / `tSPI` / `tMeta`).
   The `bench:core:structure` script sets that flag for you and writes to
   `data/core_diagnostics.structure.*` so raw and structural runs stay separate.
-- **Latest reproducible snapshot (2025-12-03, Windows 11, Node 24.10.0):**
+- **Latest reproducible raw-core snapshot (2026-02-27, Windows 11, Node 24.x):**
 
-  | Scenario | Old throughput (msg/s) <br />*(pre-native-fix: 2768.8k msgs landed)* | New duration (ms) | New throughput (msg/s) | Approx  |
-  | --- | --- | --- | --- | --- |
-  | `ts-server + ts` | 46 msg/s | 815 | 12,300 msg/s | **+265** |
-  | `ts-server + native-lws` | 1,580 msg/s | 291 | 34,000 msg/s | **+21** |
-  | `native-server + ts` | 1,690 msg/s | 219 | 45,700 msg/s | **+27** |
-  | `native-server + native-lws` | 940 msg/s | 209 | 47,900 msg/s | **+51** |
+  | Scenario | Duration (ms) | Throughput (msg/s) | MB/s |
+  | --- | --- | --- | --- |
+  | `ts-server + ts` | 874.21 | 114,389 | 111.71 |
+  | `ts-server + native-lws` | 870.76 | 114,853 | 112.16 |
+  | `native-server(lws) + ts` | 993.56 | 100,648 | 98.29 |
+  | `native-server(lws) + native-lws` | 922.86 | 108,358 | 105.82 |
 
-  The earlier runs never reached the configured 10,000 messages because handshake stalls dropped the socket; the native routing fix now delivers the full payload before the 1-second mark, so per-socket throughput jumped by one to two orders of magnitude. `native-libsocket` rows remain skipped on Windows until that backend is built.
+  `native-server(lws) + ts` was specifically re-tuned to clear the `100k+`
+  target again without re-enabling hot-path transport-coherence sampling.
+- **20k-message repro snapshot (2026-02-27):**
+
+  | Scenario | Duration (ms) | Throughput (msg/s) |
+  | --- | --- | --- |
+  | `ts-server + ts` | 228.14 | 87,664 |
+  | `ts-server + native-lws` | 192.04 | 104,152 |
+  | `native-server(lws) + ts` | 243.05 | 82,286 |
+  | `native-server(lws) + native-lws` | 200.48 | 99,761 |
+
+  This smaller lane is useful for quick validation after transport tuning before
+  rerunning the 100k authoritative raw-core lane.
 - **Note (2026-02-20):** in restricted environments, benchmark scripts may fail with `esbuild spawn EPERM` because bench scripts currently execute through `tsx`.
 - **Note (2026-02-27):** transport coherence history capture is intentionally disabled by default in the raw core bench because per-flush/per-pressure sampling materially distorts throughput measurements. Raw perf and structure analysis should not be mixed in the same default lane.
 Tests:

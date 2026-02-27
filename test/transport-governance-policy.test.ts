@@ -10,6 +10,9 @@ describe("transport governance policy", () => {
       coherenceDensity: 0.72,
       structuralPersistence: 0.81,
       metastability: 0.18,
+      transportSNI: 0.72,
+      transportSPI: 0.81,
+      transportMetastability: 0.18,
       regime: "stable-gradient",
     });
 
