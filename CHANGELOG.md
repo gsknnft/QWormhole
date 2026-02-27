@@ -2,6 +2,11 @@
 
 ## Unreleased (next: 0.3.0)
 
+- Bench and release-lane clarification:
+  - `bench:core:report` is explicitly the raw core transport lane again.
+  - Transport coherence history sampling is opt-in via `QWORMHOLE_TRANSPORT_COHERENCE=1` to avoid contaminating throughput measurements.
+  - QWormhole publication from `main` is intentionally paused until `@sigilnet/coherence` is ready for external release.
+
 - Prebuilt-native distribution lane added:
   - Added `native:stage-prebuilds` to stage `prebuilds/<platform>-<arch>/*.node`.
   - Installer now hydrates prebuilt artifacts into `dist/native` before rebuild attempts.

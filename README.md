@@ -120,12 +120,14 @@ QWormhole isn't just a socket wrapper - it's a transport ritual.
 - **Test status:** full package suite passing in maintainer release lane (`pnpm --filter @gsknnft/qwormhole test`).
 - **QUIC/WebTransport:** experimental; bindings are optional and currently non-production.
 - **WireGuard guide:** functional patterns, still integration-heavy and environment-dependent.
+- **Release posture (dev branch, 2026-02-27):** mainline publication is paused until `@sigilnet/coherence` is ready for public release and its contracts/math are considered stable enough to support external consumers.
 
 ## Coherence Note
 
 - QWormhole's in-tree coherence modules are now considered **legacy compatibility**.
 - Canonical coherence package: `@sigilnet/coherence`.
 - Legacy imports can use `@gsknnft/qwormhole/legacy/coherence` during migration.
+- Current dev branch links `@sigilnet/coherence` locally for internal validation. Treat that dependency as unreleased until the coherence package is formally published.
 
 
 ## Minimal Example
@@ -418,6 +420,15 @@ Benchmarks:
 - `pnpm --filter @gsknnft/qwormhole run bench`
 - `pnpm --filter @gsknnft/qwormhole run bench:writev`
 - `pnpm --filter @gsknnft/qwormhole run bench:sweep`
+- `pnpm --filter @gsknnft/qwormhole run bench:core:report` is the raw core transport lane and should be treated as the authoritative throughput baseline.
+- Transport coherence sampling is now **opt-in** during benches:
+
+  ```bash
+  set QWORMHOLE_TRANSPORT_COHERENCE=1
+  pnpm --filter @gsknnft/qwormhole run bench:core:report
+  ```
+
+  This keeps `bench:core:report` free of hot-path sampling overhead by default. Use the env flag only when explicitly studying structural transport behavior (`tSNI` / `tSPI` / `tMeta`).
 - **Latest reproducible snapshot (2025-12-03, Windows 11, Node 24.10.0):**
 
   | Scenario | Old throughput (msg/s) <br />*(pre-native-fix: 2768.8k msgs landed)* | New duration (ms) | New throughput (msg/s) | Approx  |
@@ -429,6 +440,7 @@ Benchmarks:
 
   The earlier runs never reached the configured 10,000 messages because handshake stalls dropped the socket; the native routing fix now delivers the full payload before the 1-second mark, so per-socket throughput jumped by one to two orders of magnitude. `native-libsocket` rows remain skipped on Windows until that backend is built.
 - **Note (2026-02-20):** in restricted environments, benchmark scripts may fail with `esbuild spawn EPERM` because bench scripts currently execute through `tsx`.
+- **Note (2026-02-27):** transport coherence history capture is intentionally disabled by default in the raw core bench because per-flush/per-pressure sampling materially distorts throughput measurements. Raw perf and structure analysis should not be mixed in the same default lane.
 Tests:
 - `pnpm --filter @gsknnft/qwormhole test` (TS), `pnpm --filter @gsknnft/qwormhole test:native` (gated by native availability).
 
@@ -486,6 +498,7 @@ Install attempts optional native setup automatically; if native setup fails, TS 
 - The flow controller now defaults to an adaptive mode (`guarded` for TS, `aggressive` for native) that automatically expands/contract slice sizes based on event-loop idle time, GC pauses, and backpressure.
 - Override with `QWORMHOLE_ADAPTIVE_SLICES=off|guarded|aggressive|auto` if you need deterministic behavior (e.g., for perf triage).
 - Forced knobs (`QWORMHOLE_FORCE_SLICE`, `QWORMHOLE_FORCE_RATE_BYTES`) still take precedence for reproducing historical regressions.
+- For raw performance benches, prefer leaving transport coherence sampling disabled unless you are explicitly validating structure. The transport hot path is sensitive enough that extra bench-only sampling can invalidate throughput comparisons.
 
 ## ML adapters
 
