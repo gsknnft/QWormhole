@@ -1,6 +1,6 @@
 # QWormhole Bench Report
 
-Generated: 2026-02-27T18:02:20.934Z
+Generated: 2026-02-27T19:14:35.624Z
 
 ## Environment
 
@@ -14,30 +14,30 @@ Generated: 2026-02-27T18:02:20.934Z
 
 | Scenario | Server | Client | Duration (ms) | Messages | Bytes | Msg/s | MB/s | Framing | Status |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| ts-server+ts | ts | ts | 872.36 | 100000 | 102400000 | 114631 | 111.94 | length-prefixed | ok |
-| ts-server+native-lws | ts | native-lws | 883.51 | 100002 | 102402048 | 113187 | 110.53 | length-prefixed | ok |
+| ts-server+ts | ts | ts | 874.21 | 100000 | 102400000 | 114389 | 111.71 | length-prefixed | ok |
+| ts-server+native-lws | ts | native-lws | 870.76 | 100009 | 102409216 | 114853 | 112.16 | length-prefixed | ok |
 | ts-server+native-libsocket | ts | native-libsocket | - | 0 | 0 | - | - | length-prefixed | skipped |
-| native-server(lws)+ts | native-lws | ts | 1015.50 | 100000 | 102400000 | 98473 | 96.17 | length-prefixed | ok |
-| native-server(lws)+native-lws | native-lws | native-lws | 776.28 | 100000 | 102400000 | 128820 | 125.80 | length-prefixed | ok |
+| native-server(lws)+ts | native-lws | ts | 993.56 | 100000 | 102400000 | 100648 | 98.29 | length-prefixed | ok |
+| native-server(lws)+native-lws | native-lws | native-lws | 922.86 | 100000 | 102400000 | 108358 | 105.82 | length-prefixed | ok |
 | native-server(lws)+native-libsocket | native-lws | native-libsocket | - | 0 | 0 | - | - | length-prefixed | skipped |
 
 ## Diagnostics
 
 | Scenario | GC | GC ms | ELU% | BP | Drain | MaxQueued | Flushes | AvgBuf | AvgKB | MaxBuf | MaxKB | Gov | tSNI | tSPI | tMeta |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| ts-server+ts | 29 | 45.95 | 88.47 | 0 | 0 | 0 | 19679 | 5.73 | 5.75 | 30 | 30.12 | 0 | 0 | - | - | - | - |
-| ts-server+native-lws | 17 | 16.18 | 78.73 | 0 | 0 | 0 | 0 | 0.00 | 0.00 | 0 | 0.00 | 0 | 0 | - | - | - | - |
-| native-server(lws)+ts | 12 | 20.02 | 90.59 | 0 | 0 | 0 | 13120 | 10.62 | 10.66 | 32 | 32.13 | 0 | 0 | - | - | - | - |
-| native-server(lws)+native-lws | 8 | 9.78 | 84.05 | 0 | 0 | 0 | 0 | 0.00 | 0.00 | 0 | 0.00 | 0 | 0 | - | - | - | - |
+| ts-server+ts | 16 | 40.42 | 88.31 | 0 | 0 | 0 | 19678 | 5.84 | 5.86 | 30 | 30.12 | 0 | 0 | - | off | off | off |
+| ts-server+native-lws | 16 | 23.93 | 79.97 | 0 | 0 | 0 | 0 | 0.00 | 0.00 | 0 | 0.00 | 0 | 0 | - | off | off | off |
+| native-server(lws)+ts | 7 | 23.91 | 89.70 | 0 | 0 | 0 | 12902 | 13.38 | 13.44 | 48 | 48.19 | 0 | 0 | - | off | off | off |
+| native-server(lws)+native-lws | 1 | 2.21 | 79.05 | 0 | 0 | 0 | 0 | 0.00 | 0.00 | 0 | 0.00 | 0 | 0 | - | off | off | off |
 
 ## Transport Coherence
 
+- Transport coherence sampling: disabled in this raw lane. Run `bench:core:structure` for tSNI / tSPI / tMeta.
 - Best transport persistence: unavailable
 - Fastest measured path: unavailable
 - Throughput leader and transport-stability leader are aligned in this run.
 
-| Rank | Scenario | Msg/s | tSNI | tSPI | tMeta | Health |
-| --- | --- | --- | --- | --- | --- | --- |
+_Transport coherence metrics are intentionally off in the raw lane._
 
 ## Raw JSON
 
@@ -47,12 +47,12 @@ Generated: 2026-02-27T18:02:20.934Z
     "id": "ts-server+ts",
     "serverMode": "ts",
     "clientMode": "ts",
-    "durationMs": 872.3624,
+    "durationMs": 874.2065,
     "messagesReceived": 100000,
     "bytesReceived": 102400000,
     "framing": "length-prefixed",
-    "msgsPerSec": 114631.2587520966,
-    "mbPerSec": 111.94458862509434,
+    "msgsPerSec": 114389.44917476592,
+    "mbPerSec": 111.70844645973234,
     "benchConfig": {
       "macroBatchTargetBytes": 131072,
       "flowFastPath": false,
@@ -75,26 +75,26 @@ Generated: 2026-02-27T18:02:20.934Z
     },
     "diagnostics": {
       "gc": {
-        "count": 29,
-        "durationMs": 45.94610008597374,
+        "count": 16,
+        "durationMs": 40.42259999969974,
         "byKind": {
-          "incremental": 10,
-          "major": 10,
-          "minor": 9
+          "minor": 12,
+          "incremental": 2,
+          "major": 2
         }
       },
       "eventLoop": {
-        "utilization": 0.8847068838456176,
-        "activeMs": 0.9640374000095845,
-        "idleMs": 0.1256313
+        "utilization": 0.8830566909486355,
+        "activeMs": 0.9913341000000667,
+        "idleMs": 0.1312825
       },
       "eventLoopDelay": {
-        "minMs": 19.365888,
-        "maxMs": 198.967295,
-        "meanMs": 25.68691512195122,
-        "stdMs": 27.52005120176002,
-        "p50Ms": 20.217855,
-        "p99Ms": 198.967295
+        "minMs": 19.070976,
+        "maxMs": 184.025087,
+        "meanMs": 25.35580038095238,
+        "stdMs": 25.04654349207279,
+        "p50Ms": 20.185087,
+        "p99Ms": 184.025087
       },
       "backpressure": {
         "events": 0,
@@ -102,19 +102,19 @@ Generated: 2026-02-27T18:02:20.934Z
         "maxQueuedBytes": 0
       },
       "batching": {
-        "flushes": 19679,
-        "avgBuffersPerFlush": 5.732354286295036,
-        "avgBytesPerFlush": 5892.860206311297,
+        "flushes": 19678,
+        "avgBuffersPerFlush": 5.838093302164854,
+        "avgBytesPerFlush": 6001.55991462547,
         "maxBuffers": 30,
         "maxBytes": 30840
       },
       "clientFlow": {
         "currentSliceSize": 6,
         "effectiveRateBytesPerSec": 16777216,
-        "totalFlushes": 6555,
-        "totalBytes": 30374316,
+        "totalFlushes": 6558,
+        "totalBytes": 30389736,
         "backpressureEvents": 9842,
-        "availableTokens": 50331.648,
+        "availableTokens": 134217.728,
         "policy": {
           "coherence": 0.9,
           "entropyVelocity": 0.1,
@@ -123,43 +123,43 @@ Generated: 2026-02-27T18:02:20.934Z
         },
         "sliceHistory": [
           {
-            "timestamp": 1772215337682,
-            "size": 4
-          },
-          {
-            "timestamp": 1772215337682,
-            "size": 6
-          },
-          {
-            "timestamp": 1772215337682,
-            "size": 5
-          },
-          {
-            "timestamp": 1772215337682,
+            "timestamp": 1772219672118,
             "size": 7
           },
           {
-            "timestamp": 1772215337682,
+            "timestamp": 1772219672118,
             "size": 5
           },
           {
-            "timestamp": 1772215337682,
+            "timestamp": 1772219672118,
             "size": 4
           },
           {
-            "timestamp": 1772215337682,
+            "timestamp": 1772219672118,
             "size": 6
           },
           {
-            "timestamp": 1772215337682,
+            "timestamp": 1772219672118,
             "size": 5
           },
           {
-            "timestamp": 1772215337682,
+            "timestamp": 1772219672118,
             "size": 7
           },
           {
-            "timestamp": 1772215337682,
+            "timestamp": 1772219672118,
+            "size": 6
+          },
+          {
+            "timestamp": 1772219672118,
+            "size": 5
+          },
+          {
+            "timestamp": 1772219672118,
+            "size": 4
+          },
+          {
+            "timestamp": 1772219672118,
             "size": 6
           }
         ],
@@ -168,10 +168,10 @@ Generated: 2026-02-27T18:02:20.934Z
         "adaptive": {
           "mode": "guarded",
           "sliceSize": 6,
-          "flushIntervalAvgMs": 0.016333945855870585,
-          "bytesPerFlushAvg": 5611.884368121796,
-          "eluIdleRatioAvg": 0.8711468017176274,
-          "gcPauseMaxMs": 1.06457953957658e-9
+          "flushIntervalAvgMs": 0.013526817874477494,
+          "bytesPerFlushAvg": 4554.133633066638,
+          "eluIdleRatioAvg": 0.8636247574581082,
+          "gcPauseMaxMs": 8.395356558421606e-16
         },
         "negentropic": {
           "histogram": {
@@ -188,8 +188,8 @@ Generated: 2026-02-27T18:02:20.934Z
       },
       "clientBatch": {
         "totalFrames": 105000,
-        "totalFlushes": 19679,
-        "totalBytes": 115965596,
+        "totalFlushes": 19678,
+        "totalBytes": 118098696,
         "pendingFrames": 0,
         "pendingBytes": 0,
         "maxPendingFrames": 31,
@@ -204,10 +204,10 @@ Generated: 2026-02-27T18:02:20.934Z
         "overflowAllocatedBytes": 0,
         "copyAllocations": 0,
         "copyAllocatedBytes": 0,
-        "lastFlushTimestamp": 1772215337682,
+        "lastFlushTimestamp": 1772219672118,
         "backpressureEvents": 9842,
-        "lastBackpressureBytes": 16448,
-        "lastBackpressureTimestamp": 1772215337682
+        "lastBackpressureBytes": 3084,
+        "lastBackpressureTimestamp": 1772219672118
       },
       "clientQueue": {
         "length": 0,
@@ -222,27 +222,27 @@ Generated: 2026-02-27T18:02:20.934Z
       "sendBlocks": {
         "blockSize": 1000,
         "samples": 100,
-        "avgMs": 1.7891020000000004,
-        "minMs": 1.0287000000000717,
-        "maxMs": 7.883899999999812
+        "avgMs": 1.8094119999999998,
+        "minMs": 1.2635999999999967,
+        "maxMs": 11.804799999999886
       },
       "heap": {
         "start": {
-          "rss": 198041600,
-          "heapTotal": 122437632,
-          "heapUsed": 63467288,
-          "external": 15161135,
-          "arrayBuffers": 6367004
+          "rss": 169877504,
+          "heapTotal": 124018688,
+          "heapUsed": 57983536,
+          "external": 11095757,
+          "arrayBuffers": 2300723
         },
         "end": {
-          "rss": 236478464,
-          "heapTotal": 125714432,
-          "heapUsed": 72800328,
-          "external": 28901078,
-          "arrayBuffers": 20113647
+          "rss": 293150720,
+          "heapTotal": 209186816,
+          "heapUsed": 108290256,
+          "external": 43164729,
+          "arrayBuffers": 34369655
         },
-        "peakHeapUsed": 90992472,
-        "peakRss": 217731072
+        "peakHeapUsed": 92339296,
+        "peakRss": 203657216
       },
       "coherenceTrace": []
     }
@@ -251,34 +251,34 @@ Generated: 2026-02-27T18:02:20.934Z
     "id": "ts-server+native-lws",
     "serverMode": "ts",
     "clientMode": "native-lws",
-    "durationMs": 883.5138999999999,
-    "messagesReceived": 100002,
-    "bytesReceived": 102402048,
+    "durationMs": 870.7601,
+    "messagesReceived": 100009,
+    "bytesReceived": 102409216,
     "framing": "length-prefixed",
-    "msgsPerSec": 113186.67425605869,
-    "mbPerSec": 110.53386157818231,
+    "msgsPerSec": 114852.5294165408,
+    "mbPerSec": 112.16067325834062,
     "diagnostics": {
       "gc": {
-        "count": 17,
-        "durationMs": 16.17689996957779,
+        "count": 16,
+        "durationMs": 23.928000000305474,
         "byKind": {
+          "minor": 0,
           "incremental": 8,
-          "major": 8,
-          "minor": 1
+          "major": 8
         }
       },
       "eventLoop": {
-        "utilization": 0.7873154373969072,
-        "activeMs": 0.8139551999988555,
-        "idleMs": 0.21988100000000002
+        "utilization": 0.7997193534218997,
+        "activeMs": 0.8503088000000782,
+        "idleMs": 0.21295020000000003
       },
       "eventLoopDelay": {
-        "minMs": 19.185664,
-        "maxMs": 75.563007,
-        "meanMs": 21.80837831111111,
-        "stdMs": 8.562786715206816,
-        "p50Ms": 20.004863,
-        "p99Ms": 75.563007
+        "minMs": 19.316736,
+        "maxMs": 68.681727,
+        "meanMs": 21.577906086956524,
+        "stdMs": 7.186482051269978,
+        "p50Ms": 20.021247,
+        "p99Ms": 68.681727
       },
       "backpressure": {
         "events": 0,
@@ -305,27 +305,27 @@ Generated: 2026-02-27T18:02:20.934Z
       "sendBlocks": {
         "blockSize": 1000,
         "samples": 100,
-        "avgMs": 0.5122740000000021,
-        "minMs": 0.41390000000001237,
-        "maxMs": 0.9628999999999905
+        "avgMs": 0.6063749999999982,
+        "minMs": 0.4277999999999338,
+        "maxMs": 1.014599999999973
       },
       "heap": {
         "start": {
-          "rss": 262311936,
-          "heapTotal": 125878272,
-          "heapUsed": 78089592,
-          "external": 40038670,
-          "arrayBuffers": 31251239
+          "rss": 319541248,
+          "heapTotal": 209350656,
+          "heapUsed": 114016048,
+          "external": 54159777,
+          "arrayBuffers": 45364703
         },
         "end": {
-          "rss": 274411520,
-          "heapTotal": 123650048,
-          "heapUsed": 65861768,
-          "external": 44046938,
-          "arrayBuffers": 35259507
+          "rss": 347881472,
+          "heapTotal": 191029248,
+          "heapUsed": 72866984,
+          "external": 74908973,
+          "arrayBuffers": 66120639
         },
-        "peakHeapUsed": 80005864,
-        "peakRss": 378687488
+        "peakHeapUsed": 115929792,
+        "peakRss": 436178944
       },
       "coherenceTrace": []
     }
@@ -346,12 +346,12 @@ Generated: 2026-02-27T18:02:20.934Z
     "serverMode": "native-lws",
     "clientMode": "ts",
     "preferredServerBackend": "lws",
-    "durationMs": 1015.5040000000004,
+    "durationMs": 993.5646999999999,
     "messagesReceived": 100000,
     "bytesReceived": 102400000,
     "framing": "length-prefixed",
-    "msgsPerSec": 98473.27041547839,
-    "mbPerSec": 96.16530314011561,
+    "msgsPerSec": 100647.6981317875,
+    "mbPerSec": 98.28876770682373,
     "benchConfig": {
       "macroBatchTargetBytes": 131072,
       "flowFastPath": false,
@@ -368,32 +368,32 @@ Generated: 2026-02-27T18:02:20.934Z
       },
       "effectiveRateBytesPerSec": 16777216,
       "flushCapBytes": 196608,
-      "flushCapBuffers": 77,
+      "flushCapBuffers": 115,
       "flushIntervalMs": 1,
       "adaptiveMode": "aggressive"
     },
     "diagnostics": {
       "gc": {
-        "count": 12,
-        "durationMs": 20.019499987363815,
+        "count": 7,
+        "durationMs": 23.908500000135973,
         "byKind": {
-          "incremental": 4,
-          "major": 4,
-          "minor": 4
+          "minor": 5,
+          "incremental": 1,
+          "major": 1
         }
       },
       "eventLoop": {
-        "utilization": 0.905907159987725,
-        "activeMs": 1.0755235999939918,
-        "idleMs": 0.11171019999999998
+        "utilization": 0.8970312344228161,
+        "activeMs": 1.0689443999999875,
+        "idleMs": 0.12270240000000002
       },
       "eventLoopDelay": {
-        "minMs": 19.08736,
-        "maxMs": 705.691647,
-        "meanMs": 54.39409980952381,
-        "stdMs": 145.58447950080972,
-        "p50Ms": 22.036479,
-        "p99Ms": 705.691647
+        "minMs": 19.562496,
+        "maxMs": 170.131455,
+        "meanMs": 23.88717480851064,
+        "stdMs": 21.693420877008066,
+        "p50Ms": 20.021247,
+        "p99Ms": 170.131455
       },
       "backpressure": {
         "events": 0,
@@ -401,19 +401,19 @@ Generated: 2026-02-27T18:02:20.934Z
         "maxQueuedBytes": 0
       },
       "batching": {
-        "flushes": 13120,
-        "avgBuffersPerFlush": 10.620655487804878,
-        "avgBytesPerFlush": 10918.033841463415,
-        "maxBuffers": 32,
-        "maxBytes": 32896
+        "flushes": 12902,
+        "avgBuffersPerFlush": 13.384203999379942,
+        "avgBytesPerFlush": 13758.961711362579,
+        "maxBuffers": 48,
+        "maxBytes": 49344
       },
       "clientFlow": {
-        "currentSliceSize": 12,
+        "currentSliceSize": 16,
         "effectiveRateBytesPerSec": 16777216,
-        "totalFlushes": 4494,
-        "totalBytes": 36973048,
-        "backpressureEvents": 8939,
-        "availableTokens": 524288,
+        "totalFlushes": 6436,
+        "totalBytes": 79464400,
+        "backpressureEvents": 12806,
+        "availableTokens": 100663.296,
         "policy": {
           "coherence": 0.9,
           "entropyVelocity": 0.1,
@@ -422,55 +422,55 @@ Generated: 2026-02-27T18:02:20.934Z
         },
         "sliceHistory": [
           {
-            "timestamp": 1772215339850,
+            "timestamp": 1772219674386,
+            "size": 16
+          },
+          {
+            "timestamp": 1772219674386,
+            "size": 11
+          },
+          {
+            "timestamp": 1772219674386,
             "size": 12
           },
           {
-            "timestamp": 1772215339850,
-            "size": 10
+            "timestamp": 1772219674386,
+            "size": 16
           },
           {
-            "timestamp": 1772215339850,
-            "size": 8
+            "timestamp": 1772219674386,
+            "size": 13
           },
           {
-            "timestamp": 1772215339850,
+            "timestamp": 1772219674386,
             "size": 12
           },
           {
-            "timestamp": 1772215339850,
-            "size": 10
+            "timestamp": 1772219674386,
+            "size": 16
           },
           {
-            "timestamp": 1772215339850,
-            "size": 8
+            "timestamp": 1772219674386,
+            "size": 11
           },
           {
-            "timestamp": 1772215339850,
+            "timestamp": 1772219674386,
             "size": 12
           },
           {
-            "timestamp": 1772215339850,
-            "size": 10
-          },
-          {
-            "timestamp": 1772215339850,
-            "size": 8
-          },
-          {
-            "timestamp": 1772215339852,
-            "size": 12
+            "timestamp": 1772219674386,
+            "size": 16
           }
         ],
         "flushHistory": [],
         "backpressureHistory": [],
         "adaptive": {
           "mode": "aggressive",
-          "sliceSize": 12,
-          "flushIntervalAvgMs": 0.46587184685478866,
-          "bytesPerFlushAvg": 8931.159969594662,
-          "eluIdleRatioAvg": 0.9563071988364036,
-          "gcPauseMaxMs": 0.01982648535926246
+          "sliceSize": 16,
+          "flushIntervalAvgMs": 0.030276300748859335,
+          "bytesPerFlushAvg": 12535.418930131247,
+          "eluIdleRatioAvg": 0.8683350198626689,
+          "gcPauseMaxMs": 5.07740804197805e-34
         },
         "negentropic": {
           "histogram": {
@@ -487,26 +487,26 @@ Generated: 2026-02-27T18:02:20.934Z
       },
       "clientBatch": {
         "totalFrames": 105000,
-        "totalFlushes": 13120,
-        "totalBytes": 143244604,
+        "totalFlushes": 12902,
+        "totalBytes": 177518124,
         "pendingFrames": 0,
         "pendingBytes": 0,
-        "maxPendingFrames": 32,
-        "maxPendingBytes": 32896,
+        "maxPendingFrames": 48,
+        "maxPendingBytes": 49344,
         "maxInBufferBytes": 0,
         "ringSlots": 128,
         "ringInUse": 0,
-        "ringMaxInUse": 38,
+        "ringMaxInUse": 50,
         "ringResizeCount": 0,
         "ringResizeBytes": 0,
         "overflowAllocations": 0,
         "overflowAllocatedBytes": 0,
         "copyAllocations": 0,
         "copyAllocatedBytes": 0,
-        "lastFlushTimestamp": 1772215339852,
-        "backpressureEvents": 8939,
-        "lastBackpressureBytes": 4112,
-        "lastBackpressureTimestamp": 1772215339850
+        "lastFlushTimestamp": 1772219674386,
+        "backpressureEvents": 12806,
+        "lastBackpressureBytes": 9252,
+        "lastBackpressureTimestamp": 1772219674386
       },
       "clientQueue": {
         "length": 0,
@@ -521,27 +521,27 @@ Generated: 2026-02-27T18:02:20.934Z
       "sendBlocks": {
         "blockSize": 1000,
         "samples": 100,
-        "avgMs": 1.397145999999998,
-        "minMs": 0.9820000000004256,
-        "maxMs": 5.428600000000188
+        "avgMs": 1.3628920000000015,
+        "minMs": 1.1722999999997228,
+        "maxMs": 3.8045999999999367
       },
       "heap": {
         "start": {
-          "rss": 238448640,
-          "heapTotal": 123912192,
-          "heapUsed": 68241984,
-          "external": 14264810,
-          "arrayBuffers": 5477379
+          "rss": 277671936,
+          "heapTotal": 191291392,
+          "heapUsed": 68823696,
+          "external": 14273897,
+          "arrayBuffers": 5485563
         },
         "end": {
-          "rss": 362684416,
-          "heapTotal": 192462848,
-          "heapUsed": 77507424,
-          "external": 58194410,
-          "arrayBuffers": 49406979
+          "rss": 306757632,
+          "heapTotal": 204529664,
+          "heapUsed": 100848728,
+          "external": 25137513,
+          "arrayBuffers": 16349179
         },
-        "peakHeapUsed": 120841120,
-        "peakRss": 266797056
+        "peakHeapUsed": 120711984,
+        "peakRss": 291323904
       },
       "coherenceTrace": []
     }
@@ -551,34 +551,34 @@ Generated: 2026-02-27T18:02:20.934Z
     "serverMode": "native-lws",
     "clientMode": "native-lws",
     "preferredServerBackend": "lws",
-    "durationMs": 776.2783,
+    "durationMs": 922.8647000000001,
     "messagesReceived": 100000,
     "bytesReceived": 102400000,
     "framing": "length-prefixed",
-    "msgsPerSec": 128819.78022572576,
-    "mbPerSec": 125.80056662668531,
+    "msgsPerSec": 108358.24579702744,
+    "mbPerSec": 105.81859941115961,
     "diagnostics": {
       "gc": {
-        "count": 8,
-        "durationMs": 9.784400016069412,
+        "count": 1,
+        "durationMs": 2.205599999986589,
         "byKind": {
-          "incremental": 4,
-          "major": 4,
-          "minor": 0
+          "minor": 1,
+          "incremental": 0,
+          "major": 0
         }
       },
       "eventLoop": {
-        "utilization": 0.8405238980240035,
-        "activeMs": 0.7619644999998095,
-        "idleMs": 0.1445707
+        "utilization": 0.7905069169912052,
+        "activeMs": 0.8713186999999935,
+        "idleMs": 0.23090909999999998
       },
       "eventLoopDelay": {
-        "minMs": 19.185664,
-        "maxMs": 78.118911,
-        "meanMs": 22.32467035897436,
-        "stdMs": 9.328425363034867,
-        "p50Ms": 20.217855,
-        "p99Ms": 78.118911
+        "minMs": 19.16928,
+        "maxMs": 91.553791,
+        "meanMs": 22.320236936170215,
+        "stdMs": 10.555036438598256,
+        "p50Ms": 20.037631,
+        "p99Ms": 91.553791
       },
       "backpressure": {
         "events": 0,
@@ -605,27 +605,27 @@ Generated: 2026-02-27T18:02:20.934Z
       "sendBlocks": {
         "blockSize": 1000,
         "samples": 100,
-        "avgMs": 0.5898019999999997,
-        "minMs": 0.3657999999995809,
-        "maxMs": 0.9305000000003929
+        "avgMs": 0.6889009999999962,
+        "minMs": 0.5120000000006257,
+        "maxMs": 1.4477999999999156
       },
       "heap": {
         "start": {
-          "rss": 316469248,
-          "heapTotal": 191545344,
-          "heapUsed": 55169592,
-          "external": 14109162,
-          "arrayBuffers": 5321731
+          "rss": 322162688,
+          "heapTotal": 204529664,
+          "heapUsed": 103790008,
+          "external": 30257513,
+          "arrayBuffers": 21469179
         },
         "end": {
-          "rss": 386105344,
-          "heapTotal": 190758912,
-          "heapUsed": 77533952,
-          "external": 66592234,
-          "arrayBuffers": 57804803
+          "rss": 389591040,
+          "heapTotal": 207937536,
+          "heapUsed": 102329320,
+          "external": 75900265,
+          "arrayBuffers": 67111931
         },
-        "peakHeapUsed": 57077128,
-        "peakRss": 433192960
+        "peakHeapUsed": 105698768,
+        "peakRss": 438005760
       },
       "coherenceTrace": []
     }

@@ -5,6 +5,7 @@
 - Bench and release-lane clarification:
   - `bench:core:report` is explicitly the raw core transport lane again.
   - Transport coherence history sampling is opt-in via `QWORMHOLE_TRANSPORT_COHERENCE=1` to avoid contaminating throughput measurements.
+  - Added `bench:core:structure` as a separate structural validation lane writing to `data/core_diagnostics.structure.*`.
   - QWormhole publication from `main` is intentionally paused until `@sigilnet/coherence` is ready for external release.
 
 - Prebuilt-native distribution lane added:

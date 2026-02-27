@@ -421,6 +421,7 @@ Benchmarks:
 - `pnpm --filter @gsknnft/qwormhole run bench:writev`
 - `pnpm --filter @gsknnft/qwormhole run bench:sweep`
 - `pnpm --filter @gsknnft/qwormhole run bench:core:report` is the raw core transport lane and should be treated as the authoritative throughput baseline.
+- `pnpm --filter @gsknnft/qwormhole run bench:core:structure` is the separate opt-in structural lane for transport coherence validation.
 - Transport coherence sampling is now **opt-in** during benches:
 
   ```bash
@@ -429,6 +430,8 @@ Benchmarks:
   ```
 
   This keeps `bench:core:report` free of hot-path sampling overhead by default. Use the env flag only when explicitly studying structural transport behavior (`tSNI` / `tSPI` / `tMeta`).
+  The `bench:core:structure` script sets that flag for you and writes to
+  `data/core_diagnostics.structure.*` so raw and structural runs stay separate.
 - **Latest reproducible snapshot (2025-12-03, Windows 11, Node 24.10.0):**
 
   | Scenario | Old throughput (msg/s) <br />*(pre-native-fix: 2768.8k msgs landed)* | New duration (ms) | New throughput (msg/s) | Approx  |

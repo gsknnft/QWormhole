@@ -89,6 +89,7 @@
     "bench:qw": "pnpm run bench -- --mode=all --diagnostics",
     "bench:core": "pnpm run bench -- --mode=core --diagnostics",
     "bench:core:report": "node scripts/run-bench-core-report.js",
+    "bench:core:structure": "node scripts/run-bench-core-report.js --structure",
     "native:stage-prebuilds": "node ./scripts/stage-prebuilds.cjs",
     "lint": "tsc -p tsconfig.lint.json --noEmit",
     "lint:eslint": "eslint .",

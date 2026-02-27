@@ -143,7 +143,7 @@ export const FLOW_DEFAULTS = {
   /** TS peer max slice for high-trust peers (negIndex >= 0.85) */
   TS_PEER_HIGH_TRUST_MAX_SLICE: 64,
   /** Native-peer slice floor for TS senders under healthy conditions */
-  NATIVE_PEER_MIN_SLICE: 8,
+  NATIVE_PEER_MIN_SLICE: 12,
   /** Native-peer framer cap to keep writev batches dense */
   NATIVE_PEER_MAX_BUFFERS: 128,
   /** Native-peer framer byte budget */
@@ -264,9 +264,9 @@ const TRANSPORT_COHERENCE_ENABLED =
 
 function tuneAdaptiveConfig(config: AdaptiveConfig, peer: PeerProfile): void {
   if (peer.isNative) {
-    config.sampleEvery = Math.min(config.sampleEvery, 16);
-    config.adaptEvery = Math.min(config.adaptEvery, 16);
-    config.driftStep = Math.max(config.driftStep, 8);
+    config.sampleEvery = Math.min(config.sampleEvery, 8);
+    config.adaptEvery = Math.min(config.adaptEvery, 8);
+    config.driftStep = Math.max(config.driftStep, 10);
     config.idleTarget = Math.min(config.idleTarget, 0.1);
     return;
   }
@@ -429,7 +429,9 @@ export class FlowController extends TypedEventEmitter<FlowControllerEvents> {
     this.runtimeMetrics.getELU = () => this.readEventLoopUtilization();
     // Initialize slice size as half of preferred, clamped to bounds
     const preferredSlice = this.clamp(
-      Math.round(policy.preferredBatchSize / 2),
+      Math.round(
+        policy.preferredBatchSize * (policy.peerIsNative ? 0.75 : 0.5),
+      ),
       policy.minSlice,
       this.getEffectiveMaxSlice(),
     );
@@ -1060,7 +1062,7 @@ export class FlowController extends TypedEventEmitter<FlowControllerEvents> {
       });
     }
     if (!this.adaptive) return;
-    const { state, config } = this.adaptive;
+    const { state, config, peer } = this.adaptive;
     const dt = state.lastFlushAt ? now - state.lastFlushAt : 0;
     state.lastFlushAt = now;
     if (dt > 0) {
@@ -1080,7 +1082,9 @@ export class FlowController extends TypedEventEmitter<FlowControllerEvents> {
         readRecentGcPause(),
       );
       if (state.backpressureCount > 0) {
-        state.backpressureCount = Math.max(0, state.backpressureCount - 1);
+        state.backpressureCount = peer.isNative
+          ? Math.floor(state.backpressureCount * 0.5)
+          : Math.max(0, state.backpressureCount - 1);
       }
     }
 
@@ -1107,7 +1111,9 @@ export class FlowController extends TypedEventEmitter<FlowControllerEvents> {
     const idleOK = state.eluIdleRatioAvg >= config.idleTarget;
     const gcOK = state.gcPauseMaxMs <= config.gcBudgetMs;
     const cooldownActive = this.adaptive.cooldownRemaining > 0;
-    const bpOK = state.backpressureCount === 0 && !cooldownActive;
+    const bpOK = peer.isNative
+      ? state.backpressureCount <= 1 && !cooldownActive
+      : state.backpressureCount === 0 && !cooldownActive;
     const allowExpansion = idleOK && gcOK && bpOK;
 
     const expansionBase =

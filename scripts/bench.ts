@@ -108,6 +108,8 @@ interface QWormholeClientOptions {
 const BENCH_COHERENCE = process.env.QWORMHOLE_BENCH_COHERENCE === "1";
 const BENCH_COHERENCE_MODE =
   process.env.QWORMHOLE_BENCH_COHERENCE_MODE ?? "observe";
+const BENCH_TRANSPORT_COHERENCE =
+  process.env.QWORMHOLE_TRANSPORT_COHERENCE === "1";
 const BENCH_TRACE = process.env.QWORMHOLE_BENCH_TRACE === "1";
 const BENCH_FORK = process.env.QWORMHOLE_BENCH_FORK === "1";
 const BENCH_CHILD = process.env.QWORMHOLE_BENCH_CHILD === "1";
@@ -308,6 +310,13 @@ const MACRO_BATCH_TARGET_BYTES = 128 * 1024;
 const ENABLE_DIAGNOSTICS =
   process.argv.includes("--diagnostics") ||
   process.env.QWORMHOLE_BENCH_DIAGNOSTICS === "1";
+
+const formatTransportMetric = (value?: number): string => {
+  if (Number.isFinite(value)) {
+    return (value as number).toFixed(3);
+  }
+  return BENCH_TRANSPORT_COHERENCE ? "-" : "off";
+};
 
 const padToBytes = (prefix: string, targetBytes: number): string => {
   const size = Buffer.byteLength(prefix);
@@ -2184,7 +2193,25 @@ async function runScenario({
         }
       }
       flushNativeBenchBatch(nativeClient, nativeBatch);
-      await waitForCompletion(() => messagesReceived >= WARMUP_MESSAGES, TIMEOUT_MS);
+      const warmupCompleted = await waitForCompletion(
+        () => messagesReceived >= WARMUP_MESSAGES,
+        TIMEOUT_MS,
+      );
+      if (!warmupCompleted) {
+        return {
+          id,
+          serverMode: serverMode as Mode,
+          clientMode,
+          preferredServerBackend: serverBackend,
+          durationMs: 0,
+          messagesReceived,
+          bytesReceived,
+          framing: BENCH_FRAMING,
+          benchConfig,
+          skipped: true,
+          reason: `warmup timed out after ${TIMEOUT_MS}ms (${messagesReceived}/${WARMUP_MESSAGES} messages)`,
+        };
+      }
       messagesReceived = 0;
       bytesReceived = 0;
       sendBlockDurations.length = 0;
@@ -2274,10 +2301,33 @@ async function runScenario({
       }
     }
     flushNativeBenchBatch(nativeClient, nativeBatch);
-    await waitForCompletion(
+    const completed = await waitForCompletion(
       () => messagesReceived >= TOTAL_MESSAGES,
       TIMEOUT_MS,
     );
+    if (!completed) {
+      return {
+        id,
+        serverMode: serverMode as Mode,
+        clientMode,
+        preferredServerBackend: serverBackend,
+        durationMs: performance.now() - start,
+        messagesReceived,
+        bytesReceived,
+        framing: BENCH_FRAMING,
+        msgsPerSec:
+          messagesReceived > 0
+            ? messagesReceived / ((performance.now() - start) / 1000)
+            : undefined,
+        mbPerSec:
+          bytesReceived > 0
+            ? bytesReceived / ((performance.now() - start) / 1000) / (1024 * 1024)
+            : undefined,
+        benchConfig,
+        skipped: true,
+        reason: `timed out after ${TIMEOUT_MS}ms (${messagesReceived}/${TOTAL_MESSAGES} messages)`,
+      };
+    }
     duration = performance.now() - start;
   } finally {
     if (ENABLE_DIAGNOSTICS) {
@@ -2942,9 +2992,9 @@ const writeBenchReport = async (results: ScenarioResult[]): Promise<void> => {
         diag.transportCalls?.batchWritevCalls ?? 0,
         diag.transportCalls?.nativeSendManyCalls ?? 0,
         diag.clientFlow?.governance?.mode ?? diag.flow?.governance?.mode ?? "-",
-        formatNumber(transportCoherence?.transportSNI, 3),
-        formatNumber(transportCoherence?.transportSPI, 3),
-        formatNumber(transportCoherence?.transportMetastability, 3),
+        formatTransportMetric(transportCoherence?.transportSNI),
+        formatTransportMetric(transportCoherence?.transportSPI),
+        formatTransportMetric(transportCoherence?.transportMetastability),
       ];
     });
 
@@ -2988,6 +3038,9 @@ const writeBenchReport = async (results: ScenarioResult[]): Promise<void> => {
     ? [...transportRows].sort((a, b) => (b.msgsPerSec ?? 0) - (a.msgsPerSec ?? 0))[0]
     : undefined;
   const transportFindings = [
+    BENCH_TRANSPORT_COHERENCE
+      ? `Transport coherence sampling: enabled`
+      : `Transport coherence sampling: disabled in this raw lane. Run \`bench:core:structure\` for tSNI / tSPI / tMeta.`,
     bestTransport
       ? `Best transport persistence: \`${bestTransport.id}\` (tSPI ${formatNumber(bestTransport.transportSPI, 3)}, tMeta ${formatNumber(bestTransport.transportMetastability, 3)})`
       : `Best transport persistence: unavailable`,
@@ -3056,18 +3109,26 @@ const writeBenchReport = async (results: ScenarioResult[]): Promise<void> => {
     ``,
     ...transportFindings.map(line => `- ${line}`),
     ``,
-    renderMarkdownTable(
-      [
-        "Rank",
-        "Scenario",
-        "Msg/s",
-        "tSNI",
-        "tSPI",
-        "tMeta",
-        "Health",
-      ],
-      transportSummaryRows,
-    ),
+    ...(transportSummaryRows.length > 0
+      ? [
+          renderMarkdownTable(
+            [
+              "Rank",
+              "Scenario",
+              "Msg/s",
+              "tSNI",
+              "tSPI",
+              "tMeta",
+              "Health",
+            ],
+            transportSummaryRows,
+          ),
+        ]
+      : [
+          BENCH_TRANSPORT_COHERENCE
+            ? "_No transport coherence rows were produced in this run._"
+            : "_Transport coherence metrics are intentionally off in the raw lane._",
+        ]),
     ``,
     `## Raw JSON`,
     ``,
@@ -3234,23 +3295,24 @@ async function mainBench() {
             `${diag.batching.maxBuffers}`,
             10,
           )}${pad(maxKb, 10)}${pad(governanceMode, 12)}${pad(
-            Number.isFinite(transportCoherence?.transportSNI)
-              ? transportCoherence.transportSNI.toFixed(3)
-              : "-",
+            formatTransportMetric(transportCoherence?.transportSNI),
             8,
           )}${pad(
-            Number.isFinite(transportCoherence?.transportSPI)
-              ? transportCoherence.transportSPI.toFixed(3)
-              : "-",
+            formatTransportMetric(transportCoherence?.transportSPI),
             8,
           )}${pad(
-            Number.isFinite(transportCoherence?.transportMetastability)
-              ? transportCoherence.transportMetastability.toFixed(3)
-              : "-",
+            formatTransportMetric(
+              transportCoherence?.transportMetastability,
+            ),
             8,
           )}`,
         );
       }
+    if (!BENCH_TRANSPORT_COHERENCE) {
+      console.log(
+        "\n[bench] transport coherence metrics are intentionally disabled in the raw lane; use bench:core:structure for tSNI/tSPI/tMeta.",
+      );
+    }
     }
 }
 
