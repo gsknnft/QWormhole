@@ -23,6 +23,9 @@ type Mode =
   | "ts"
   | "native-lws"
   | "native-libsocket"
+  | "net"
+  | "ws"
+  | "uwebsockets"
   | "kcp"
   | "kcp-arq"
   | "quic";
@@ -153,6 +156,17 @@ type ScenarioDiagnostics = {
     callsPerSec: number;
     avgPayloadBytes: number;
     pendingMaxBytes: number;
+  };
+  transportCalls?: {
+    batchWritevCalls: number;
+    batchWritevBuffers: number;
+    batchWritevBytes: number;
+    writeBufferCalls: number;
+    writeBufferBytes: number;
+    nativeSendManyCalls: number;
+    nativeSendManyItems: number;
+    nativeSendManyBytes: number;
+    nativeSendCalls: number;
   };
   flow?: FlowControllerDiagnostics;
   clientFlow?: FlowControllerDiagnostics;

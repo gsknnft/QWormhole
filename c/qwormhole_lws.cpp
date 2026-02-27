@@ -45,9 +45,12 @@ constexpr const char kDefaultVhostName[] = "default";
 
 constexpr size_t kFrameHeaderBytes = 4;
 constexpr size_t kDefaultMaxFrameLength = 4 * 1024 * 1024;
-constexpr size_t kMaxWritesPerWritable = 16;
 constexpr size_t kDefaultPtServBufSize = 16 * 1024;
 constexpr size_t kMaxPtServBufSize = 512 * 1024;
+constexpr size_t kDefaultClientMaxWritesPerWritable = 128;
+constexpr size_t kDefaultServerMaxWritesPerWritable = 128;
+constexpr int kDefaultClientServiceTimeoutMs = 1;
+constexpr int kDefaultServerServiceTimeoutMs = 1;
 
 size_t ResolvePtServBufSize() {
   const char* raw = std::getenv("QWORMHOLE_LWS_PT_SERV_BUF");
@@ -66,6 +69,112 @@ size_t ResolvePtServBufSize() {
     return kMaxPtServBufSize;
   }
   return static_cast<size_t>(value);
+}
+
+size_t ResolveMaxWritesPerWritable(
+    const char* scoped_key,
+    const char* scoped_legacy_key,
+    size_t fallback) {
+  const char* raw = std::getenv(scoped_key);
+  if ((!raw || !*raw) && scoped_legacy_key && *scoped_legacy_key) {
+    raw = std::getenv(scoped_legacy_key);
+  }
+  if (!raw || !*raw) {
+    raw = std::getenv("QWORMHOLE_LWS_MAX_WRITES");
+  }
+  if (!raw || !*raw) {
+    raw = std::getenv("QW_LWS_MAX_WRITES");
+  }
+  if (!raw || !*raw) {
+    return fallback;
+  }
+  char* end = nullptr;
+  unsigned long value = std::strtoul(raw, &end, 10);
+  if (!end || end == raw || value == 0) {
+    return fallback;
+  }
+  return static_cast<size_t>(value);
+}
+
+size_t ResolveClientMaxWritesPerWritable() {
+  return ResolveMaxWritesPerWritable(
+      "QWORMHOLE_LWS_CLIENT_MAX_WRITES",
+      "QW_LWS_CLIENT_MAX_WRITES",
+      kDefaultClientMaxWritesPerWritable);
+}
+
+size_t ResolveServerMaxWritesPerWritable() {
+  return ResolveMaxWritesPerWritable(
+      "QWORMHOLE_LWS_SERVER_MAX_WRITES",
+      "QW_LWS_SERVER_MAX_WRITES",
+      kDefaultServerMaxWritesPerWritable);
+}
+
+int ResolveServiceTimeoutMs(
+    const char* scoped_key,
+    const char* scoped_legacy_key,
+    int fallback) {
+  const char* raw = std::getenv(scoped_key);
+  if ((!raw || !*raw) && scoped_legacy_key && *scoped_legacy_key) {
+    raw = std::getenv(scoped_legacy_key);
+  }
+  if (!raw || !*raw) {
+    raw = std::getenv("QWORMHOLE_LWS_SERVICE_MS");
+  }
+  if (!raw || !*raw) {
+    raw = std::getenv("QW_LWS_SERVICE_MS");
+  }
+  if (!raw || !*raw) {
+    return fallback;
+  }
+  char* end = nullptr;
+  long value = std::strtol(raw, &end, 10);
+  if (!end || end == raw || value < 0) {
+    return fallback;
+  }
+  return static_cast<int>(value);
+}
+
+int ResolveClientServiceTimeoutMs() {
+  return ResolveServiceTimeoutMs(
+      "QWORMHOLE_LWS_CLIENT_SERVICE_MS",
+      "QW_LWS_CLIENT_SERVICE_MS",
+      kDefaultClientServiceTimeoutMs);
+}
+
+int ResolveServerServiceTimeoutMs() {
+  return ResolveServiceTimeoutMs(
+      "QWORMHOLE_LWS_SERVER_SERVICE_MS",
+      "QW_LWS_SERVER_SERVICE_MS",
+      kDefaultServerServiceTimeoutMs);
+}
+
+struct QueuedWrite {
+  std::vector<uint8_t> buffer;
+  size_t offset = 0;
+
+  size_t length() const {
+    return buffer.size() > LWS_PRE ? buffer.size() - LWS_PRE : 0;
+  }
+
+  size_t remaining() const {
+    const size_t len = length();
+    return offset < len ? len - offset : 0;
+  }
+
+  uint8_t* write_ptr() {
+    return buffer.data() + LWS_PRE + offset;
+  }
+};
+
+QueuedWrite BuildQueuedWrite(const uint8_t* data, size_t len) {
+  QueuedWrite queued;
+  if (!data || len == 0) {
+    return queued;
+  }
+  queued.buffer.resize(LWS_PRE + len);
+  std::memcpy(queued.buffer.data() + LWS_PRE, data, len);
+  return queued;
 }
 
 enum class JsonType { Null, Boolean, Number, String, Object, Array };
@@ -877,13 +986,10 @@ class LwsClientWrapper : public Napi::ObjectWrap<LwsClientWrapper> {
     std::string tls_passphrase;
   };
 
-  struct PendingSend {
-    std::vector<uint8_t> data;
-  };
-
  // Napi surface
   Napi::Value Connect(const Napi::CallbackInfo& info);
   Napi::Value Send(const Napi::CallbackInfo& info);
+  Napi::Value SendMany(const Napi::CallbackInfo& info);
   Napi::Value Recv(const Napi::CallbackInfo& info);
   Napi::Value IsConnected(const Napi::CallbackInfo& info);
   Napi::Value SetEventHandler(const Napi::CallbackInfo& info);
@@ -894,6 +1000,7 @@ class LwsClientWrapper : public Napi::ObjectWrap<LwsClientWrapper> {
   void ServiceLoop();
   void Stop();
   void EnqueueSend(const uint8_t* data, size_t len);
+  bool ScheduleWritableLocked();
   void EmitEvent(const std::string& type,
                  std::vector<uint8_t> data = {},
                  std::optional<std::string> error = std::nullopt,
@@ -909,7 +1016,8 @@ class LwsClientWrapper : public Napi::ObjectWrap<LwsClientWrapper> {
   std::mutex mutex_;
   std::condition_variable recv_cv_;
   std::deque<std::vector<uint8_t>> recv_queue_;
-  std::deque<PendingSend> send_queue_;
+  std::deque<QueuedWrite> send_queue_;
+  bool writable_scheduled_ = false;
   Napi::ThreadSafeFunction tsfn_;
   bool tsfn_ready_ = false;
   std::vector<uint8_t> tls_ca_;
@@ -946,6 +1054,7 @@ Napi::Object LwsClientWrapper::Init(Napi::Env env, Napi::Object exports) {
                   {
                       InstanceMethod<&LwsClientWrapper::Connect>("connect"),
                       InstanceMethod<&LwsClientWrapper::Send>("send"),
+                      InstanceMethod<&LwsClientWrapper::SendMany>("sendMany"),
                       InstanceMethod<&LwsClientWrapper::Recv>("recv"),
                       InstanceMethod<&LwsClientWrapper::IsConnected>("isConnected"),
                       InstanceMethod<&LwsClientWrapper::SetEventHandler>("setEventHandler"),
@@ -1133,7 +1242,7 @@ Napi::Value LwsClientWrapper::Connect(const Napi::CallbackInfo& info) {
 
 void LwsClientWrapper::ServiceLoop() {
   while (!closing_) {
-    int result = lws_service(context_, 50);
+    int result = lws_service(context_, ResolveClientServiceTimeoutMs());
     if (result < 0) {
       break;
     }
@@ -1176,9 +1285,16 @@ void LwsClientWrapper::EnqueueSend(const uint8_t* data, size_t len) {
   }
 
   std::lock_guard<std::mutex> lock(mutex_);
-  PendingSend pending;
-  pending.data.assign(data, data + len);
-  send_queue_.push_back(std::move(pending));
+  send_queue_.push_back(BuildQueuedWrite(data, len));
+}
+
+bool LwsClientWrapper::ScheduleWritableLocked() {
+  if (!context_ || !wsi_ || writable_scheduled_) {
+    return false;
+  }
+  writable_scheduled_ = true;
+  lws_callback_on_writable(wsi_);
+  return true;
 }
 
 void LwsClientWrapper::EmitEvent(const std::string& type,
@@ -1227,12 +1343,63 @@ Napi::Value LwsClientWrapper::Send(const Napi::CallbackInfo& info) {
     EnqueueSend(reinterpret_cast<const uint8_t*>(data.data()), data.size());
   }
 
-  if (wsi_) {
-    lws_callback_on_writable(wsi_);
+  bool should_wake = false;
+  {
+    std::lock_guard<std::mutex> lock(mutex_);
+    should_wake = ScheduleWritableLocked();
   }
-  lws_cancel_service(context_);
+  if (should_wake) {
+    lws_cancel_service(context_);
+  }
 
   return env.Undefined();
+}
+
+Napi::Value LwsClientWrapper::SendMany(const Napi::CallbackInfo& info) {
+  Napi::Env env = info.Env();
+
+  if (!context_ || closing_) {
+    Napi::Error::New(env, "Client is not connected").ThrowAsJavaScriptException();
+    return env.Undefined();
+  }
+
+  if (info.Length() < 1 || !info[0].IsArray()) {
+    Napi::TypeError::New(env, "sendMany(data: Array<Buffer|string>) required")
+        .ThrowAsJavaScriptException();
+    return env.Undefined();
+  }
+
+  auto items = info[0].As<Napi::Array>();
+  uint32_t enqueued = 0;
+  for (uint32_t i = 0; i < items.Length(); ++i) {
+    Napi::Value value = items.Get(i);
+    if (value.IsBuffer()) {
+      auto buf = value.As<Napi::Buffer<uint8_t>>();
+      EnqueueSend(buf.Data(), buf.Length());
+      enqueued += 1;
+      continue;
+    }
+    if (value.IsString()) {
+      std::string data = value.ToString();
+      EnqueueSend(reinterpret_cast<const uint8_t*>(data.data()), data.size());
+      enqueued += 1;
+      continue;
+    }
+    Napi::TypeError::New(env, "sendMany only accepts Buffer or string entries")
+        .ThrowAsJavaScriptException();
+    return env.Undefined();
+  }
+
+  bool should_wake = false;
+  {
+    std::lock_guard<std::mutex> lock(mutex_);
+    should_wake = ScheduleWritableLocked();
+  }
+  if (should_wake) {
+    lws_cancel_service(context_);
+  }
+
+  return Napi::Number::New(env, enqueued);
 }
 
 Napi::Value LwsClientWrapper::Recv(const Napi::CallbackInfo& info) {
@@ -1367,9 +1534,7 @@ int LwsClientWrapper::Callback(struct lws* wsi,
         self->connected_ = true;
         self->EmitEvent("connect");
         std::lock_guard<std::mutex> lock(self->mutex_);
-        if (!self->send_queue_.empty()) {
-          lws_callback_on_writable(wsi);
-        }
+        self->ScheduleWritableLocked();
       }
       break;
 
@@ -1386,9 +1551,14 @@ int LwsClientWrapper::Callback(struct lws* wsi,
 
     case LWS_CALLBACK_RAW_WRITEABLE:
       if (self) {
+        {
+          std::lock_guard<std::mutex> lock(self->mutex_);
+          self->writable_scheduled_ = false;
+        }
         size_t writes = 0;
-        while (writes < kMaxWritesPerWritable) {
-          PendingSend next;
+          const size_t max_writes = ResolveClientMaxWritesPerWritable();
+        while (writes < max_writes) {
+          QueuedWrite next;
           {
             std::lock_guard<std::mutex> lock(self->mutex_);
             if (self->send_queue_.empty()) {
@@ -1398,16 +1568,15 @@ int LwsClientWrapper::Callback(struct lws* wsi,
             self->send_queue_.pop_front();
           }
 
-          if (next.data.empty()) {
+          if (next.remaining() == 0) {
             writes++;
             continue;
           }
 
-          std::vector<uint8_t> buffer(LWS_PRE + next.data.size());
-          std::memcpy(buffer.data() + LWS_PRE, next.data.data(), next.data.size());
+          const size_t remaining_before = next.remaining();
           ssize_t written =
-              lws_write(wsi, buffer.data() + LWS_PRE,
-                        next.data.size(), LWS_WRITE_RAW);
+              lws_write(wsi, next.write_ptr(),
+                        remaining_before, LWS_WRITE_RAW);
           if (written < 0) {
             self->closing_ = true;
             std::string error = "Native client write failed";
@@ -1415,23 +1584,22 @@ int LwsClientWrapper::Callback(struct lws* wsi,
             lws_cancel_service(self->context_);
             break;
           }
-          if (static_cast<size_t>(written) < next.data.size()) {
-            PendingSend remainder;
-            remainder.data.assign(next.data.begin() + written, next.data.end());
+          const size_t sent =
+              std::min(static_cast<size_t>(written), remaining_before);
+          if (sent < remaining_before) {
+            next.offset += sent;
             {
               std::lock_guard<std::mutex> lock(self->mutex_);
-              self->send_queue_.push_front(std::move(remainder));
+              self->send_queue_.push_front(std::move(next));
+              self->ScheduleWritableLocked();
             }
-            lws_callback_on_writable(wsi);
             break;
           }
           writes++;
         }
         {
           std::lock_guard<std::mutex> lock(self->mutex_);
-          if (!self->send_queue_.empty()) {
-            lws_callback_on_writable(wsi);
-          }
+          self->ScheduleWritableLocked();
         }
       }
       break;
@@ -1496,10 +1664,11 @@ class LwsServerWrapper : public Napi::ObjectWrap<LwsServerWrapper> {
     struct lws* wsi;
     std::string remote_address;
     uint16_t remote_port;
-    std::deque<std::vector<uint8_t>> send_queue;
+    std::deque<QueuedWrite> send_queue;
     size_t queued_bytes;
     bool backpressured;
     bool closing;
+    bool writable_scheduled = false;
     std::vector<uint8_t> rx_buffer;
     size_t rx_offset = 0;
     bool handshake_complete = false;
@@ -1547,6 +1716,7 @@ class LwsServerWrapper : public Napi::ObjectWrap<LwsServerWrapper> {
                             const std::vector<uint8_t>& frame);
   void TrimRxBuffer(ClientConnection* conn);
   std::vector<uint8_t> BuildFramedPayload(const std::vector<uint8_t>& data);
+  bool ScheduleWritableLocked(const std::shared_ptr<ClientConnection>& conn);
 
   std::atomic<bool> listening_{false};
   std::atomic<bool> closing_{false};
@@ -1915,7 +2085,7 @@ Napi::Value LwsServerWrapper::Listen(const Napi::CallbackInfo& info) {
 
 void LwsServerWrapper::ServiceLoop() {
   while (!closing_ && listening_) {
-    int result = lws_service(context_, 50);
+    int result = lws_service(context_, ResolveServerServiceTimeoutMs());
     if (result < 0) {
       break;
     }
@@ -1985,13 +2155,14 @@ Napi::Value LwsServerWrapper::Broadcast(const Napi::CallbackInfo& info) {
     data.assign(str.begin(), str.end());
   }
 
-  std::vector<uint8_t> framed = BuildFramedPayload(data);
+  std::vector<uint8_t> payload = BuildFramedPayload(data);
 
+  bool should_wake = false;
   {
     std::lock_guard<std::mutex> lock(mutex_);
     for (auto& [wsi, conn] : connections_) {
-      conn->send_queue.push_back(framed);
-      conn->queued_bytes += framed.size();
+      conn->send_queue.push_back(BuildQueuedWrite(payload.data(), payload.size()));
+      conn->queued_bytes += payload.size();
 
       if (!conn->backpressured &&
           conn->queued_bytes >= options_.max_backpressure_bytes) {
@@ -1999,11 +2170,11 @@ Napi::Value LwsServerWrapper::Broadcast(const Napi::CallbackInfo& info) {
         EmitBackpressure(conn->id, conn->queued_bytes, options_.max_backpressure_bytes);
       }
 
-      lws_callback_on_writable(wsi);
+      should_wake = ScheduleWritableLocked(conn) || should_wake;
     }
   }
 
-  if (context_) {
+  if (should_wake && context_) {
     lws_cancel_service(context_);
   }
 
@@ -2037,9 +2208,10 @@ Napi::Value LwsServerWrapper::SendTo(const Napi::CallbackInfo& info) {
     data.assign(str.begin(), str.end());
   }
 
-  std::vector<uint8_t> framed = BuildFramedPayload(data);
+  std::vector<uint8_t> payload = BuildFramedPayload(data);
 
   std::shared_ptr<ClientConnection> target;
+  bool should_wake = false;
   {
     std::lock_guard<std::mutex> lock(mutex_);
     auto it = connections_by_id_.find(id);
@@ -2047,21 +2219,18 @@ Napi::Value LwsServerWrapper::SendTo(const Napi::CallbackInfo& info) {
       return env.Undefined();
     }
     target = it->second;
-    target->send_queue.push_back(framed);
-    target->queued_bytes += framed.size();
+    target->send_queue.push_back(BuildQueuedWrite(payload.data(), payload.size()));
+    target->queued_bytes += payload.size();
 
     if (!target->backpressured &&
         target->queued_bytes >= options_.max_backpressure_bytes) {
       target->backpressured = true;
       EmitBackpressure(target->id, target->queued_bytes, options_.max_backpressure_bytes);
     }
+    should_wake = ScheduleWritableLocked(target);
   }
 
-  if (target && target->wsi) {
-    lws_callback_on_writable(target->wsi);
-  }
-
-  if (context_) {
+  if (should_wake && context_) {
     lws_cancel_service(context_);
   }
 
@@ -2134,13 +2303,11 @@ Napi::Value LwsServerWrapper::CloseConnection(const Napi::CallbackInfo& info) {
     }
     target = it->second;
     target->closing = true;
+    ScheduleWritableLocked(target);
   }
 
-  if (target && target->wsi) {
-    lws_callback_on_writable(target->wsi);
-    if (context_) {
-      lws_cancel_service(context_);
-    }
+  if (target && context_) {
+    lws_cancel_service(context_);
   }
 
   return env.Undefined();
@@ -2467,6 +2634,16 @@ std::vector<uint8_t> LwsServerWrapper::BuildFramedPayload(
   return framed;
 }
 
+bool LwsServerWrapper::ScheduleWritableLocked(
+    const std::shared_ptr<ClientConnection>& conn) {
+  if (!conn || !conn->wsi || conn->writable_scheduled) {
+    return false;
+  }
+  conn->writable_scheduled = true;
+  lws_callback_on_writable(conn->wsi);
+  return true;
+}
+
 int LwsServerWrapper::ServerCallback(struct lws* wsi,
                                      enum lws_callback_reasons reason,
                                      void* user, void* in, size_t len) {
@@ -2543,6 +2720,7 @@ int LwsServerWrapper::ServerCallback(struct lws* wsi,
         auto it = self->connections_.find(wsi);
         if (it != self->connections_.end()) {
           conn = it->second;
+          conn->writable_scheduled = false;
         }
       }
       if (!conn) {
@@ -2582,35 +2760,33 @@ int LwsServerWrapper::ServerCallback(struct lws* wsi,
 
       bool should_emit_drain = false;
       size_t writes = 0;
-      while (writes < kMaxWritesPerWritable) {
-        std::vector<uint8_t> data;
+      const size_t max_writes = ResolveServerMaxWritesPerWritable();
+      while (writes < max_writes) {
+        QueuedWrite next;
         {
           std::lock_guard<std::mutex> lock(self->mutex_);
           if (conn->send_queue.empty()) {
             break;
           }
-          data = std::move(conn->send_queue.front());
+          next = std::move(conn->send_queue.front());
           conn->send_queue.pop_front();
         }
 
-        if (data.empty()) {
+        if (next.remaining() == 0) {
           writes++;
           continue;
         }
 
-        std::vector<uint8_t> buffer(LWS_PRE + data.size());
-        std::memcpy(buffer.data() + LWS_PRE, data.data(), data.size());
-        ssize_t written = lws_write(wsi, buffer.data() + LWS_PRE,
-                                    data.size(), LWS_WRITE_RAW);
+        const size_t remaining_before = next.remaining();
+        ssize_t written = lws_write(wsi, next.write_ptr(),
+                                    remaining_before, LWS_WRITE_RAW);
 
         if (written < 0) {
           return -1;
         }
 
-        size_t sent = static_cast<size_t>(written);
-        if (sent > data.size()) {
-          sent = data.size();
-        }
+        size_t sent =
+            std::min(static_cast<size_t>(written), remaining_before);
 
         {
           std::lock_guard<std::mutex> lock(self->mutex_);
@@ -2620,13 +2796,14 @@ int LwsServerWrapper::ServerCallback(struct lws* wsi,
             conn->queued_bytes = 0;
           }
 
-          if (sent < data.size()) {
-            std::vector<uint8_t> remainder(data.begin() + sent, data.end());
-            conn->send_queue.push_front(std::move(remainder));
+          if (sent < remaining_before) {
+            next.offset += sent;
+            conn->send_queue.push_front(std::move(next));
+            conn->writable_scheduled = true;
           }
         }
 
-        if (sent < data.size()) {
+        if (sent < remaining_before) {
           lws_callback_on_writable(wsi);
           break;
         }
@@ -2636,6 +2813,7 @@ int LwsServerWrapper::ServerCallback(struct lws* wsi,
       {
         std::lock_guard<std::mutex> lock(self->mutex_);
         if (!conn->send_queue.empty()) {
+          conn->writable_scheduled = true;
           lws_callback_on_writable(wsi);
         } else if (conn->backpressured) {
           conn->backpressured = false;
@@ -2681,3 +2859,4 @@ Napi::Object InitAll(Napi::Env env, Napi::Object exports) {
 }  // namespace
 
 NODE_API_MODULE(qwormhole_lws, InitAll)
+

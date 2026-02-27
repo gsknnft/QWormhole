@@ -1,10 +1,14 @@
 import type { CoherenceState } from "./types";
-import * as tf from '@tensorflow/tfjs';  
+import * as tf from '@tensorflow/tfjs';
 
 export const DEFAULT_MIN_RESERVE = 0.2;
 
 export function clamp01(x: number): number {
   return Math.max(0, Math.min(1, x));
+}
+
+export function clamp(x: number, min: number, max: number): number {
+  return Math.max(min, Math.min(max, x));
 }
 
 export function cosineSimilarity(signal: number[], intent: number[]): number {
@@ -20,12 +24,12 @@ export function cosineSimilarity(signal: number[], intent: number[]): number {
   });
 }
 
-    export function sineSimilarity(signal: number[], intent: number[]): number {  
-      const cosineSim = cosineSimilarity(signal, intent);  
-      return Math.sqrt(1 - cosineSim * cosineSim);  
+    export function sineSimilarity(signal: number[], intent: number[]): number {
+      const cosineSim = cosineSimilarity(signal, intent);
+      return Math.sqrt(1 - cosineSim * cosineSim);
     }
 
-    export function euclideanDistance(signal: number[], intent: number[]): number {  
+    export function euclideanDistance(signal: number[], intent: number[]): number {
       return tf.tidy(() => {
         const a = tf.tensor1d(signal);
         const b = tf.tensor1d(intent);
@@ -47,7 +51,7 @@ export function cosineSimilarity(signal: number[], intent: number[]): number {
 
 
 
-    export async function characterizeNoise(signal: number[]): Promise<{ noise: number; noiseRatio: number; snr: number; entropy: number; }> {  
+    export async function characterizeNoise(signal: number[]): Promise<{ noise: number; noiseRatio: number; snr: number; entropy: number; }> {
       return tf.tidy(() => {
         const t = tf.tensor1d(signal);
         const mean = t.mean();
@@ -59,7 +63,7 @@ export function cosineSimilarity(signal: number[], intent: number[]): number {
         const noiseRatio = clamp01(noise / (totalPower || 1e-12));
         return { noise, noiseRatio, snr, entropy };
       });
-    }  
+    }
 
 export function computeHorizonSec(
   margin: number,

@@ -12,6 +12,7 @@ const { spawn } = require("node:child_process");
 
 const root = path.resolve(__dirname, "..");
 const dataDir = path.join(root, "data");
+const command = process.platform === "win32" ? "cmd" : "pnpm";
 
 const parseList = (value, fallback) =>
   value
@@ -48,18 +49,20 @@ const run = (rateBytes, capBytes, flushMs) =>
     if (diversity) env.QWORMHOLE_BENCH_DIVERSITY = "1";
 
     const args = [
-      "--filter",
-      "@gsknnft/qwormhole",
+      "run",
       "bench",
       "--",
       "--mode=ts",
       "--diagnostics",
     ];
 
-    const proc = spawn("pnpm", args, {
+    const spawnArgs =
+      process.platform === "win32" ? ["/c", "pnpm", ...args] : args;
+
+    const proc = spawn(command, spawnArgs, {
       cwd: root,
       stdio: "inherit",
-      shell: true,
+      shell: false,
       env,
     });
 

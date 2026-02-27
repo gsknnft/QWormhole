@@ -29,19 +29,23 @@ import {
   fitGeometry,
   minimumSamplesForModel,
 } from "./field-stability";
+import { isJSpaceResolved } from "./jSpaceResolution";
 import { WSTransport, WSTransportServer } from "../transports/ws/ws-transport";
 import type { MuxStream } from "../transports/mux/mux-stream";
 import {
   signalTrialMessageSchema,
   type SignalTrialAction,
   type SignalTrialDifficulty,
+  type SignalTrialGovernance,
   type SignalTrialMessage,
   type SignalTrialPhase,
   type SignalTrialProfile,
   type SignalTrialTelemetry,
   type SignalTrialResolutionTier,
+  type SignalTrialTransportPolicy,
   type SignalTrialTier,
 } from "../schema/signal-trial";
+import { deriveTransportGovernancePolicy } from "../core/transport-governance-policy";
 
 const cfg: CoherenceConfig = {
   Hmin: 1.2,
@@ -113,6 +117,33 @@ const readNumber = (value: unknown, fallback: number) => {
 const average = (values: number[]) =>
   values.length > 0 ? values.reduce((sum, value) => sum + value, 0) / values.length : 0;
 
+const deriveGeometryTrusted = (geometry: CoherenceGeometry): boolean =>
+  Boolean(
+    geometry.stability.stable &&
+      geometry.stability.violationRate < 0.02 &&
+      geometry.curvature.lambdaMin >= -1e-9,
+  );
+
+const buildGeometryValidity = (geometry: CoherenceGeometry) => {
+  const trusted = deriveGeometryTrusted(geometry);
+  return {
+    trusted,
+    reasons: trusted ? ["signaltrial:run-coherence"] : ["signaltrial:geometry_untrusted"],
+    minSamplesMet: geometry.stability.samples >= 16,
+    r2AboveFloor: true,
+    psdInflationOk: geometry.conditioning.psdInflation <= 0.25,
+    nonDegenerate: Number.isFinite(geometry.curvature.conditionNumber),
+    stabilityCheckOk: geometry.stability.stable,
+    healthOk: Number.isFinite(geometry.health) && geometry.health > 0,
+    lambdaMinOk: geometry.curvature.lambdaMin >= -1e-9,
+    lastChecked: Date.now(),
+  };
+};
+
+const CANONICAL_COHERENCE_SOURCE = "@sigilnet/coherence";
+const CANONICAL_REGIME_SOURCE = `${CANONICAL_COHERENCE_SOURCE}:geometric-regime`;
+const CANONICAL_ATTRACTOR_SOURCE = `${CANONICAL_COHERENCE_SOURCE}:attractors`;
+
 type ControlMode = "closed_loop" | "open_loop";
 type StabilityConvention = "energy" | "coherence";
 
@@ -131,6 +162,185 @@ type GeometrySummary = {
   dotJ: number;
   r2: number;
 };
+
+type SemanticRegimeTelemetry = {
+  regime:
+    | "stable-gradient"
+    | "stable-orbit"
+    | "chaotic"
+    | "turbulent"
+    | "unstable"
+    | "model-mismatch";
+  confidence: number;
+  diagnostics: string[];
+};
+
+type AttractorComparisonTelemetry = {
+  projection: "xy" | "xz" | "yz";
+  bestMatch: "aizawa" | "lorenz" | "rossler" | "henon" | "duffing" | null;
+  similarity: number;
+  regime: "coherent" | "turbulent" | "chaotic" | "predatory";
+  scores: Record<"aizawa" | "lorenz" | "rossler" | "henon" | "duffing", number>;
+  diagnostics: {
+    projection: "xy" | "xz" | "yz";
+    fitError: number;
+    symmetry: number;
+    roughness: number;
+    anisotropy: number;
+    coherentGate: boolean;
+    matchScore: number;
+    flowAlignment: number | null;
+    flowAlignmentAbs: number | null;
+    flowAlignmentSamples: number;
+    flowAlignmentMode: "descent" | "orthogonal" | "uphill" | "mixed" | "unavailable";
+    gradientUsed: boolean;
+    note?: string;
+  };
+  traceWindow: {
+    points: number;
+    stride: number;
+    durationMs: number;
+  };
+};
+
+type CompareToAttractorsFn = (
+  systemBehavior: Float64Array,
+  projection?: "xy" | "xz" | "yz",
+  options?: {
+    gradient?: (s: Vector3) => Vector3;
+    flowSampleStride?: number;
+    flowMinNorm?: number;
+  },
+) => AttractorComparisonTelemetry;
+
+type DriftFeatureFrameInput = {
+  geometryState?: {
+    health?: number;
+    curvature?: { lambdaMin?: number };
+    stability?: { violationRate?: number };
+    state?: [number, number, number];
+  };
+  attractorComparison?: {
+    similarity?: number;
+    diagnostics?: {
+      flowAlignment?: number | null;
+      flowAlignmentAbs?: number | null;
+    };
+  };
+};
+
+type EvaluateGeometricRegimeFn = (inputs: {
+  jResolution?: unknown;
+  attractorComparison?: unknown;
+  morphology?: unknown;
+}) => SemanticRegimeTelemetry;
+
+type FeaturesFromFrameFn = (input: DriftFeatureFrameInput) => {
+  health: number;
+  lambdaMin: number;
+  violationRate: number;
+  stateM?: number;
+  stateV?: number;
+  stateR?: number;
+  flowMeanCos?: number;
+  flowAbsCos?: number;
+  attractorSim?: number;
+};
+
+type DriftRateFn = (
+  a: ReturnType<FeaturesFromFrameFn>,
+  b: ReturnType<FeaturesFromFrameFn>,
+  dtSeconds: number,
+) => number;
+
+type EvaluateLorentzBarrierFn = (
+  driftRateValue: number,
+  bound: number,
+  eps?: number,
+  maxGamma?: number,
+  pointOfNoReturnRatio?: number,
+) => {
+  gamma: number;
+  ratio: number;
+  boundExceeded: boolean;
+  pointOfNoReturn: boolean;
+  clipped: boolean;
+  returnVelocity: number;
+};
+
+type ComputeSpectralNegentropyIndexFn = (input: ArrayLike<readonly number[]>) => {
+  score: number;
+};
+
+type StructuralPersistenceObservation = {
+  ts?: number;
+  flowAlignment?: number | null;
+  gamma?: number | null;
+  posteriorEntropy?: number | null;
+  driftRate?: number | null;
+  basinHold?: boolean | null;
+  coherenceDensity?: number | null;
+};
+
+type EvaluateStructuralPersistenceFn = (
+  observations: StructuralPersistenceObservation[],
+  options?: { minSamples?: number; gateThreshold?: number; gammaAlert?: number },
+) => {
+  score: number;
+  metastability: number;
+  gatePassed: boolean;
+};
+
+let compareToAttractorsFn: CompareToAttractorsFn | null = null;
+let evaluateGeometricRegimeFn: EvaluateGeometricRegimeFn | null = null;
+let featuresFromFrameFn: FeaturesFromFrameFn | null = null;
+let driftRateFn: DriftRateFn | null = null;
+let evaluateLorentzBarrierFn: EvaluateLorentzBarrierFn | null = null;
+let computeSpectralNegentropyIndexFn: ComputeSpectralNegentropyIndexFn | null = null;
+let evaluateStructuralPersistenceFn: EvaluateStructuralPersistenceFn | null = null;
+const compareToAttractorsLoad = (async () => {
+  try {
+    const modPath = "@sigilnet/coherence/browser";
+    const mod = (await import(modPath)) as {
+      compareToAttractors?: CompareToAttractorsFn;
+      evaluateGeometricRegime?: EvaluateGeometricRegimeFn;
+      featuresFromFrame?: FeaturesFromFrameFn;
+      driftRate?: DriftRateFn;
+      evaluateLorentzBarrier?: EvaluateLorentzBarrierFn;
+      computeSpectralNegentropyIndex?: ComputeSpectralNegentropyIndexFn;
+      evaluateStructuralPersistence?: EvaluateStructuralPersistenceFn;
+    };
+    if (typeof mod.compareToAttractors === "function") {
+      compareToAttractorsFn = mod.compareToAttractors;
+    }
+    if (typeof mod.evaluateGeometricRegime === "function") {
+      evaluateGeometricRegimeFn = mod.evaluateGeometricRegime;
+    }
+    if (typeof mod.featuresFromFrame === "function") {
+      featuresFromFrameFn = mod.featuresFromFrame;
+    }
+    if (typeof mod.driftRate === "function") {
+      driftRateFn = mod.driftRate;
+    }
+    if (typeof mod.evaluateLorentzBarrier === "function") {
+      evaluateLorentzBarrierFn = mod.evaluateLorentzBarrier;
+    }
+    if (typeof mod.computeSpectralNegentropyIndex === "function") {
+      computeSpectralNegentropyIndexFn = mod.computeSpectralNegentropyIndex;
+    }
+    if (typeof mod.evaluateStructuralPersistence === "function") {
+      evaluateStructuralPersistenceFn = mod.evaluateStructuralPersistence;
+    }
+  } catch {
+    compareToAttractorsFn = null;
+    evaluateGeometricRegimeFn = null;
+    featuresFromFrameFn = null;
+    driftRateFn = null;
+    evaluateLorentzBarrierFn = null;
+    computeSpectralNegentropyIndexFn = null;
+    evaluateStructuralPersistenceFn = null;
+  }
+})();
 
 
 const stabilityDefaults: StabilityConfig = {
@@ -272,6 +482,33 @@ const buildNboConfig = (): NboConfig => {
     process.env.SIGNAL_TRIAL_NBO_NORMALIZE === "1" || nboDefaults.normalizeTopology;
   return { enabled, intervalMs, windowSize, topN, normalizeTopology };
 };
+
+type GovernanceConfig = {
+  driftBound: number;
+  pointOfNoReturnRatio: number;
+};
+
+const governanceDefaults: GovernanceConfig = {
+  driftBound: 0.2,
+  pointOfNoReturnRatio: 1.2,
+};
+
+const buildGovernanceConfig = (): GovernanceConfig => ({
+  driftBound: Math.max(
+    1e-6,
+    readNumber(
+      process.env.SIGNAL_TRIAL_GOVERNANCE_BOUND,
+      governanceDefaults.driftBound,
+    ),
+  ),
+  pointOfNoReturnRatio: Math.max(
+    1,
+    readNumber(
+      process.env.SIGNAL_TRIAL_POINT_OF_NO_RETURN_RATIO,
+      governanceDefaults.pointOfNoReturnRatio,
+    ),
+  ),
+});
 
 const makeId = () => Math.random().toString(36).slice(2, 10);
 const makeSessionId = () => `ST-${Math.random().toString(36).slice(2, 8).toUpperCase()}`;
@@ -967,6 +1204,7 @@ export interface SignalTrialBroadcastOptions {
 }
 
 export function startSignalTrialBroadcast(options: SignalTrialBroadcastOptions = {}) {
+  void compareToAttractorsLoad;
   const missing: string[] = [];
   const port = options.port ?? Number(process.env.SIGNAL_TRIAL_WS_PORT ?? 4183);
   const tickMs = options.tickMs ?? Number(process.env.SIGNAL_TRIAL_TICK_MS ?? 250);
@@ -978,6 +1216,7 @@ export function startSignalTrialBroadcast(options: SignalTrialBroadcastOptions =
   const stabilityConfig = buildStabilityConfig();
   const observerConfig = buildObserverConfig(tickMs);
   const nboConfig = buildNboConfig();
+  const governanceConfig = buildGovernanceConfig();
   const buildAdaptiveHold = (targetDifficulty: SignalTrialDifficulty) => {
     const gateScale = difficultyGateScale[targetDifficulty];
     return {
@@ -1029,6 +1268,18 @@ export function startSignalTrialBroadcast(options: SignalTrialBroadcastOptions =
   let resolutionObserver = new ResolutionDetector(observerConfig);
   let stabilityBuffer: Array<{ t: number; state: CoherenceState }> = [];
   let geometrySummary: GeometrySummary | null = null;
+  let attractorComparisonSummary: AttractorComparisonTelemetry | null = null;
+  let attractorTick = 0;
+  let jResolutionSummary:
+    | {
+        resolved: boolean;
+        reasons: string[];
+        gradNorm: number;
+        lambdaMin: number;
+        deltaJViolationRate: number;
+        basinHoldMet: boolean;
+      }
+    | null = null;
   let stabilityTick = 0;
   let nboSamples: FieldSample[] = [];
   let lastNboAt = 0;
@@ -1036,6 +1287,9 @@ export function startSignalTrialBroadcast(options: SignalTrialBroadcastOptions =
   let nboWarned = false;
   let lastEntropy: number | null = null;
   let lastEntropyAt: number | null = null;
+  let lastGovernanceFeatures: ReturnType<FeaturesFromFrameFn> | null = null;
+  let lastGovernanceAt: number | null = null;
+  let governanceObservations: StructuralPersistenceObservation[] = [];
   let effects: Effect[] = [];
   let loadEffects: LoadEffect[] = [];
   let queueDepth = { current: baseSample.queueDepth };
@@ -1130,6 +1384,98 @@ export function startSignalTrialBroadcast(options: SignalTrialBroadcastOptions =
       dotJ,
       r2: average(fit.stats.r2),
     };
+
+    try {
+      jResolutionSummary = isJSpaceResolved(
+        {
+          model: geometry.model,
+          Q: geometry.Q,
+          b: geometry.b,
+          T: geometry.T,
+          c: geometry.c,
+          fitStats: {
+            samples: fit.stats.samples,
+            mse: fit.stats.mse,
+            r2: fit.stats.r2,
+            psdInflation:
+              fit.stats.psd_inflation ?? geometry.conditioning.psdInflation,
+            psdAttempts:
+              fit.stats.psd_attempts ?? geometry.conditioning.psdAttempts,
+            ridgeLambda: geometry.conditioning.ridgeLambda,
+          },
+          curvature: geometry.curvature,
+          stability: geometry.stability,
+          distortion: geometry.distortion,
+          conditioning: geometry.conditioning,
+          health: geometry.health,
+          validity: buildGeometryValidity(geometry),
+        },
+        last.s,
+        effectiveWindow.map((sample) => ({ s: sample.s })),
+      );
+    } catch {
+      jResolutionSummary = null;
+    }
+  };
+
+  const updateAttractorComparison = () => {
+    attractorTick += 1;
+    if (attractorTick % 4 !== 0) return;
+    if (!compareToAttractorsFn) return;
+    if (stabilityBuffer.length < 24) return;
+
+    const window = stabilityBuffer.slice(-Math.min(256, stabilityBuffer.length));
+    if (window.length < 24) return;
+    const stride = Math.max(1, Math.floor(window.length / 180));
+    const sampled: Array<{ t: number; state: CoherenceState }> = [];
+    for (let i = 0; i < window.length; i += stride) {
+      sampled.push(window[i]);
+    }
+    if (sampled.length < 24) return;
+
+    const trace = new Float64Array(sampled.length * 3);
+    for (let i = 0; i < sampled.length; i += 1) {
+      const s = sampled[i].state;
+      trace[i * 3] = s.M;
+      trace[i * 3 + 1] = s.V;
+      trace[i * 3 + 2] = s.R;
+    }
+
+    const trustedGeometry =
+      geometrySummary && deriveGeometryTrusted(geometrySummary.geometry)
+        ? geometrySummary.geometry
+        : null;
+    const gradient = trustedGeometry?.gradient;
+
+    try {
+      const result = compareToAttractorsFn(
+        trace,
+        "xy",
+        gradient
+          ? {
+              gradient,
+              flowSampleStride: 3,
+              flowMinNorm: 1e-6,
+            }
+          : undefined,
+      );
+      const durationMs = Math.max(0, sampled[sampled.length - 1].t - sampled[0].t);
+      attractorComparisonSummary = {
+        ...result,
+        diagnostics: {
+          ...result.diagnostics,
+          gradientUsed: Boolean(gradient),
+          ...(gradient ? {} : { note: "untrusted_geometry" }),
+        },
+        traceWindow: {
+          points: sampled.length,
+          stride,
+          durationMs,
+        },
+      };
+    } catch {
+      // keep previous summary; avoid telemetry churn on occasional fit failures
+    }
   };
 
   const recordNboSample = (now: number, sample: FieldSample) => {
@@ -1178,12 +1524,18 @@ export function startSignalTrialBroadcast(options: SignalTrialBroadcastOptions =
     resolutionObserver = new ResolutionDetector(observerConfig);
     stabilityBuffer = [];
     geometrySummary = null;
+    attractorComparisonSummary = null;
+    attractorTick = 0;
+    jResolutionSummary = null;
     stabilityTick = 0;
     nboSamples = [];
     lastNboAt = 0;
-    lastNboSummary = undefined;
-    nboWarned = false;
-    effects = [];
+      lastNboSummary = undefined;
+      nboWarned = false;
+      lastGovernanceFeatures = null;
+      lastGovernanceAt = null;
+      governanceObservations = [];
+      effects = [];
     loadEffects = [];
     queueDepth = { current: baseSample.queueDepth };
     lastSampleAt = Date.now();
@@ -1350,6 +1702,7 @@ export function startSignalTrialBroadcast(options: SignalTrialBroadcastOptions =
       coupling = loop.adapt(state, coupling);
     }
     recordStabilitySample(now, state);
+    updateAttractorComparison();
 
     const observerSample = { ...sample, latency_var: latencyVariance(sample) };
     detector.detectCommitment(
@@ -1474,21 +1827,210 @@ export function startSignalTrialBroadcast(options: SignalTrialBroadcastOptions =
         }
       : undefined;
 
-const geometryTelemetry = geometrySummary
-  ? {
-      health: geometrySummary.geometry.health,
-      lambdaMin: geometrySummary.geometry.curvature.lambdaMin,
-      lambdaMax: geometrySummary.geometry.curvature.lambdaMax,
-      conditionNumber: geometrySummary.geometry.curvature.conditionNumber,
-      violationRate: geometrySummary.geometry.stability.violationRate,
-      stable: geometrySummary.geometry.stability.stable,
-      cubicDominance: geometrySummary.geometry.distortion?.dominanceRatio,
-      dotJ: geometrySummary.dotJ,
-      r2: geometrySummary.r2,
-      samples: geometrySummary.geometry.stability.samples,
-    }
-  : undefined;
+    const geometryTelemetry = geometrySummary
+      ? {
+          // Canonical geometry payload consumed directly by UI/Workbench.
+          model: geometrySummary.geometry.model,
+          Q: geometrySummary.geometry.Q,
+          b: geometrySummary.geometry.b,
+          T: geometrySummary.geometry.T,
+          c: geometrySummary.geometry.c,
+          curvature: geometrySummary.geometry.curvature,
+          stability: geometrySummary.geometry.stability,
+          distortion: geometrySummary.geometry.distortion,
+          conditioning: geometrySummary.geometry.conditioning,
+          health: geometrySummary.geometry.health,
+          validity: buildGeometryValidity(geometrySummary.geometry),
+          // Backward-compatible summary fields (legacy consumers).
+          summary: {
+            lambdaMin: geometrySummary.geometry.curvature.lambdaMin,
+            lambdaMax: geometrySummary.geometry.curvature.lambdaMax,
+            conditionNumber: geometrySummary.geometry.curvature.conditionNumber,
+            violationRate: geometrySummary.geometry.stability.violationRate,
+            stable: geometrySummary.geometry.stability.stable,
+            cubicDominance: geometrySummary.geometry.distortion?.dominanceRatio,
+            dotJ: geometrySummary.dotJ,
+            r2: geometrySummary.r2,
+            samples: geometrySummary.geometry.stability.samples,
+          },
+        }
+      : undefined;
 
+    let semanticRegimeSource = NCF_SOURCE;
+    const semanticRegime: SemanticRegimeTelemetry = (() => {
+      if (evaluateGeometricRegimeFn) {
+        try {
+          const evaluated = evaluateGeometricRegimeFn({
+            jResolution: jResolutionSummary ?? undefined,
+            attractorComparison: attractorComparisonSummary ?? undefined,
+          });
+          semanticRegimeSource = CANONICAL_REGIME_SOURCE;
+          const diagnostics = [
+            ...evaluated.diagnostics,
+            `server:ncf:${ncf.regime}`,
+            ...(jResolutionSummary
+              ? [`server:jspace:${jResolutionSummary.resolved ? "resolved" : "unresolved"}`]
+              : []),
+          ];
+          return {
+            ...evaluated,
+            confidence: clampRange(evaluated.confidence, 0.05, 0.98),
+            diagnostics: Array.from(new Set(diagnostics)),
+          };
+        } catch {
+          // Fall back to the local heuristic below if canonical evaluation throws.
+        }
+      }
+
+      if (jResolutionSummary?.resolved && ncf.regime === "coherent") {
+        return {
+          regime: "stable-gradient",
+          confidence: clampRange(0.6 + state.M * 0.3, 0.6, 0.95),
+          diagnostics: ["server:ncf:coherent", "server:jspace:resolved"],
+        };
+      }
+      if (ncf.regime === "chaos") {
+        return {
+          regime: "chaotic",
+          confidence: clampRange(0.55 + Math.abs(state.V) * 0.3, 0.55, 0.9),
+          diagnostics: ["server:ncf:chaos"],
+        };
+      }
+      if (!jResolutionSummary?.resolved && jResolutionSummary) {
+        return {
+          regime: "turbulent",
+          confidence: 0.58,
+          diagnostics: [
+            "server:jspace:unresolved",
+            ...jResolutionSummary.reasons
+              .slice(0, 3)
+              .map((reason) => `server:jspace:${reason}`),
+          ],
+        };
+      }
+      return {
+        regime: "turbulent",
+        confidence: 0.52,
+        diagnostics: ["server:ncf:transitional_or_insufficient"],
+      };
+    })();
+
+    const governanceTelemetry: SignalTrialGovernance | undefined = (() => {
+      if (!evaluateLorentzBarrierFn) {
+        return undefined;
+      }
+
+      let driftRateValue = Math.max(0, derived.drift);
+      if (featuresFromFrameFn && driftRateFn) {
+        const currentFeatures = featuresFromFrameFn({
+          geometryState: geometryTelemetry
+            ? {
+                health: geometryTelemetry.health,
+                curvature: {
+                  lambdaMin: geometryTelemetry.curvature.lambdaMin,
+                },
+                stability: {
+                  violationRate: geometryTelemetry.stability.violationRate,
+                },
+                state: [state.M, state.V, state.R],
+              }
+            : {
+                state: [state.M, state.V, state.R],
+              },
+          attractorComparison: attractorComparisonSummary
+            ? {
+                similarity: attractorComparisonSummary.similarity,
+                diagnostics: {
+                  flowAlignment:
+                    attractorComparisonSummary.diagnostics.flowAlignment,
+                  flowAlignmentAbs:
+                    attractorComparisonSummary.diagnostics.flowAlignmentAbs,
+                },
+              }
+            : undefined,
+        });
+
+        if (lastGovernanceFeatures && lastGovernanceAt !== null) {
+          const dtSeconds = Math.max(1e-6, (now - lastGovernanceAt) / 1000);
+          driftRateValue = driftRateFn(
+            currentFeatures,
+            lastGovernanceFeatures,
+            dtSeconds,
+          );
+        }
+        lastGovernanceFeatures = currentFeatures;
+        lastGovernanceAt = now;
+      }
+
+      const barrier = evaluateLorentzBarrierFn(
+        driftRateValue,
+        governanceConfig.driftBound,
+        undefined,
+        undefined,
+        governanceConfig.pointOfNoReturnRatio,
+      );
+
+      const stateTrajectory = stabilityBuffer
+        .slice(-32)
+        .map(({ state: sampleState }) => [sampleState.M, sampleState.V, sampleState.R] as const);
+      const coherenceDensity =
+        computeSpectralNegentropyIndexFn && stateTrajectory.length >= 8
+          ? computeSpectralNegentropyIndexFn(stateTrajectory).score
+          : undefined;
+
+      governanceObservations.push({
+        ts: now,
+        flowAlignment: attractorComparisonSummary?.diagnostics.flowAlignment ?? null,
+        gamma: barrier.gamma,
+        driftRate: driftRateValue,
+        basinHold: jResolutionSummary?.basinHoldMet ?? null,
+        coherenceDensity,
+      });
+      if (governanceObservations.length > 24) {
+        governanceObservations.splice(0, governanceObservations.length - 24);
+      }
+
+      const persistence =
+        evaluateStructuralPersistenceFn && governanceObservations.length >= 8
+          ? evaluateStructuralPersistenceFn(governanceObservations, {
+              minSamples: 8,
+              gateThreshold: 0.62,
+              gammaAlert: 2,
+            })
+          : undefined;
+
+      return {
+        driftRate: driftRateValue,
+        bound: governanceConfig.driftBound,
+        ratio: barrier.ratio,
+        gamma: barrier.gamma,
+        boundExceeded: barrier.boundExceeded,
+        pointOfNoReturn: barrier.pointOfNoReturn,
+        clipped: barrier.clipped,
+        returnVelocity: barrier.returnVelocity,
+        entropy,
+        confidence: semanticRegime.confidence,
+        coherenceDensity,
+        structuralPersistence: persistence?.score,
+        metastability: persistence?.metastability,
+      };
+    })();
+
+    const transportPolicyTelemetry: SignalTrialTransportPolicy | undefined =
+      governanceTelemetry
+        ? deriveTransportGovernancePolicy({
+            gamma: governanceTelemetry.gamma,
+            driftRate: governanceTelemetry.driftRate,
+            entropy: governanceTelemetry.entropy,
+            confidence: governanceTelemetry.confidence,
+            coherenceDensity: governanceTelemetry.coherenceDensity,
+            structuralPersistence: governanceTelemetry.structuralPersistence,
+            metastability: governanceTelemetry.metastability,
+            boundExceeded: governanceTelemetry.boundExceeded,
+            pointOfNoReturn: governanceTelemetry.pointOfNoReturn,
+            regime: semanticRegime.regime,
+          })
+        : undefined;
 
     const telemetry: SignalTrialTelemetry = {
       type: "telemetry",
@@ -1504,10 +2046,29 @@ const geometryTelemetry = geometrySummary
       derived,
       ncf,
       state_source: NCF_SOURCE,
-      regime_source: NCF_SOURCE,
+      regime_source: semanticRegimeSource,
+      ...(governanceTelemetry ? { governance: governanceTelemetry } : {}),
+      ...(transportPolicyTelemetry
+        ? { transportPolicy: transportPolicyTelemetry }
+        : {}),
+      ...(jResolutionSummary ? { jResolution: jResolutionSummary } : {}),
+      regime: semanticRegime,
       observer: observerTelemetry,
       nbo: nboTelemetry,
       geometry: geometryTelemetry,
+      ...(attractorComparisonSummary
+        ? {
+            attractorComparison: {
+              ...attractorComparisonSummary,
+              diagnostics: {
+                ...attractorComparisonSummary.diagnostics,
+                note:
+                  attractorComparisonSummary.diagnostics.note ??
+                  `source:${CANONICAL_ATTRACTOR_SOURCE}`,
+              },
+            },
+          }
+        : {}),
       targetBand: targetBandTelemetry,
       gates: {
         uptimeMs,

@@ -10,9 +10,10 @@
 
 const path = require("node:path");
 const fs = require("node:fs");
-const { spawn } = require('child_process');
-const root = path.resolve(__dirname, "..");
-const dataDir = path.join(root, "data");
+const { spawn } = require("node:child_process");
+const packageRoot = path.resolve(__dirname, "..");
+const dataDir = path.join(packageRoot, "data");
+const command = process.platform === "win32" ? "cmd" : "pnpm";
 
 const parseList = (value, fallback) =>
   value
@@ -42,9 +43,9 @@ const run = (batch, flushMs) =>
     const csvName = `b${batch}-f${flushMs}.csv`;
     const csvPath = path.join("data", csvName);
     const args = [
-      "--filter",
-      "@gsknnft/qwormhole",
+      "run",
       "bench:writev",
+      "--",
       `--batch=${batch}`,
       `--flushMs=${flushMs}`,
       `--frames=${frames}`,
@@ -56,10 +57,13 @@ const run = (batch, flushMs) =>
       args.push("--adapt", `--bpThreshold=${bpThreshold}`, `--batchMin=${batchMin}`);
     }
 
-    const proc = spawn("pnpm", args, {
-      cwd: root,
+    const spawnArgs =
+      process.platform === "win32" ? ["/c", "pnpm", ...args] : args;
+
+    const proc = spawn(command, spawnArgs, {
+      cwd: packageRoot,
       stdio: "inherit",
-      shell: true,
+      shell: false,
     });
 
     proc.on("error", reject);

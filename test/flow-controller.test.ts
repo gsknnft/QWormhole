@@ -110,7 +110,7 @@ describe("FlowController", () => {
     controller.onBackpressure(1024);
 
     expect(controller.currentSliceSize).toBe(
-      Math.floor(initialSize * 0.75),
+      Math.floor(initialSize * 0.85),
     );
   });
 

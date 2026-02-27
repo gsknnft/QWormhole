@@ -16,6 +16,7 @@ export class NativeSocketAdapter extends EventEmitter {
   private readonly opts: NativeSocketAdapterOptions;
   private readonly client: NativeTcpClient;
   private pollTimer?: NodeJS.Timeout;
+  private idleTimer?: NodeJS.Timeout;
   private connectTimer?: NodeJS.Timeout;
   private connected = false;
   private lastActivity = Date.now();
@@ -60,7 +61,7 @@ export class NativeSocketAdapter extends EventEmitter {
       }
 
       this.idleTimeoutMs = this.opts.idleTimeoutMs;
-      const timeoutMs = this.opts.connectTimeoutMs;
+      const timeoutMs = this.opts.connectTimeoutMs ?? 5_000;
       if (timeoutMs && timeoutMs > 0) {
         this.connectTimer = setTimeout(() => {
           if (this.connected) return;
@@ -95,10 +96,13 @@ export class NativeSocketAdapter extends EventEmitter {
         setTimeout(() => {
           clearInterval(interval);
           check();
-          if (!this.connected) {
-            resolve();
+          if (!this.connected && !this.destroyed) {
+            const err = new Error("Native connect timeout");
+            this.emit("error", err);
+            this.destroy();
+            reject(err);
           }
-        }, Math.min(timeoutMs ?? 200, 200));
+        }, timeoutMs);
       }
     });
   }
@@ -117,10 +121,18 @@ export class NativeSocketAdapter extends EventEmitter {
 
   writev(buffers: Array<{ chunk: Buffer }>): boolean {
     if (this.destroyed) return false;
-    for (const entry of buffers) {
-      if (!this.write(entry.chunk)) return false;
+    try {
+      const payloads = buffers.map(entry => entry.chunk);
+      const result = this.client.sendMany?.(payloads);
+      this.touch();
+      if (typeof result === "number") {
+        return result >= payloads.length;
+      }
+      return true;
+    } catch (err) {
+      this.emit("error", err instanceof Error ? err : new Error(String(err)));
+      return false;
     }
-    return true;
   }
 
   cork(): void {
@@ -153,15 +165,19 @@ export class NativeSocketAdapter extends EventEmitter {
 
   setTimeout(timeoutMs: number): void {
     this.idleTimeoutMs = timeoutMs;
+    this.armIdleTimeout();
   }
 
   private touch(): void {
     this.lastActivity = Date.now();
+    this.armIdleTimeout();
   }
 
   private startPolling(): void {
     if (this.pollTimer) return;
-    const interval = this.opts.pollIntervalMs ?? 5;
+    const interval = this.usingEvents
+      ? Math.max(50, this.opts.pollIntervalMs ?? 50)
+      : this.opts.pollIntervalMs ?? 5;
     this.pollTimer = setInterval(() => {
       if (this.destroyed) return;
 
@@ -184,12 +200,6 @@ export class NativeSocketAdapter extends EventEmitter {
           }
         }
 
-        if (this.idleTimeoutMs && this.idleTimeoutMs > 0) {
-          if (Date.now() - this.lastActivity > this.idleTimeoutMs) {
-            this.emit("timeout");
-            this.destroy();
-          }
-        }
       } catch (err) {
         this.emit("error", err instanceof Error ? err : new Error(String(err)));
       }
@@ -205,6 +215,10 @@ export class NativeSocketAdapter extends EventEmitter {
       clearTimeout(this.connectTimer);
       this.connectTimer = undefined;
     }
+    if (this.idleTimer) {
+      clearTimeout(this.idleTimer);
+      this.idleTimer = undefined;
+    }
   }
 
   enableEventStream(): void {
@@ -214,6 +228,7 @@ export class NativeSocketAdapter extends EventEmitter {
       switch (evt.type) {
         case "connect":
           this.connected = true;
+          this.touch();
           this.refreshTlsInfo();
           this.emit("connect");
           break;
@@ -225,6 +240,7 @@ export class NativeSocketAdapter extends EventEmitter {
           break;
         case "close":
           this.connected = false;
+          this.stopPolling();
           this.emit("close", Boolean(evt.hadError));
           break;
         case "error":
@@ -234,7 +250,7 @@ export class NativeSocketAdapter extends EventEmitter {
           break;
       }
     });
-    this.startPolling();
+    this.armIdleTimeout();
   }
 
   getPeerCertificate(_detailed?: boolean): {
@@ -278,5 +294,24 @@ export class NativeSocketAdapter extends EventEmitter {
       this.alpnProtocol = info.alpnProtocol;
       this.authorized = info.authorized;
     }
+  }
+
+  private armIdleTimeout(): void {
+    if (this.idleTimer) {
+      clearTimeout(this.idleTimer);
+      this.idleTimer = undefined;
+    }
+    if (!this.idleTimeoutMs || this.idleTimeoutMs <= 0 || this.destroyed) {
+      return;
+    }
+    this.idleTimer = setTimeout(() => {
+      if (this.destroyed) return;
+      if (Date.now() - this.lastActivity >= this.idleTimeoutMs!) {
+        this.emit("timeout");
+        this.destroy();
+        return;
+      }
+      this.armIdleTimeout();
+    }, this.idleTimeoutMs);
   }
 }

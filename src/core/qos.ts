@@ -84,8 +84,18 @@ export class PriorityQueue<T> {
 
   enqueue(data: T, priority = 0): void {
     const size = estimateItemSize(data);
-    this.items.push({ data, priority, size });
-    this.items.sort((a, b) => a.priority - b.priority);
+    const item = { data, priority, size };
+    let lo = 0;
+    let hi = this.items.length;
+    while (lo < hi) {
+      const mid = (lo + hi) >> 1;
+      if ((this.items[mid]?.priority ?? 0) <= priority) {
+        lo = mid + 1;
+      } else {
+        hi = mid;
+      }
+    }
+    this.items.splice(lo, 0, item);
     this.totalEnqueued += 1;
     this.bytesEnqueued += size;
     this.bytes += size;
@@ -96,11 +106,25 @@ export class PriorityQueue<T> {
   dequeue(): T | undefined {
     const item = this.items.shift();
     if (item) {
-      this.totalDequeued += 1;
-      this.bytesDequeued += item.size;
-      this.bytes = Math.max(0, this.bytes - item.size);
+      this.accountDequeued(item.size);
     }
     return item?.data;
+  }
+
+  dequeueMany(maxItems: number): T[] {
+    const limit = Math.max(0, Math.floor(maxItems));
+    if (limit === 0 || this.items.length === 0) return [];
+    const removed = this.items.splice(0, limit);
+    let removedBytes = 0;
+    for (const item of removed) {
+      removedBytes += item.size;
+    }
+    if (removed.length > 0) {
+      this.totalDequeued += removed.length;
+      this.bytesDequeued += removedBytes;
+      this.bytes = Math.max(0, this.bytes - removedBytes);
+    }
+    return removed.map(item => item.data);
   }
 
   get length(): number {
@@ -141,6 +165,12 @@ export class PriorityQueue<T> {
     this.maxBytes = this.bytes;
     this.bytesEnqueued = 0;
     this.bytesDequeued = 0;
+  }
+
+  private accountDequeued(size: number): void {
+    this.totalDequeued += 1;
+    this.bytesDequeued += size;
+    this.bytes = Math.max(0, this.bytes - size);
   }
 }
 

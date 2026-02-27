@@ -4,16 +4,39 @@ import { spawnSync } from "node:child_process";
 import os from "node:os";
 import fs from "node:fs";
 import path from "node:path";
+import { createRequire } from "node:module";
 
 const platform = os.platform();
 const forceNative = process.env.QWORMHOLE_NATIVE === "1";
+const forceRebuild =
+  process.env.QWORMHOLE_NATIVE_FORCE_REBUILD === "1" ||
+  process.env.QWORMHOLE_FORCE_REBUILD === "1";
 const explicitSkip = process.env.QWORMHOLE_NATIVE === "0";
 const macOsAutoSkip = platform === "darwin" && !forceNative;
 const skipNative = explicitSkip || macOsAutoSkip;
-const nodeGypCmd = process.platform === "win32" ? "node-gyp.cmd" : "node-gyp";
+const require = createRequire(import.meta.url);
+
+const resolveNodeGypCommand = () => {
+  try {
+    const script = require.resolve("node-gyp/bin/node-gyp.js");
+    return {
+      command: process.execPath,
+      argsPrefix: [script],
+    };
+  } catch {
+    return {
+      command: process.platform === "win32" ? "node-gyp.cmd" : "node-gyp",
+      argsPrefix: [],
+    };
+  }
+};
+
+const nodeGyp = resolveNodeGypCommand();
 
 const hasNodeGyp = () => {
-  const check = spawnSync(nodeGypCmd, ["--version"], { stdio: "ignore" });
+  const check = spawnSync(nodeGyp.command, [...nodeGyp.argsPrefix, "--version"], {
+    stdio: "ignore",
+  });
   return check.status === 0;
 };
 const skipLibsocket =
@@ -53,7 +76,7 @@ const hydrateFromPrebuilds = () => {
 };
 
 const prebuiltHydrated = hydrateFromPrebuilds();
-if (prebuiltHydrated > 0) {
+if (prebuiltHydrated > 0 && !forceRebuild) {
   console.log("[qwormhole] native prebuild available; skipping rebuild.");
   process.exit(0);
 }
@@ -73,9 +96,13 @@ if (skipNative) {
   process.exit(0);
 }
 
-if (alreadyBuilt) {
+if (alreadyBuilt && !forceRebuild) {
   console.log("[qwormhole] Native artifact already present; skipping rebuild.");
   process.exit(0);
+}
+
+if (forceRebuild) {
+  console.log("[qwormhole] Forcing native rebuild.");
 }
 
 if (!hasNodeGyp()) {
@@ -114,7 +141,7 @@ const ensureLibsocketConf = () => {
 
 ensureLibsocketConf();
 
-const result = spawnSync(nodeGypCmd, ["rebuild"], {
+const result = spawnSync(nodeGyp.command, [...nodeGyp.argsPrefix, "rebuild"], {
   stdio: "inherit",
   env,
 });

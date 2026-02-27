@@ -16,6 +16,11 @@
     "./index.cjs": "./dist/index.js",
     "./index.mjs": "./dist/index.js",
     "./types": "./dist/types/index.d.ts",
+    "./browser": {
+      "types": "./dist/types/browser.d.ts",
+      "import": "./dist/browser.js",
+      "require": "./dist/browser.js"
+    },
     "./legacy/coherence": {
       "types": "./dist/types/legacy/coherence.d.ts",
       "import": "./dist/legacy/coherence.js",
@@ -36,10 +41,6 @@
     "node": ">=20.0.0",
     "pnpm": ">=10.0.0"
   },
-  "workspaces": [
-    "src/console",
-    "bench-visualization"
-  ],
   "packageManager": "pnpm@10.24.0",
   "repository": {
     "type": "git",
@@ -64,6 +65,8 @@
     "mathplotlib": "python scripts/plot_bench.py /data/*.csv",
     "rebuild:binds": "node -e \"const fs=require('fs');const path=require('path');fs.mkdirSync(path.join(__dirname,'dist','native'),{recursive:true});for (const name of ['qwormhole.node','qwormhole_lws.node']){const src=path.join(__dirname,'build','Release',name);const dst=path.join(__dirname,'dist','native',name);if(fs.existsSync(src)){fs.copyFileSync(src,dst);console.log('[qwormhole] copied',src,'->',dst);}}\"",
     "rebuild": "node ./scripts/install-native.js && pnpm run rebuild:binds && pnpm build",
+    "rebuild:native-only": "node -e \"process.env.QWORMHOLE_NATIVE_FORCE_REBUILD='1'; import('./scripts/install-native.js')\" && pnpm run rebuild:binds",
+    "rebuild:force-native": "node -e \"process.env.QWORMHOLE_NATIVE_FORCE_REBUILD='1'; import('./scripts/install-native.js')\" && pnpm run rebuild:binds && pnpm build",
     "build:tsc": "tsc --p tsconfig.json",
     "build:rollup": "rollup -c",
     "build": "vite build && pnpm run build:tsc && pnpm run build:decl && pnpm run rebuild:binds",
@@ -84,6 +87,8 @@
     "bench:sweep": "node scripts/run-bench-sweep.js",
     "bench:sweep:ts": "node scripts/run-bench-sweep-ts.js",
     "bench:qw": "pnpm run bench -- --mode=all --diagnostics",
+    "bench:core": "pnpm run bench -- --mode=core --diagnostics",
+    "bench:core:report": "node scripts/run-bench-core-report.js",
     "native:stage-prebuilds": "node ./scripts/stage-prebuilds.cjs",
     "lint": "tsc -p tsconfig.lint.json --noEmit",
     "lint:eslint": "eslint .",
@@ -122,25 +127,26 @@
     "arrowParens": "avoid"
   },
   "devDependencies": {
-    "prebuildify": "6.0.1",
-    "@types/ws": "^8.18.1",
     "@arethetypeswrong/cli": "^0.17.3",
     "@eslint/js": "^9.39.1",
     "@types/bindings": "^1.5.5",
     "@types/multicast-dns": "7.2.4",
     "@types/node": "^24.10.1",
+    "@types/ws": "^8.18.1",
     "@vitest/coverage-v8": "^4.0.15",
     "eslint": "^9.39.1",
     "fast-check": "^4.3.0",
     "node-addon-api": "8.5.0",
-    "node-gyp": "^12.1.0",
+    "node-gyp": "12.2.0",
     "node-gyp-build": "4.8.4",
+    "prebuildify": "6.0.1",
     "prettier": "^3.5.3",
     "ts-node": "^10.9.2",
     "tsup": "^8.5.1",
     "tsx": "^4.16.5",
     "typescript": "^5.9.3",
     "typescript-eslint": "^8.46.4",
+    "uWebSockets.js": "github:uNetworking/uWebSockets.js#v20.58.0",
     "vite": "7.2.4",
     "vitest": "^4.0.9",
     "zod": "^4.1.13"
@@ -152,11 +158,12 @@
     "@rollup/rollup-linux-x64-gnu": "4.53.3"
   },
   "dependencies": {
+    "@sigilnet/coherence": "link:../coherence",
     "@tensorflow/tfjs": "4.22.0",
-    "multicast-dns": "7.2.5",
-    "multicast-dns-service-types": "1.1.0",
     "bindings": "^1.5.0",
     "cbor": "^10.0.11",
+    "multicast-dns": "7.2.5",
+    "multicast-dns-service-types": "1.1.0",
     "tweetnacl": "^1.0.3",
     "tweetnacl-util": "^0.15.1",
     "ws": "^8.18.3"

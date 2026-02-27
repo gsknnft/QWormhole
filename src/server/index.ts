@@ -49,7 +49,9 @@ const randomId = () =>
 type ManagedConnection = QWormholeServerConnection & {
   queue: PriorityQueue<Buffer>;
   limiter?: TokenBucket;
+  draining: boolean;
   handshakePending: boolean;
+  flushInFlight?: Promise<void>;
   outboundFramer?: BatchFramer;
   flowController?: FlowController;
   coherenceAdapter?: CoherenceAdapterHandle;
@@ -58,6 +60,8 @@ type ManagedConnection = QWormholeServerConnection & {
   handshakeMessageDelivered: boolean;
   tuneFramer?: () => void;
 };
+
+const DRAIN_BATCH_SIZE = 64;
 
 type TrustSnapshotReason = "close" | "error" | "disconnect";
 
@@ -109,6 +113,7 @@ export class QWormholeServer<TMessage = Buffer> extends TypedEventEmitter<
     backpressureEvents: 0,
     drainEvents: 0,
   };
+  private telemetryPublishScheduled = false;
 
   constructor(options: QWormholeServerOptions<TMessage>) {
     super();
@@ -467,7 +472,9 @@ export class QWormholeServer<TMessage = Buffer> extends TypedEventEmitter<
       end: () => socket.end(),
       destroy: () => socket.destroy(),
       backpressured: false,
+      draining: false,
       queue: new PriorityQueue<Buffer>(),
+      flushInFlight: undefined,
       limiter: this.options.rateLimitBytesPerSec
         ? new TokenBucket(
             this.options.rateLimitBytesPerSec,
@@ -525,6 +532,34 @@ export class QWormholeServer<TMessage = Buffer> extends TypedEventEmitter<
     const priority = options?.priority ?? 0;
     connection.queue.enqueue(serialized, priority);
 
+    if (connection.draining) {
+      if (connection.flushInFlight) {
+        await connection.flushInFlight;
+      }
+      return;
+    }
+
+    connection.draining = true;
+    connection.flushInFlight = this.drainConnectionQueue(connection).finally(() => {
+      connection.draining = false;
+      connection.flushInFlight = undefined;
+      if (connection.queue.length > 0 && !connection.socket.destroyed) {
+        connection.draining = true;
+        connection.flushInFlight = this.drainConnectionQueue(connection).finally(
+          () => {
+            connection.draining = false;
+            connection.flushInFlight = undefined;
+          },
+        );
+      }
+    });
+
+    await connection.flushInFlight;
+  }
+
+  private async drainConnectionQueue(
+    connection: ManagedConnection,
+  ): Promise<void> {
     const usingFlowController = Boolean(
       connection.outboundFramer && connection.flowController,
     );
@@ -532,27 +567,66 @@ export class QWormholeServer<TMessage = Buffer> extends TypedEventEmitter<
     if (connection.backpressured && !usingFlowController) return;
 
     while (connection.queue.length > 0) {
-      const next = connection.queue.dequeue();
-      if (!next) break;
-      const estimatedBytes =
-        this.options.framing === "length-prefixed"
-          ? next.length + 4
-          : next.length;
+      const batch = connection.queue.dequeueMany(DRAIN_BATCH_SIZE);
+      if (batch.length === 0) break;
+      for (const next of batch) {
+        const estimatedBytes =
+          this.options.framing === "length-prefixed"
+            ? next.length + 4
+            : next.length;
 
-      if (connection.limiter) {
-        const wait = connection.limiter.reserve(estimatedBytes);
-        if (wait > 0) {
-          await delay(wait);
+        if (connection.limiter) {
+          const wait = connection.limiter.reserve(estimatedBytes);
+          if (wait > 0) {
+            await delay(wait);
+          }
         }
-      }
 
-      if (
-        usingFlowController &&
-        connection.outboundFramer &&
-        connection.flowController
-      ) {
-        const projectedBuffer =
-          connection.socket.writableLength + estimatedBytes;
+        if (
+          usingFlowController &&
+          connection.outboundFramer &&
+          connection.flowController
+        ) {
+          const projectedBuffer =
+            connection.socket.writableLength + estimatedBytes;
+          if (
+            this.options.maxBackpressureBytes &&
+            projectedBuffer > this.options.maxBackpressureBytes
+          ) {
+            const err = new QWormholeError(
+              "E_BACKPRESSURE",
+              "Backpressure limit exceeded",
+            );
+            connection.socket.destroy(err);
+            throw err;
+          }
+          const pending = connection.flowController.enqueue(
+            next,
+            connection.outboundFramer,
+          );
+          if (pending) {
+            try {
+              await pending;
+            } catch (err) {
+              this.emit(
+                "error",
+                err instanceof Error ? err : new Error(String(err)),
+              );
+            }
+          }
+          continue;
+        }
+        if (connection.outboundFramer) {
+          connection.outboundFramer.encodeToBatch(next);
+          continue;
+        }
+
+        const framed =
+          this.options.framing === "length-prefixed"
+            ? this.encoder.encode(next)
+            : next;
+
+        const projectedBuffer = connection.socket.writableLength + framed.length;
         if (
           this.options.maxBackpressureBytes &&
           projectedBuffer > this.options.maxBackpressureBytes
@@ -564,84 +638,47 @@ export class QWormholeServer<TMessage = Buffer> extends TypedEventEmitter<
           connection.socket.destroy(err);
           throw err;
         }
-        const pending = connection.flowController.enqueue(
-          next,
-          connection.outboundFramer,
-        );
-        if (pending) {
-          try {
-            await pending;
-          } catch (err) {
-            this.emit(
-              "error",
-              err instanceof Error ? err : new Error(String(err)),
-            );
+
+        const canWrite = connection.socket.write(framed);
+        this.telemetry.bytesOut += framed.length;
+        this.publishTelemetry();
+        if (canWrite) {
+          if (connection.backpressured) {
+            connection.backpressured = false;
+            this.emit("drain", { client: connection });
+            this.telemetry.drainEvents += 1;
+            this.publishTelemetry();
           }
+          continue;
         }
-        continue;
+
+        connection.backpressured = true;
+        this.telemetry.backpressureEvents += 1;
+        this.publishTelemetry();
+        this.emit("backpressure", {
+          client: connection,
+          queuedBytes: connection.socket.writableLength,
+          threshold:
+            this.options.maxBackpressureBytes ?? Number.POSITIVE_INFINITY,
+        });
+
+        await new Promise<void>((resolve, reject) => {
+          const onDrain = () => {
+            connection.socket.off("error", onError);
+            connection.backpressured = false;
+            this.emit("drain", { client: connection });
+            this.telemetry.drainEvents += 1;
+            this.publishTelemetry();
+            resolve();
+          };
+          const onError = (err: Error) => {
+            connection.socket.off("drain", onDrain);
+            reject(err);
+          };
+          connection.socket.once("drain", onDrain);
+          connection.socket.once("error", onError);
+        });
       }
-      if (connection.outboundFramer) {
-        connection.outboundFramer.encodeToBatch(next);
-        continue;
-      }
-
-      const framed =
-        this.options.framing === "length-prefixed"
-          ? this.encoder.encode(next)
-          : next;
-
-      const projectedBuffer = connection.socket.writableLength + framed.length;
-      if (
-        this.options.maxBackpressureBytes &&
-        projectedBuffer > this.options.maxBackpressureBytes
-      ) {
-        const err = new QWormholeError(
-          "E_BACKPRESSURE",
-          "Backpressure limit exceeded",
-        );
-        connection.socket.destroy(err);
-        throw err;
-      }
-
-      const canWrite = connection.socket.write(framed);
-      this.telemetry.bytesOut += framed.length;
-      this.publishTelemetry();
-      if (canWrite) {
-        if (connection.backpressured) {
-          connection.backpressured = false;
-          this.emit("drain", { client: connection });
-          this.telemetry.drainEvents += 1;
-          this.publishTelemetry();
-        }
-        continue;
-      }
-
-      connection.backpressured = true;
-      this.telemetry.backpressureEvents += 1;
-      this.publishTelemetry();
-      this.emit("backpressure", {
-        client: connection,
-        queuedBytes: connection.socket.writableLength,
-        threshold:
-          this.options.maxBackpressureBytes ?? Number.POSITIVE_INFINITY,
-      });
-
-      await new Promise<void>((resolve, reject) => {
-        const onDrain = () => {
-          connection.socket.off("error", onError);
-          connection.backpressured = false;
-          this.emit("drain", { client: connection });
-          this.telemetry.drainEvents += 1;
-          this.publishTelemetry();
-          resolve();
-        };
-        const onError = (err: Error) => {
-          connection.socket.off("drain", onDrain);
-          reject(err);
-        };
-        connection.socket.once("drain", onDrain);
-        connection.socket.once("error", onError);
-      });
     }
 
     if (
@@ -951,7 +988,13 @@ export class QWormholeServer<TMessage = Buffer> extends TypedEventEmitter<
   }
 
   private publishTelemetry(): void {
-    this.options.onTelemetry?.(this.telemetry);
+    if (!this.options.onTelemetry) return;
+    if (this.telemetryPublishScheduled) return;
+    this.telemetryPublishScheduled = true;
+    queueMicrotask(() => {
+      this.telemetryPublishScheduled = false;
+      this.options.onTelemetry?.(this.telemetry);
+    });
   }
 
   private publishTrustSnapshot(

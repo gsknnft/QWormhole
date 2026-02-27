@@ -39,6 +39,8 @@ const DEFAULT_RECONNECT: QWormholeReconnectOptions = {
   maxAttempts: Number.POSITIVE_INFINITY,
 };
 
+const DRAIN_BATCH_SIZE = 64;
+
 type InternalOptions<TMessage> = Omit<
   QWormholeClientOptions<TMessage>,
   "reconnect"
@@ -165,19 +167,31 @@ export class QWormholeClient<TMessage = Buffer> extends TypedEventEmitter<
 
       const onConnect = () => {
         if (settled) return;
-        settled = true;
-        this.clearConnectTimer();
-        this.reconnectAttempts = 0;
+        const finalizeReady = () => {
+          if (settled) return;
+          settled = true;
+          this.clearConnectTimer();
+          this.reconnectAttempts = 0;
+          this.emit("connect", undefined as never);
+          this.emit("ready", undefined as never);
+          this.startHeartbeat();
+          resolve();
+        };
         if (this.socket) {
           this.attachOutboundFramer(this.socket as net.Socket);
         }
         if (this.options.protocolVersion) {
-          this.enqueueHandshake();
+          void this.enqueueHandshake()
+            .then(() => finalizeReady())
+            .catch(err => {
+              if (settled) return;
+              settled = true;
+              this.clearConnectTimer();
+              reject(err instanceof Error ? err : new Error(String(err)));
+            });
+          return;
         }
-        this.emit("connect", undefined as never);
-        this.emit("ready", undefined as never);
-        this.startHeartbeat();
-        resolve();
+        finalizeReady();
       };
 
       const socket = this.options.socketFactory
@@ -205,8 +219,7 @@ export class QWormholeClient<TMessage = Buffer> extends TypedEventEmitter<
                 requestCert: this.options.tls.requestCert,
                 rejectUnauthorized:
                   this.options.tls.rejectUnauthorized ??
-                  this.options.tls.requestCert ??
-                  false,
+                  true,
               },
               onConnect,
             )
@@ -535,63 +548,66 @@ export class QWormholeClient<TMessage = Buffer> extends TypedEventEmitter<
     this.draining = true;
     while (this.queue.length > 0) {
       if (!this.socket || this.socket.destroyed) break;
-      const next = this.queue.dequeue();
-      if (!next) break;
-      if (this.limiter) {
-        const estimatedBytes =
-          this.options.framing === "length-prefixed"
-            ? next.length + 4
-            : next.length;
-        const wait = this.limiter.reserve(estimatedBytes);
-        if (wait > 0) {
-          await delay(wait);
-        }
-      }
-      if (this.outboundFramer && this.flowController) {
-        const pending = this.flowController.enqueue(next, this.outboundFramer);
-        if (pending) {
-          try {
-            await pending;
-          } catch (err) {
-            this.emit(
-              "error",
-              err instanceof Error ? err : new Error(String(err)),
-            );
+      const batch = this.queue.dequeueMany(DRAIN_BATCH_SIZE);
+      if (batch.length === 0) break;
+      for (const next of batch) {
+        if (!this.socket || this.socket.destroyed) break;
+        if (this.limiter) {
+          const estimatedBytes =
+            this.options.framing === "length-prefixed"
+              ? next.length + 4
+              : next.length;
+          const wait = this.limiter.reserve(estimatedBytes);
+          if (wait > 0) {
+            await delay(wait);
           }
         }
-        continue;
-      }
-      if (this.outboundFramer) {
-        this.outboundFramer.encodeToBatch(next);
-        continue;
-      }
-      const framed =
-        this.options.framing === "length-prefixed" && this.framer
-          ? this.framer.encode(next)
-          : next;
-      const wrote = this.socket.write(framed);
-      if (!wrote) {
-        await new Promise<void>((resolve, reject) => {
-          const onDrain = () => {
-            const sock = this.socket as unknown as {
-              off?: (event: string, cb: (...args: any[]) => void) => void;
+        if (this.outboundFramer && this.flowController) {
+          const pending = this.flowController.enqueue(next, this.outboundFramer);
+          if (pending) {
+            try {
+              await pending;
+            } catch (err) {
+              this.emit(
+                "error",
+                err instanceof Error ? err : new Error(String(err)),
+              );
+            }
+          }
+          continue;
+        }
+        if (this.outboundFramer) {
+          this.outboundFramer.encodeToBatch(next);
+          continue;
+        }
+        const framed =
+          this.options.framing === "length-prefixed" && this.framer
+            ? this.framer.encode(next)
+            : next;
+        const wrote = this.socket.write(framed);
+        if (!wrote) {
+          await new Promise<void>((resolve, reject) => {
+            const onDrain = () => {
+              const sock = this.socket as unknown as {
+                off?: (event: string, cb: (...args: any[]) => void) => void;
+              };
+              sock?.off?.("error", onError);
+              resolve();
             };
-            sock?.off?.("error", onError);
-            resolve();
-          };
-          const onError = (err: Error) => {
-            const sock = this.socket as unknown as {
-              off?: (event: string, cb: (...args: any[]) => void) => void;
+            const onError = (err: Error) => {
+              const sock = this.socket as unknown as {
+                off?: (event: string, cb: (...args: any[]) => void) => void;
+              };
+              sock?.off?.("drain", onDrain);
+              reject(err);
             };
-            sock?.off?.("drain", onDrain);
-            reject(err);
-          };
-          const sock = this.socket as unknown as {
-            once?: (event: string, cb: (...args: any[]) => void) => void;
-          };
-          sock?.once?.("drain", onDrain);
-          sock?.once?.("error", onError);
-        });
+            const sock = this.socket as unknown as {
+              once?: (event: string, cb: (...args: any[]) => void) => void;
+            };
+            sock?.once?.("drain", onDrain);
+            sock?.once?.("error", onError);
+          });
+        }
       }
     }
     if (this.outboundFramer && this.flowController) {

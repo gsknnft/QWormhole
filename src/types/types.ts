@@ -6,6 +6,7 @@ import type {
   CoherenceMode,
   CouplingParams,
 } from "../coherence/types";
+import type { TransportGovernanceSignals } from "../core/transport-governance-policy";
 import type { FlowControllerDiagnostics } from "../core/flow-controller";
 import type { BatchFramerStats } from "../core/batch-framer";
 import type { PriorityQueueStats } from "../core/qos";
@@ -121,6 +122,7 @@ export interface QWormholeSocketLike {
   destroyed?: boolean;
   writableLength?: number;
   write(data: Buffer): boolean;
+  writev?(buffers: Array<{ chunk: Buffer }>): boolean;
   end(): void;
   destroy(err?: Error): void;
   setKeepAlive?(enable?: boolean, delay?: number): void;
@@ -157,6 +159,7 @@ export type QWormholeSocketFactory = (
 export interface NativeTcpClient {
   connect(opts: NativeSocketOptions | { host: string; port: number }): void;
   send(data: string | Buffer): void; // queues and flushes via LWS writable callbacks
+  sendMany?(data: Array<string | Buffer>): number | void;
   recv(maxBytes?: number): Buffer; // drains from the recv ring buffer; empty Buffer if none
   isConnected?(): boolean;
   supportsEventStream?(): boolean;
@@ -273,6 +276,7 @@ export interface QWormholeCommonOptions<TMessage = unknown> {
     rttSampler?: () => number | undefined;
     eluSampler?: () => number | undefined;
     minUpdateMs?: number;
+    governanceSignals?: () => TransportGovernanceSignals | undefined;
   };
 }
 
