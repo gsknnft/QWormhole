@@ -23,6 +23,8 @@ export const coherenceStateSchema = z.object({
   confidence: z.number().optional(),
 });
 
+export const coherenceVector3Schema = z.tuple([z.number(), z.number(), z.number()]);
+
 export const couplingParamsSchema = z.object({
   batchSize: z.number(),
   concurrency: z.number(),
@@ -438,6 +440,9 @@ export const signalTrialTelemetrySchema = z
     profile: signalTrialProfileSchema.optional(),
     controlMode: signalTrialControlModeSchema.optional(),
     state: coherenceStateSchema,
+    history: z.array(coherenceVector3Schema).optional(),
+    trajectory: z.array(coherenceVector3Schema).optional(),
+    trace: z.array(coherenceVector3Schema).optional(),
     coupling: couplingParamsSchema.optional(),
     sample: fieldSampleSchema.optional(),
     transport: transportMetricsSchema.optional(),

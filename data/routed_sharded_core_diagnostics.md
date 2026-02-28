@@ -1,15 +1,15 @@
 # QWormhole Routed Sharded Bench Report
 
-Generated: 2026-02-28T14:04:18.857Z
+Generated: 2026-02-28T14:19:39.401Z
 
 ## Environment
 
 ```json
 {
-  "QWORMHOLE_BENCH_MESSAGES": "320000",
-  "QWORMHOLE_BENCH_CLIENTS": "64",
-  "QWORMHOLE_BENCH_WARMUP_MESSAGES": "16000",
-  "QWORMHOLE_BENCH_SHARD_WORKERS": "8"
+  "QWORMHOLE_BENCH_MESSAGES": "160000",
+  "QWORMHOLE_BENCH_CLIENTS": "16",
+  "QWORMHOLE_BENCH_WARMUP_MESSAGES": "8000",
+  "QWORMHOLE_BENCH_SHARD_WORKERS": "4"
 }
 ```
 
@@ -17,21 +17,17 @@ Generated: 2026-02-28T14:04:18.857Z
 
 | Scenario | Workers | Clients | Messages | Duration (ms) | Received | Bytes | Msg/s | MB/s | Status |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| ts-server+ts | 1 | 64 | 320000 | 2520.49 | 320000 | 327680000 | 126959 | 123.98 | ok |
-| routed-sharded-ts-server+ts(8w) | 8 | 64 | 320000 | 3040.66 | 320000 | 327680000 | 105240 | 102.77 | ok |
+| ts-server+ts | 1 | 16 | 160000 | 1578.29 | 160000 | 163840000 | 101375 | 99.00 | ok |
+| routed-sharded-ts-server+ts(4w) | 4 | 16 | 160000 | 1481.62 | 160000 | 163840000 | 107990 | 105.46 | ok |
 
-## routed-sharded-ts-server+ts(8w) Workers
+## routed-sharded-ts-server+ts(4w) Workers
 
 | Shard | Process | Listening | Connections | Messages | Bytes | Errors | Port |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| 0 | 7748 | yes | 8 | 42000 | 43008000 | 0 | 60628 |
-| 1 | 15156 | yes | 8 | 42000 | 43008000 | 0 | 60632 |
-| 2 | 17476 | yes | 8 | 42000 | 43008000 | 0 | 60630 |
-| 3 | 19656 | yes | 8 | 42000 | 43008000 | 0 | 60631 |
-| 4 | 12128 | yes | 8 | 42000 | 43008000 | 0 | 60629 |
-| 5 | 19780 | yes | 8 | 42000 | 43008000 | 0 | 60635 |
-| 6 | 17372 | yes | 8 | 42000 | 43008000 | 0 | 60634 |
-| 7 | 1988 | yes | 8 | 42000 | 43008000 | 0 | 60633 |
+| 0 | 12476 | yes | 4 | 42000 | 43008000 | 0 | 64511 |
+| 1 | 21444 | yes | 4 | 42000 | 43008000 | 0 | 64512 |
+| 2 | 5220 | yes | 4 | 42000 | 43008000 | 0 | 64513 |
+| 3 | 7488 | yes | 4 | 42000 | 43008000 | 0 | 64514 |
 
 ## Raw JSON
 
@@ -40,149 +36,93 @@ Generated: 2026-02-28T14:04:18.857Z
   {
     "id": "ts-server+ts",
     "workers": 1,
-    "clients": 64,
-    "messages": 320000,
-    "durationMs": 2520.4899000000005,
-    "messagesReceived": 320000,
-    "bytesReceived": 327680000,
-    "msgsPerSec": 126959.4454633601,
-    "mbPerSec": 123.9838334603126
+    "clients": 16,
+    "messages": 160000,
+    "durationMs": 1578.2945000000002,
+    "messagesReceived": 160000,
+    "bytesReceived": 163840000,
+    "msgsPerSec": 101375.2503097489,
+    "mbPerSec": 98.99926788061416
   },
   {
-    "id": "routed-sharded-ts-server+ts(8w)",
-    "workers": 8,
-    "clients": 64,
-    "messages": 320000,
-    "durationMs": 3040.6615999999995,
-    "messagesReceived": 320000,
-    "bytesReceived": 327680000,
-    "msgsPerSec": 105240.25429202647,
-    "mbPerSec": 102.7736858320571,
+    "id": "routed-sharded-ts-server+ts(4w)",
+    "workers": 4,
+    "clients": 16,
+    "messages": 160000,
+    "durationMs": 1481.6165999999994,
+    "messagesReceived": 160000,
+    "bytesReceived": 163840000,
+    "msgsPerSec": 107990.15075830014,
+    "mbPerSec": 105.45913159990248,
     "workerStats": {
-      "workers": 8,
+      "workers": 4,
       "listening": true,
-      "connections": 64,
-      "acceptedConnections": 64,
-      "proxiedConnections": 64,
-      "messagesIn": 336000,
-      "bytesIn": 344064000,
+      "connections": 16,
+      "acceptedConnections": 16,
+      "proxiedConnections": 16,
+      "messagesIn": 168000,
+      "bytesIn": 172032000,
       "errors": 0,
       "address": {
         "address": "127.0.0.1",
         "family": "IPv4",
-        "port": 60636
+        "port": 64515
       },
       "byWorker": [
         {
           "shardIndex": 0,
-          "processId": 7748,
+          "processId": 12476,
           "listening": true,
-          "connections": 8,
+          "connections": 4,
           "messagesIn": 42000,
           "bytesIn": 43008000,
           "errors": 0,
           "address": {
             "address": "127.0.0.1",
             "family": "IPv4",
-            "port": 60628
+            "port": 64511
           }
         },
         {
           "shardIndex": 1,
-          "processId": 15156,
+          "processId": 21444,
           "listening": true,
-          "connections": 8,
+          "connections": 4,
           "messagesIn": 42000,
           "bytesIn": 43008000,
           "errors": 0,
           "address": {
             "address": "127.0.0.1",
             "family": "IPv4",
-            "port": 60632
+            "port": 64512
           }
         },
         {
           "shardIndex": 2,
-          "processId": 17476,
+          "processId": 5220,
           "listening": true,
-          "connections": 8,
+          "connections": 4,
           "messagesIn": 42000,
           "bytesIn": 43008000,
           "errors": 0,
           "address": {
             "address": "127.0.0.1",
             "family": "IPv4",
-            "port": 60630
+            "port": 64513
           }
         },
         {
           "shardIndex": 3,
-          "processId": 19656,
+          "processId": 7488,
           "listening": true,
-          "connections": 8,
+          "connections": 4,
           "messagesIn": 42000,
           "bytesIn": 43008000,
           "errors": 0,
           "address": {
             "address": "127.0.0.1",
             "family": "IPv4",
-            "port": 60631
-          }
-        },
-        {
-          "shardIndex": 4,
-          "processId": 12128,
-          "listening": true,
-          "connections": 8,
-          "messagesIn": 42000,
-          "bytesIn": 43008000,
-          "errors": 0,
-          "address": {
-            "address": "127.0.0.1",
-            "family": "IPv4",
-            "port": 60629
-          }
-        },
-        {
-          "shardIndex": 5,
-          "processId": 19780,
-          "listening": true,
-          "connections": 8,
-          "messagesIn": 42000,
-          "bytesIn": 43008000,
-          "errors": 0,
-          "address": {
-            "address": "127.0.0.1",
-            "family": "IPv4",
-            "port": 60635
-          }
-        },
-        {
-          "shardIndex": 6,
-          "processId": 17372,
-          "listening": true,
-          "connections": 8,
-          "messagesIn": 42000,
-          "bytesIn": 43008000,
-          "errors": 0,
-          "address": {
-            "address": "127.0.0.1",
-            "family": "IPv4",
-            "port": 60634
-          }
-        },
-        {
-          "shardIndex": 7,
-          "processId": 1988,
-          "listening": true,
-          "connections": 8,
-          "messagesIn": 42000,
-          "bytesIn": 43008000,
-          "errors": 0,
-          "address": {
-            "address": "127.0.0.1",
-            "family": "IPv4",
-            "port": 60633
+            "port": 64514
           }
         }
       ]

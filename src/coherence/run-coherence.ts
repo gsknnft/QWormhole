@@ -1408,6 +1408,12 @@ export function startSignalTrialBroadcast(options: SignalTrialBroadcastOptions =
   let governanceObservations: StructuralPersistenceObservation[] = [];
   let governancePosterior: Record<string, number> | undefined;
   let governanceTrend: GovernanceTrendPoint[] = [];
+  const recentHistory = (
+    limit = 64,
+  ): Array<[number, number, number]> =>
+    stabilityBuffer
+      .slice(-Math.max(1, limit))
+      .map(({ state: sampleState }) => [sampleState.M, sampleState.V, sampleState.R]);
   let effects: Effect[] = [];
   let loadEffects: LoadEffect[] = [];
   let queueDepth = { current: baseSample.queueDepth };
@@ -2090,9 +2096,7 @@ export function startSignalTrialBroadcast(options: SignalTrialBroadcastOptions =
         governanceConfig.pointOfNoReturnRatio,
       );
 
-      const stateTrajectory = stabilityBuffer
-        .slice(-32)
-        .map(({ state: sampleState }) => [sampleState.M, sampleState.V, sampleState.R] as const);
+      const stateTrajectory = recentHistory(32);
       const coherenceDensity =
         computeSpectralNegentropyIndexFn && stateTrajectory.length >= 8
           ? computeSpectralNegentropyIndexFn(stateTrajectory).score
@@ -2352,6 +2356,12 @@ export function startSignalTrialBroadcast(options: SignalTrialBroadcastOptions =
       profile,
       controlMode,
       state,
+      ...(stabilityBuffer.length
+        ? {
+            history: recentHistory(64),
+            trace: recentHistory(32),
+          }
+        : {}),
       coupling,
       sample,
       derived,
