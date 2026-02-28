@@ -8,6 +8,7 @@ export * from './tunnel';
 export * from './session';
 export * from './server';
 export * from './schema';
+export * from './sharding';
 export * from './http';
 export * from './client';
 export * from './transports';

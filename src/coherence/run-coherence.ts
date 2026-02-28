@@ -291,6 +291,74 @@ type EvaluateStructuralPersistenceFn = (
   gatePassed: boolean;
 };
 
+type GovernanceTrendPoint = {
+  ts: number;
+  gamma: number;
+  driftRate: number;
+  jValue?: number;
+  deltaHealth?: number;
+  deltaLambdaMin?: number;
+  deltaViolationRate?: number;
+  deltaFlowMean?: number;
+  deltaAttractorSim?: number;
+  deltaDimension?: number;
+  boundExceeded: boolean;
+  pointOfNoReturn?: boolean;
+  dimensionEstimate?: number | null;
+  dimensionBand?:
+    | "fixed-point"
+    | "limit-cycle"
+    | "torus"
+    | "fractal"
+    | "diffusive"
+    | "undetermined";
+  flowAlignment?: number | null;
+  lambdaMin?: number;
+  attractorSimilarity?: number;
+  bayesConfidence: number;
+  bayesEntropy: number;
+  bayesRegime:
+    | "stable-gradient"
+    | "stable-orbit"
+    | "chaotic"
+    | "turbulent"
+    | "unstable"
+    | "model-mismatch";
+  deterministicRegime?:
+    | "stable-gradient"
+    | "stable-orbit"
+    | "chaotic"
+    | "turbulent"
+    | "unstable"
+    | "model-mismatch";
+};
+
+type UniformPosteriorFn = () => Record<string, number>;
+type UpdateRegimePosteriorFn = (
+  previous: Record<string, number> | undefined,
+  observation: Record<string, unknown>,
+  options?: { stayProbability?: number; deterministicBoost?: number },
+) => Record<string, number>;
+type PosteriorArgmaxFn = (posterior: Record<string, number>) => string;
+type PosteriorEntropyFn = (posterior: Record<string, number>) => number;
+type PosteriorConfidenceFn = (posterior: Record<string, number>) => number;
+type EstimateCorrelationDimensionFn = (
+  trace: ArrayLike<readonly number[]>,
+  options?: Record<string, unknown>,
+) => { dimension?: number | null };
+type ClassifyDimensionBandFn = (dimension?: number | null) => string;
+type AnalyzeLinchpinFn = (
+  observations: Array<Record<string, unknown>>,
+  options?: Record<string, unknown>,
+) => {
+  best?: Record<string, unknown> | null;
+  ranking?: Array<Record<string, unknown>>;
+  transitionRate?: number;
+  transitionCount?: number;
+  sampleCount?: number;
+  notes?: string[];
+};
+
 let compareToAttractorsFn: CompareToAttractorsFn | null = null;
 let evaluateGeometricRegimeFn: EvaluateGeometricRegimeFn | null = null;
 let featuresFromFrameFn: FeaturesFromFrameFn | null = null;
@@ -298,6 +366,14 @@ let driftRateFn: DriftRateFn | null = null;
 let evaluateLorentzBarrierFn: EvaluateLorentzBarrierFn | null = null;
 let computeSpectralNegentropyIndexFn: ComputeSpectralNegentropyIndexFn | null = null;
 let evaluateStructuralPersistenceFn: EvaluateStructuralPersistenceFn | null = null;
+let uniformPosteriorFn: UniformPosteriorFn | null = null;
+let updateRegimePosteriorFn: UpdateRegimePosteriorFn | null = null;
+let posteriorArgmaxFn: PosteriorArgmaxFn | null = null;
+let posteriorEntropyFn: PosteriorEntropyFn | null = null;
+let posteriorConfidenceFn: PosteriorConfidenceFn | null = null;
+let estimateCorrelationDimensionFn: EstimateCorrelationDimensionFn | null = null;
+let classifyDimensionBandFn: ClassifyDimensionBandFn | null = null;
+let analyzeLinchpinFn: AnalyzeLinchpinFn | null = null;
 const compareToAttractorsLoad = (async () => {
   try {
     const modPath = "@sigilnet/coherence/browser";
@@ -309,6 +385,14 @@ const compareToAttractorsLoad = (async () => {
       evaluateLorentzBarrier?: EvaluateLorentzBarrierFn;
       computeSpectralNegentropyIndex?: ComputeSpectralNegentropyIndexFn;
       evaluateStructuralPersistence?: EvaluateStructuralPersistenceFn;
+      uniformPosterior?: UniformPosteriorFn;
+      updateRegimePosterior?: UpdateRegimePosteriorFn;
+      posteriorArgmax?: PosteriorArgmaxFn;
+      posteriorEntropy?: PosteriorEntropyFn;
+      posteriorConfidence?: PosteriorConfidenceFn;
+      estimateCorrelationDimension?: EstimateCorrelationDimensionFn;
+      classifyDimensionBand?: ClassifyDimensionBandFn;
+      analyzeLinchpin?: AnalyzeLinchpinFn;
     };
     if (typeof mod.compareToAttractors === "function") {
       compareToAttractorsFn = mod.compareToAttractors;
@@ -331,6 +415,30 @@ const compareToAttractorsLoad = (async () => {
     if (typeof mod.evaluateStructuralPersistence === "function") {
       evaluateStructuralPersistenceFn = mod.evaluateStructuralPersistence;
     }
+    if (typeof mod.uniformPosterior === "function") {
+      uniformPosteriorFn = mod.uniformPosterior;
+    }
+    if (typeof mod.updateRegimePosterior === "function") {
+      updateRegimePosteriorFn = mod.updateRegimePosterior;
+    }
+    if (typeof mod.posteriorArgmax === "function") {
+      posteriorArgmaxFn = mod.posteriorArgmax;
+    }
+    if (typeof mod.posteriorEntropy === "function") {
+      posteriorEntropyFn = mod.posteriorEntropy;
+    }
+    if (typeof mod.posteriorConfidence === "function") {
+      posteriorConfidenceFn = mod.posteriorConfidence;
+    }
+    if (typeof mod.estimateCorrelationDimension === "function") {
+      estimateCorrelationDimensionFn = mod.estimateCorrelationDimension;
+    }
+    if (typeof mod.classifyDimensionBand === "function") {
+      classifyDimensionBandFn = mod.classifyDimensionBand;
+    }
+    if (typeof mod.analyzeLinchpin === "function") {
+      analyzeLinchpinFn = mod.analyzeLinchpin;
+    }
   } catch {
     compareToAttractorsFn = null;
     evaluateGeometricRegimeFn = null;
@@ -339,6 +447,14 @@ const compareToAttractorsLoad = (async () => {
     evaluateLorentzBarrierFn = null;
     computeSpectralNegentropyIndexFn = null;
     evaluateStructuralPersistenceFn = null;
+    uniformPosteriorFn = null;
+    updateRegimePosteriorFn = null;
+    posteriorArgmaxFn = null;
+    posteriorEntropyFn = null;
+    posteriorConfidenceFn = null;
+    estimateCorrelationDimensionFn = null;
+    classifyDimensionBandFn = null;
+    analyzeLinchpinFn = null;
   }
 })();
 
@@ -1290,6 +1406,8 @@ export function startSignalTrialBroadcast(options: SignalTrialBroadcastOptions =
   let lastGovernanceFeatures: ReturnType<FeaturesFromFrameFn> | null = null;
   let lastGovernanceAt: number | null = null;
   let governanceObservations: StructuralPersistenceObservation[] = [];
+  let governancePosterior: Record<string, number> | undefined;
+  let governanceTrend: GovernanceTrendPoint[] = [];
   let effects: Effect[] = [];
   let loadEffects: LoadEffect[] = [];
   let queueDepth = { current: baseSample.queueDepth };
@@ -1535,6 +1653,8 @@ export function startSignalTrialBroadcast(options: SignalTrialBroadcastOptions =
       lastGovernanceFeatures = null;
       lastGovernanceAt = null;
       governanceObservations = [];
+      governancePosterior = undefined;
+      governanceTrend = [];
       effects = [];
     loadEffects = [];
     queueDepth = { current: baseSample.queueDepth };
@@ -1978,11 +2098,82 @@ export function startSignalTrialBroadcast(options: SignalTrialBroadcastOptions =
           ? computeSpectralNegentropyIndexFn(stateTrajectory).score
           : undefined;
 
+      const trace = stateTrajectory;
+      const dimensionEstimate =
+        estimateCorrelationDimensionFn && trace.length >= 32
+          ? estimateCorrelationDimensionFn(trace, {
+              embeddingDimension: 3,
+              minPoints: 32,
+              maxPoints: 96,
+              theilerWindow: 2,
+              radiusCount: 10,
+            })?.dimension ?? null
+          : null;
+      const dimensionBand = classifyDimensionBandFn
+        ? classifyDimensionBandFn(dimensionEstimate)
+        : undefined;
+      const dimensionDiagnostics = {
+        available: Number.isFinite(dimensionEstimate),
+        samples: trace.length,
+        minSamples: 32,
+        windowSamples: 96,
+        reason:
+          trace.length < 32
+            ? "insufficient_samples"
+            : Number.isFinite(dimensionEstimate)
+            ? "ok"
+            : "dimension_unavailable",
+        method: Number.isFinite(dimensionEstimate)
+          ? ("correlation" as const)
+          : undefined,
+      };
+
+      if (
+        updateRegimePosteriorFn &&
+        posteriorArgmaxFn &&
+        posteriorEntropyFn &&
+        posteriorConfidenceFn
+      ) {
+        governancePosterior = updateRegimePosteriorFn(
+          governancePosterior ?? (uniformPosteriorFn ? uniformPosteriorFn() : undefined),
+          {
+            health: geometryTelemetry?.health ?? 0,
+            lambdaMin: geometryTelemetry?.curvature.lambdaMin ?? 0,
+            violationRate: geometryTelemetry?.stability.violationRate ?? 0,
+            flowMeanCos:
+              attractorComparisonSummary?.diagnostics.flowAlignment ?? undefined,
+            flowAbsCos:
+              attractorComparisonSummary?.diagnostics.flowAlignmentAbs ?? undefined,
+            attractorSimilarity: attractorComparisonSummary?.similarity ?? undefined,
+            jspaceResolved: jResolutionSummary?.resolved ?? undefined,
+            deterministicRegime: semanticRegime.regime,
+          },
+          {
+            stayProbability: barrier.gamma > 2 ? 0.95 : 0.88,
+            deterministicBoost: barrier.boundExceeded ? 1.5 : 3,
+          },
+        );
+      }
+
+      const bayesRegime =
+        governancePosterior && posteriorArgmaxFn
+          ? posteriorArgmaxFn(governancePosterior)
+          : semanticRegime.regime;
+      const bayesEntropy =
+        governancePosterior && posteriorEntropyFn
+          ? posteriorEntropyFn(governancePosterior)
+          : entropy;
+      const bayesConfidence =
+        governancePosterior && posteriorConfidenceFn
+          ? posteriorConfidenceFn(governancePosterior)
+          : semanticRegime.confidence;
+
       governanceObservations.push({
         ts: now,
         flowAlignment: attractorComparisonSummary?.diagnostics.flowAlignment ?? null,
         gamma: barrier.gamma,
         driftRate: driftRateValue,
+        posteriorEntropy: bayesEntropy,
         basinHold: jResolutionSummary?.basinHoldMet ?? null,
         coherenceDensity,
       });
@@ -1999,6 +2190,82 @@ export function startSignalTrialBroadcast(options: SignalTrialBroadcastOptions =
             })
           : undefined;
 
+      governanceTrend.push({
+        ts: now,
+        gamma: barrier.gamma,
+        driftRate: driftRateValue,
+        jValue: geometrySummary?.dotJ,
+        deltaHealth: undefined,
+        deltaLambdaMin: undefined,
+        deltaViolationRate: undefined,
+        deltaFlowMean: undefined,
+        deltaAttractorSim: undefined,
+        deltaDimension: undefined,
+        boundExceeded: barrier.boundExceeded,
+        pointOfNoReturn: barrier.pointOfNoReturn,
+        dimensionEstimate: Number.isFinite(dimensionEstimate) ? dimensionEstimate : null,
+        dimensionBand:
+          dimensionBand === "fixed-point" ||
+          dimensionBand === "limit-cycle" ||
+          dimensionBand === "torus" ||
+          dimensionBand === "fractal" ||
+          dimensionBand === "diffusive" ||
+          dimensionBand === "undetermined"
+            ? dimensionBand
+            : undefined,
+        flowAlignment: attractorComparisonSummary?.diagnostics.flowAlignment ?? null,
+        lambdaMin: geometryTelemetry?.curvature.lambdaMin,
+        attractorSimilarity: attractorComparisonSummary?.similarity,
+        bayesConfidence,
+        bayesEntropy,
+        bayesRegime:
+          bayesRegime === "stable-gradient" ||
+          bayesRegime === "stable-orbit" ||
+          bayesRegime === "chaotic" ||
+          bayesRegime === "turbulent" ||
+          bayesRegime === "unstable" ||
+          bayesRegime === "model-mismatch"
+            ? bayesRegime
+            : semanticRegime.regime,
+        deterministicRegime: semanticRegime.regime,
+      });
+      if (governanceTrend.length > 120) {
+        governanceTrend.splice(0, governanceTrend.length - 120);
+      }
+
+      const linchpin =
+        analyzeLinchpinFn && governanceTrend.length >= 24
+          ? analyzeLinchpinFn(
+              governanceTrend.slice(-100).map((item, idx, arr) => {
+                const prev = idx > 0 ? arr[idx - 1] : undefined;
+                const transition =
+                  idx > 0 &&
+                  ((item.deterministicRegime !== undefined &&
+                    prev?.deterministicRegime !== undefined &&
+                    item.deterministicRegime !== prev.deterministicRegime) ||
+                    (item.bayesRegime !== undefined &&
+                      prev?.bayesRegime !== undefined &&
+                      item.bayesRegime !== prev.bayesRegime) ||
+                    (prev !== undefined && Number(item.gamma) >= 1.35 && Number(prev.gamma) < 1.35));
+                return {
+                  ts: item.ts,
+                  regime: item.deterministicRegime ?? item.bayesRegime,
+                  transition,
+                  alignment: item.flowAlignment,
+                  alignmentDelta: item.deltaFlowMean,
+                  dimension: item.dimensionEstimate,
+                  dimensionDelta: item.deltaDimension,
+                  driftRate: item.driftRate,
+                  gamma: item.gamma,
+                  entropy: item.bayesEntropy,
+                  lambdaMin: item.lambdaMin,
+                  attractorSimilarity: item.attractorSimilarity,
+                };
+              }),
+              { maxLeadSteps: 4, minSamples: 24, minEvents: 1 },
+            )
+          : undefined;
+
       return {
         driftRate: driftRateValue,
         bound: governanceConfig.driftBound,
@@ -2013,6 +2280,50 @@ export function startSignalTrialBroadcast(options: SignalTrialBroadcastOptions =
         coherenceDensity,
         structuralPersistence: persistence?.score,
         metastability: persistence?.metastability,
+        dimensionEstimate: Number.isFinite(dimensionEstimate) ? dimensionEstimate : null,
+        dimensionBand:
+          dimensionBand === "fixed-point" ||
+          dimensionBand === "limit-cycle" ||
+          dimensionBand === "torus" ||
+          dimensionBand === "fractal" ||
+          dimensionBand === "diffusive" ||
+          dimensionBand === "undetermined"
+            ? dimensionBand
+            : undefined,
+        dimensionDiagnostics,
+        posterior: governancePosterior as any,
+        bayesConfidence,
+        bayesEntropy,
+        bayesRegime:
+          bayesRegime === "stable-gradient" ||
+          bayesRegime === "stable-orbit" ||
+          bayesRegime === "chaotic" ||
+          bayesRegime === "turbulent" ||
+          bayesRegime === "unstable" ||
+          bayesRegime === "model-mismatch"
+            ? bayesRegime
+            : undefined,
+        linchpin: linchpin
+          ? {
+              best: (linchpin.best as any) ?? null,
+              top: Array.isArray(linchpin.ranking)
+                ? (linchpin.ranking.slice(0, 3) as any[])
+                : undefined,
+              transitionRate:
+                typeof linchpin.transitionRate === "number"
+                  ? linchpin.transitionRate
+                  : undefined,
+              transitionCount:
+                typeof linchpin.transitionCount === "number"
+                  ? linchpin.transitionCount
+                  : undefined,
+              sampleCount:
+                typeof linchpin.sampleCount === "number"
+                  ? linchpin.sampleCount
+                  : undefined,
+              notes: Array.isArray(linchpin.notes) ? linchpin.notes : undefined,
+            }
+          : undefined,
       };
     })();
 
@@ -2048,6 +2359,7 @@ export function startSignalTrialBroadcast(options: SignalTrialBroadcastOptions =
       state_source: NCF_SOURCE,
       regime_source: semanticRegimeSource,
       ...(governanceTelemetry ? { governance: governanceTelemetry } : {}),
+      ...(governanceTrend.length ? { governanceTrend: governanceTrend } : {}),
       ...(transportPolicyTelemetry
         ? { transportPolicy: transportPolicyTelemetry }
         : {}),

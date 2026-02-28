@@ -174,6 +174,142 @@ export const signalTrialGovernanceSchema = z.object({
   coherenceDensity: z.number().min(0).max(1).optional(),
   structuralPersistence: z.number().min(0).max(1).optional(),
   metastability: z.number().min(0).max(1).optional(),
+  dimensionEstimate: z.number().nullable().optional(),
+  dimensionBand: z
+    .enum(["fixed-point", "limit-cycle", "torus", "fractal", "diffusive", "undetermined"])
+    .optional(),
+  dimensionDiagnostics: z
+    .object({
+      available: z.boolean(),
+      samples: z.number().int().nonnegative(),
+      minSamples: z.number().int().nonnegative(),
+      windowSamples: z.number().int().positive(),
+      reason: z.string().optional(),
+      method: z.enum(["correlation", "pca-fallback"]).optional(),
+    })
+    .optional(),
+  posterior: z
+    .record(
+      z.enum([
+        "stable-gradient",
+        "stable-orbit",
+        "chaotic",
+        "turbulent",
+        "unstable",
+        "model-mismatch",
+      ]),
+      z.number().min(0).max(1),
+    )
+    .optional(),
+  bayesConfidence: z.number().min(0).max(1).optional(),
+  bayesEntropy: z.number().min(0).max(1.792).optional(),
+  bayesRegime: z
+    .enum([
+      "stable-gradient",
+      "stable-orbit",
+      "chaotic",
+      "turbulent",
+      "unstable",
+      "model-mismatch",
+    ])
+    .optional(),
+  linchpin: z
+    .object({
+      best: z
+        .object({
+          metric: z.enum([
+            "alignment",
+            "alignmentDelta",
+            "dimension",
+            "dimensionDelta",
+            "driftRate",
+            "driftAccel",
+            "gamma",
+            "entropy",
+            "lambdaMin",
+            "attractorSimilarity",
+          ]),
+          influence: z.number(),
+          correlation: z.number(),
+          leadSteps: z.number().int().nonnegative(),
+          sampleCount: z.number().int().nonnegative(),
+          eventCount: z.number().int().nonnegative(),
+          direction: z.enum(["positive", "negative", "mixed"]),
+        })
+        .nullable()
+        .optional(),
+      top: z
+        .array(
+          z.object({
+            metric: z.enum([
+              "alignment",
+              "alignmentDelta",
+              "dimension",
+              "dimensionDelta",
+              "driftRate",
+              "driftAccel",
+              "gamma",
+              "entropy",
+              "lambdaMin",
+              "attractorSimilarity",
+            ]),
+            influence: z.number(),
+            correlation: z.number(),
+            leadSteps: z.number().int().nonnegative(),
+            sampleCount: z.number().int().nonnegative(),
+            eventCount: z.number().int().nonnegative(),
+            direction: z.enum(["positive", "negative", "mixed"]),
+          }),
+        )
+        .optional(),
+      transitionRate: z.number().min(0).max(1).optional(),
+      transitionCount: z.number().int().nonnegative().optional(),
+      sampleCount: z.number().int().nonnegative().optional(),
+      notes: z.array(z.string()).optional(),
+    })
+    .optional(),
+});
+
+export const signalTrialGovernanceTrendPointSchema = z.object({
+  ts: z.number().int().nonnegative(),
+  gamma: z.number().positive(),
+  driftRate: z.number().nonnegative(),
+  jValue: z.number().optional(),
+  deltaHealth: z.number().optional(),
+  deltaLambdaMin: z.number().optional(),
+  deltaViolationRate: z.number().optional(),
+  deltaFlowMean: z.number().optional(),
+  deltaAttractorSim: z.number().optional(),
+  deltaDimension: z.number().optional(),
+  boundExceeded: z.boolean(),
+  pointOfNoReturn: z.boolean().optional(),
+  dimensionEstimate: z.number().nullable().optional(),
+  dimensionBand: z
+    .enum(["fixed-point", "limit-cycle", "torus", "fractal", "diffusive", "undetermined"])
+    .optional(),
+  flowAlignment: z.number().nullable().optional(),
+  lambdaMin: z.number().optional(),
+  attractorSimilarity: z.number().optional(),
+  bayesConfidence: z.number().min(0).max(1),
+  bayesEntropy: z.number().min(0).max(1.792),
+  bayesRegime: z.enum([
+    "stable-gradient",
+    "stable-orbit",
+    "chaotic",
+    "turbulent",
+    "unstable",
+    "model-mismatch",
+  ]),
+  deterministicRegime: z
+    .enum([
+      "stable-gradient",
+      "stable-orbit",
+      "chaotic",
+      "turbulent",
+      "unstable",
+      "model-mismatch",
+    ])
+    .optional(),
 });
 
 export const signalTrialTransportPolicySchema = z.object({
@@ -311,6 +447,7 @@ export const signalTrialTelemetrySchema = z
     state_source: z.string().optional(),
     regime_source: z.string().optional(),
     governance: signalTrialGovernanceSchema.optional(),
+    governanceTrend: z.array(signalTrialGovernanceTrendPointSchema).optional(),
     transportPolicy: signalTrialTransportPolicySchema.optional(),
     jResolution: signalTrialJSpaceResolutionSchema.optional(),
     regime: signalTrialSemanticRegimeSchema.optional(),

@@ -301,6 +301,11 @@ export interface QWormholeServerOptions<
   TMessage = unknown,
 > extends QWormholeCommonOptions<TMessage> {
   allowHalfOpen?: boolean;
+  /**
+   * Enables shard-friendly listener binding where the OS may distribute
+   * inbound connections across multiple workers bound to the same host/port.
+   */
+  reusePort?: boolean;
   /** When true, handshake payloads are emitted through the normal message event stream. */
   emitHandshakeMessages?: boolean;
   /**

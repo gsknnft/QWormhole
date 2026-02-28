@@ -152,7 +152,11 @@ export class QWormholeServer<TMessage = Buffer> extends TypedEventEmitter<
   async listen(): Promise<net.AddressInfo> {
     return new Promise((resolve, reject) => {
       this.server.listen(
-        { host: this.options.host, port: this.options.port },
+        {
+          host: this.options.host,
+          port: this.options.port,
+          reusePort: this.options.reusePort,
+        },
         () => {
           const address = this.server.address();
           if (!address || typeof address === "string") {

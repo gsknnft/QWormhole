@@ -1,2 +1,2 @@
 frames,payloadBytes,timeoutMs,batchSize,initialBatchSize,flushIntervalMs,jitterMs,p50Ms,p99Ms,maxMs,throughputMsgSec,received,dropped,outstanding,clientFlushes,clientAvgBuffers,clientMaxBuffers,clientAvgBytes,clientMaxBytes,clientBackpressure,serverFlushes,serverAvgBuffers,serverMaxBuffers,serverAvgBytes,serverMaxBytes,serverBackpressure
-10000,1024,10000,18,32,1,0,179.464,220.576,220.87,35113.592,10000,0,0,2253,5.266,31,5434.834,31992,1228,1752,5.709,7,5891.589,7224,2
+10000,1024,10000,18,32,1,0,136.062,202.102,202.435,36237.333,10000,0,0,2257,5.261,31,5428.86,31992,1230,1834,5.454,7,5628.733,7224,2

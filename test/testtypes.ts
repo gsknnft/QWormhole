@@ -42,6 +42,11 @@ type ScenarioResult = {
   serverMode: Mode;
   clientMode: Mode;
   preferredServerBackend?: NativeBackend;
+  concurrency?: {
+    clients: number;
+    messagesPerClient: number;
+    totalMessages: number;
+  };
   durationMs: number;
   messagesReceived: number;
   bytesReceived: number;

@@ -246,6 +246,11 @@ const TOTAL_MESSAGES = Math.max(
   1,
   Number(process.env.QWORMHOLE_BENCH_MESSAGES ?? "10000") || 10000,
 );
+const BENCH_CLIENTS = Math.max(
+  1,
+  Number(process.env.QWORMHOLE_BENCH_CLIENTS ?? "1") || 1,
+);
+const MESSAGES_PER_CLIENT = Math.ceil(TOTAL_MESSAGES / BENCH_CLIENTS);
 const WARMUP_MESSAGES = Math.max(
   0,
   Math.min(
@@ -950,6 +955,7 @@ const BENCH_ENV_KEYS = [
   "QWORMHOLE_BENCH_DIVERSITY",
   "QWORMHOLE_BENCH_DIAGNOSTICS",
   "QWORMHOLE_BENCH_MESSAGES",
+  "QWORMHOLE_BENCH_CLIENTS",
   "QWORMHOLE_BENCH_YIELD_EVERY",
   "QWORMHOLE_BENCH_HWM",
   "QWORMHOLE_BENCH_FLOW_FAST",
@@ -1013,6 +1019,12 @@ const buildIncompleteScenarioResult = (
   reason,
 });
 
+const buildConcurrencySummary = () => ({
+  clients: BENCH_CLIENTS,
+  messagesPerClient: MESSAGES_PER_CLIENT,
+  totalMessages: TOTAL_MESSAGES,
+});
+
 const isBaselineMode = (mode: Mode): boolean =>
   mode === "net" || mode === "ws" || mode === "uwebsockets";
 
@@ -1059,11 +1071,13 @@ const sendWsPayloadAt = async (
 async function runNetBaselineScenario(
   framing: FramingMode,
 ): Promise<ScenarioResult> {
+  const concurrency = buildConcurrencySummary();
   if (framing !== "none") {
     return {
       id: "net-server+net",
       serverMode: "net",
       clientMode: "net",
+      concurrency,
       durationMs: 0,
       messagesReceived: 0,
       bytesReceived: 0,
@@ -1106,6 +1120,7 @@ async function runNetBaselineScenario(
       id: "net-server+net",
       serverMode: "net",
       clientMode: "net",
+      concurrency,
       durationMs: 0,
       messagesReceived: 0,
       bytesReceived: 0,
@@ -1115,25 +1130,29 @@ async function runNetBaselineScenario(
     };
   }
 
-  const client = net.createConnection({ host: "127.0.0.1", port });
-  await once(client, "connect");
-  client.setNoDelay(true);
-
-  const clientFramer = new LengthPrefixedFramer({
-    maxFrameLength: DEFAULT_MAX_FRAME_LENGTH,
-  });
-  clientFramer.on("message", frame => {
-    bytesReceived += frame.length;
-    messagesReceived += 1;
-  });
-  client.on("data", chunk => clientFramer.push(chunk));
+  const clients = await Promise.all(
+    Array.from({ length: BENCH_CLIENTS }, async () => {
+      const client = net.createConnection({ host: "127.0.0.1", port });
+      await once(client, "connect");
+      client.setNoDelay(true);
+      const clientFramer = new LengthPrefixedFramer({
+        maxFrameLength: DEFAULT_MAX_FRAME_LENGTH,
+      });
+      clientFramer.on("message", frame => {
+        bytesReceived += frame.length;
+        messagesReceived += 1;
+      });
+      client.on("data", chunk => clientFramer.push(chunk));
+      return client;
+    }),
+  );
 
   if (WARMUP_MESSAGES > 0) {
     for (let i = 0; i < WARMUP_MESSAGES; i++) {
       if (BENCH_YIELD_EVERY && i > 0 && i % BENCH_YIELD_EVERY === 0) {
         await sleep(0);
       }
-      await sendNetPayloadAt(i, client);
+      await sendNetPayloadAt(i, clients[i % clients.length]);
     }
     await waitForCompletion(
       () => messagesReceived >= WARMUP_MESSAGES,
@@ -1148,7 +1167,10 @@ async function runNetBaselineScenario(
     if (BENCH_YIELD_EVERY && i > 0 && i % BENCH_YIELD_EVERY === 0) {
       await sleep(0);
     }
-    await sendNetPayloadAt(i + WARMUP_MESSAGES, client);
+    await sendNetPayloadAt(
+      i + WARMUP_MESSAGES,
+      clients[i % clients.length],
+    );
   }
 
   const completed = await waitForCompletion(
@@ -1157,7 +1179,9 @@ async function runNetBaselineScenario(
   );
   const duration = performance.now() - start;
 
-  client.destroy();
+  for (const client of clients) {
+    client.destroy();
+  }
   server.close();
 
   const seconds = duration / 1000;
@@ -1165,6 +1189,7 @@ async function runNetBaselineScenario(
     id: "net-server+net",
     serverMode: "net",
     clientMode: "net",
+    concurrency,
     durationMs: duration,
     messagesReceived,
     bytesReceived,
@@ -1182,6 +1207,7 @@ async function runNetBaselineScenario(
 }
 
 async function runWsBaselineScenario(): Promise<ScenarioResult> {
+  const concurrency = buildConcurrencySummary();
   let messagesReceived = 0;
   let bytesReceived = 0;
 
@@ -1201,6 +1227,7 @@ async function runWsBaselineScenario(): Promise<ScenarioResult> {
       id: "ws-server+ws",
       serverMode: "ws",
       clientMode: "ws",
+      concurrency,
       durationMs: 0,
       messagesReceived: 0,
       bytesReceived: 0,
@@ -1210,25 +1237,30 @@ async function runWsBaselineScenario(): Promise<ScenarioResult> {
     };
   }
 
-  const client = new WebSocket(`ws://127.0.0.1:${port}`);
-  client.binaryType = "nodebuffer";
-  client.on("message", data => {
-    const size = Buffer.isBuffer(data)
-      ? data.length
-      : data instanceof ArrayBuffer
-        ? data.byteLength
-        : Buffer.byteLength(String(data));
-    bytesReceived += size;
-    messagesReceived += 1;
-  });
-  await once(client, "open");
+  const clients = await Promise.all(
+    Array.from({ length: BENCH_CLIENTS }, async () => {
+      const client = new WebSocket(`ws://127.0.0.1:${port}`);
+      client.binaryType = "nodebuffer";
+      client.on("message", data => {
+        const size = Buffer.isBuffer(data)
+          ? data.length
+          : data instanceof ArrayBuffer
+            ? data.byteLength
+            : Buffer.byteLength(String(data));
+        bytesReceived += size;
+        messagesReceived += 1;
+      });
+      await once(client, "open");
+      return client;
+    }),
+  );
 
   if (WARMUP_MESSAGES > 0) {
     for (let i = 0; i < WARMUP_MESSAGES; i++) {
       if (BENCH_YIELD_EVERY && i > 0 && i % BENCH_YIELD_EVERY === 0) {
         await sleep(0);
       }
-      await sendWsPayloadAt(i, client);
+      await sendWsPayloadAt(i, clients[i % clients.length]);
     }
     await waitForCompletion(
       () => messagesReceived >= WARMUP_MESSAGES,
@@ -1243,7 +1275,10 @@ async function runWsBaselineScenario(): Promise<ScenarioResult> {
     if (BENCH_YIELD_EVERY && i > 0 && i % BENCH_YIELD_EVERY === 0) {
       await sleep(0);
     }
-    await sendWsPayloadAt(i + WARMUP_MESSAGES, client);
+    await sendWsPayloadAt(
+      i + WARMUP_MESSAGES,
+      clients[i % clients.length],
+    );
   }
 
   const completed = await waitForCompletion(
@@ -1252,7 +1287,9 @@ async function runWsBaselineScenario(): Promise<ScenarioResult> {
   );
   const duration = performance.now() - start;
 
-  client.close();
+  for (const client of clients) {
+    client.close();
+  }
   await new Promise(resolve => server.close(resolve));
 
   const seconds = duration / 1000;
@@ -1260,6 +1297,7 @@ async function runWsBaselineScenario(): Promise<ScenarioResult> {
     id: "ws-server+ws",
     serverMode: "ws",
     clientMode: "ws",
+    concurrency,
     durationMs: duration,
     messagesReceived,
     bytesReceived,
@@ -1277,12 +1315,14 @@ async function runWsBaselineScenario(): Promise<ScenarioResult> {
 }
 
 async function runUwsBaselineScenario(): Promise<ScenarioResult> {
+  const concurrency = buildConcurrencySummary();
   const uws = await loadUwsModule();
   if (!uws) {
     return {
       id: "uwebsockets-server+ws",
       serverMode: "uwebsockets",
       clientMode: "ws",
+      concurrency,
       durationMs: 0,
       messagesReceived: 0,
       bytesReceived: 0,
@@ -1322,6 +1362,7 @@ async function runUwsBaselineScenario(): Promise<ScenarioResult> {
       id: "uwebsockets-server+ws",
       serverMode: "uwebsockets",
       clientMode: "ws",
+      concurrency,
       durationMs: 0,
       messagesReceived: 0,
       bytesReceived: 0,
@@ -1331,25 +1372,30 @@ async function runUwsBaselineScenario(): Promise<ScenarioResult> {
     };
   }
 
-  const client = new WebSocket(`ws://127.0.0.1:${port}`);
-  client.binaryType = "nodebuffer";
-  client.on("message", data => {
-    const size = Buffer.isBuffer(data)
-      ? data.length
-      : data instanceof ArrayBuffer
-        ? data.byteLength
-        : Buffer.byteLength(String(data));
-    bytesReceived += size;
-    messagesReceived += 1;
-  });
-  await once(client, "open");
+  const clients = await Promise.all(
+    Array.from({ length: BENCH_CLIENTS }, async () => {
+      const client = new WebSocket(`ws://127.0.0.1:${port}`);
+      client.binaryType = "nodebuffer";
+      client.on("message", data => {
+        const size = Buffer.isBuffer(data)
+          ? data.length
+          : data instanceof ArrayBuffer
+            ? data.byteLength
+            : Buffer.byteLength(String(data));
+        bytesReceived += size;
+        messagesReceived += 1;
+      });
+      await once(client, "open");
+      return client;
+    }),
+  );
 
   if (WARMUP_MESSAGES > 0) {
     for (let i = 0; i < WARMUP_MESSAGES; i++) {
       if (BENCH_YIELD_EVERY && i > 0 && i % BENCH_YIELD_EVERY === 0) {
         await sleep(0);
       }
-      await sendWsPayloadAt(i, client);
+      await sendWsPayloadAt(i, clients[i % clients.length]);
     }
     await waitForCompletion(
       () => messagesReceived >= WARMUP_MESSAGES,
@@ -1364,7 +1410,10 @@ async function runUwsBaselineScenario(): Promise<ScenarioResult> {
     if (BENCH_YIELD_EVERY && i > 0 && i % BENCH_YIELD_EVERY === 0) {
       await sleep(0);
     }
-    await sendWsPayloadAt(i + WARMUP_MESSAGES, client);
+    await sendWsPayloadAt(
+      i + WARMUP_MESSAGES,
+      clients[i % clients.length],
+    );
   }
 
   const completed = await waitForCompletion(
@@ -1373,7 +1422,9 @@ async function runUwsBaselineScenario(): Promise<ScenarioResult> {
   );
   const duration = performance.now() - start;
 
-  client.close();
+  for (const client of clients) {
+    client.close();
+  }
   if (listenSocket && typeof uws.us_listen_socket_close === "function") {
     uws.us_listen_socket_close(listenSocket);
   }
@@ -1383,6 +1434,7 @@ async function runUwsBaselineScenario(): Promise<ScenarioResult> {
     id: "uwebsockets-server+ws",
     serverMode: "uwebsockets",
     clientMode: "ws",
+    concurrency,
     durationMs: duration,
     messagesReceived,
     bytesReceived,
@@ -1854,6 +1906,7 @@ async function runScenarioForked({
       id,
       serverMode,
       clientMode,
+      concurrency: buildConcurrencySummary(),
       preferredServerBackend: serverBackend,
       durationMs: 0,
       messagesReceived: 0,
@@ -1871,6 +1924,7 @@ async function runScenarioForked({
       id,
       serverMode: ready.serverMode,
       clientMode,
+      concurrency: buildConcurrencySummary(),
       preferredServerBackend: serverBackend,
       durationMs: 0,
       messagesReceived: 0,
@@ -1891,35 +1945,42 @@ async function runScenarioForked({
     clientSnapshotResolve = resolve;
   });
 
-  let tsClient: QWormholeClient<Buffer> | null = null;
-  let nativeClient: NativeTcpClient | null = null;
+  const concurrency = buildConcurrencySummary();
+  let tsClients: QWormholeClient<Buffer>[] = [];
+  let nativeClients: NativeTcpClient[] = [];
   if (clientMode === "ts") {
-    tsClient = new QWormholeClient<Buffer>({
-      host: "127.0.0.1",
-      port: (ready as BenchChildReady).port,
-      framing: scenarioFraming,
-      serializer: benchSerializer,
-      deserializer: (data: Buffer): Buffer => data,
-      entropyMetrics: {
-        negIndex: BENCH_NEG_INDEX,
-        coherence: deriveBenchCoherence(),
-        entropyVelocity: "low",
-      },
-      onTrustSnapshot: (snapshot: TrustSnapshot) => {
-        clientFlowDiagnostics = snapshot.flowDiagnostics;
-        clientBatchStats = snapshot.batchStats;
-        clientQueueStats = snapshot.queueStats;
-        clientSnapshotResolve?.();
-      },
-      peerIsNative: serverMode !== "ts",
-      socketHighWaterMark: BENCH_SOCKET_HWM,
-      coherence: BENCH_COHERENCE
-        ? { enabled: true, mode: BENCH_COHERENCE_MODE }
-        : undefined,
-    } as QWormholeClientOptions);
-    attachBenchClientErrorHandler(tsClient);
-    await tsClient.connect();
-    const internal = tsClient as any;
+    tsClients = await Promise.all(
+      Array.from({ length: BENCH_CLIENTS }, async (_unused, index) => {
+        const client = new QWormholeClient<Buffer>({
+          host: "127.0.0.1",
+          port: (ready as BenchChildReady).port,
+          framing: scenarioFraming,
+          serializer: benchSerializer,
+          deserializer: (data: Buffer): Buffer => data,
+          entropyMetrics: {
+            negIndex: BENCH_NEG_INDEX,
+            coherence: deriveBenchCoherence(),
+            entropyVelocity: "low",
+          },
+          onTrustSnapshot: (snapshot: TrustSnapshot) => {
+            if (index !== 0) return;
+            clientFlowDiagnostics = snapshot.flowDiagnostics;
+            clientBatchStats = snapshot.batchStats;
+            clientQueueStats = snapshot.queueStats;
+            clientSnapshotResolve?.();
+          },
+          peerIsNative: serverMode !== "ts",
+          socketHighWaterMark: BENCH_SOCKET_HWM,
+          coherence: BENCH_COHERENCE
+            ? { enabled: true, mode: BENCH_COHERENCE_MODE }
+            : undefined,
+        } as QWormholeClientOptions);
+        attachBenchClientErrorHandler(client);
+        await client.connect();
+        return client;
+      }),
+    );
+    const internal = tsClients[0] as any;
     benchConfig = buildBenchConfigSummary(
       internal.flowController ?? null,
       scenarioFraming,
@@ -1929,14 +1990,21 @@ async function runScenarioForked({
     }
   } else {
     const backend = clientMode === "native-lws" ? "lws" : "libsocket";
-    nativeClient = new NativeTcpClient(backend);
-    if (nativeClient.backend !== backend) {
+    nativeClients = Array.from(
+      { length: BENCH_CLIENTS },
+      () => new NativeTcpClient(backend),
+    );
+    if (nativeClients.some(client => client.backend !== backend)) {
+      for (const client of nativeClients) {
+        client.close();
+      }
       child.send?.({ type: "stop" });
       child.kill();
       return {
         id,
         serverMode,
         clientMode,
+        concurrency,
         preferredServerBackend: serverBackend,
         durationMs: 0,
         messagesReceived: 0,
@@ -1946,7 +2014,9 @@ async function runScenarioForked({
         reason: `Native client backend ${backend} unavailable`,
       };
     }
-    nativeClient.connect("127.0.0.1", ready.port);
+    for (const client of nativeClients) {
+      client.connect("127.0.0.1", ready.port);
+    }
   }
 
   let duration = 0;
@@ -1956,7 +2026,7 @@ async function runScenarioForked({
     Number(process.env.QWORMHOLE_BENCH_BLOCK_SIZE ?? "1000") || 1000;
   let blockCount = 0;
   let blockStart = ENABLE_DIAGNOSTICS ? performance.now() : 0;
-  const nativeBatch: Buffer[] = [];
+  const nativeBatches = Array.from({ length: BENCH_CLIENTS }, () => [] as Buffer[]);
 
   let done: BenchChildDone | null = null;
   try {
@@ -1968,15 +2038,19 @@ async function runScenarioForked({
     }
     for (let i = 0; i < TOTAL_MESSAGES; i++) {
       if (BENCH_YIELD_EVERY && i > 0 && i % BENCH_YIELD_EVERY === 0) {
-        flushNativeBenchBatch(nativeClient, nativeBatch);
+        nativeClients.forEach((client, index) =>
+          flushNativeBenchBatch(client, nativeBatches[index]),
+        );
         await sleep(0);
       }
-      if (tsClient) {
-        tsClient.send(getBenchPayload(i));
-      } else if (nativeClient) {
+      const clientIndex = i % BENCH_CLIENTS;
+      if (tsClients.length > 0) {
+        tsClients[clientIndex].send(getBenchPayload(i));
+      } else if (nativeClients.length > 0) {
+        const nativeBatch = nativeBatches[clientIndex];
         nativeBatch.push(getNativePayload(i, scenarioFraming));
         if (nativeBatch.length >= NATIVE_SEND_BATCH_SIZE) {
-          flushNativeBenchBatch(nativeClient, nativeBatch);
+          flushNativeBenchBatch(nativeClients[clientIndex], nativeBatch);
         }
       }
       if (ENABLE_DIAGNOSTICS) {
@@ -1992,7 +2066,9 @@ async function runScenarioForked({
         }
       }
     }
-    flushNativeBenchBatch(nativeClient, nativeBatch);
+    nativeClients.forEach((client, index) =>
+      flushNativeBenchBatch(client, nativeBatches[index]),
+    );
     done = await waitForChildDone(donePromise, TIMEOUT_MS, child);
     duration = performance.now() - start;
   } catch (err) {
@@ -2002,16 +2078,20 @@ async function runScenarioForked({
     if (ENABLE_DIAGNOSTICS) {
       heapEnd = process.memoryUsage();
     }
-    if (tsClient) {
-      const clientSnapshot = await snapshotClientDiagnostics(tsClient);
+    if (tsClients.length > 0) {
+      const clientSnapshot = await snapshotClientDiagnostics(tsClients[0]);
       clientFlowDiagnostics = clientSnapshot.flow ?? clientFlowDiagnostics;
       clientBatchStats = clientSnapshot.batch ?? clientBatchStats;
       clientQueueStats = clientSnapshot.queue ?? clientQueueStats;
-      tsClient.disconnect();
+      for (const client of tsClients) {
+        client.disconnect();
+      }
       await Promise.race([clientSnapshotWaiter, sleep(50)]);
     }
-    if (nativeClient) {
-      nativeClient.close();
+    if (nativeClients.length > 0) {
+      for (const client of nativeClients) {
+        client.close();
+      }
     }
     child.send?.({ type: "stop" });
     await waitForChildExit(child, 1000);
@@ -2061,6 +2141,7 @@ async function runScenarioForked({
     id,
     serverMode,
     clientMode,
+    concurrency,
     preferredServerBackend: serverBackend,
     durationMs: duration,
     messagesReceived,
@@ -2111,6 +2192,7 @@ async function runScenario({
   clientMode,
   serverBackend,
 }: Scenario): Promise<ScenarioResult> {
+  const concurrency = buildConcurrencySummary();
   const scenarioFraming = framingForClientMode(clientMode);
   // --- Coherence Trace Setup ---
   const coherenceTrace: CoherenceDecisionSample[] = [];
@@ -2150,6 +2232,7 @@ async function runScenario({
       id,
       clientMode,
       serverMode: preferNativeServer ? "native-lws" : "ts",
+      concurrency,
       durationMs: 0,
       messagesReceived: 0,
       bytesReceived: 0,
@@ -2164,6 +2247,7 @@ async function runScenario({
       id,
       clientMode,
       serverMode: "ts",
+      concurrency,
       preferredServerBackend: serverBackend,
       durationMs: 0,
       messagesReceived: 0,
@@ -2200,11 +2284,12 @@ async function runScenario({
   } as BenchServerOptions);
   if (preferNativeServer && serverResult.mode === "ts") {
     await serverResult.server.close();
-    return {
-      id,
-      serverMode: serverResult.mode as Mode,
-      clientMode,
-      preferredServerBackend: serverBackend,
+      return {
+        id,
+        serverMode: serverResult.mode as Mode,
+        clientMode,
+        concurrency,
+        preferredServerBackend: serverBackend,
       durationMs: 0,
       messagesReceived: 0,
       bytesReceived: 0,
@@ -2223,40 +2308,46 @@ async function runScenario({
   const address = await serverInstance.listen();
   const port = address.port;
 
-  let tsClient: QWormholeClient<Buffer> | null = null;
-  let nativeClient: NativeTcpClient | null = null;
+  let tsClients: QWormholeClient<Buffer>[] = [];
+  let nativeClients: NativeTcpClient[] = [];
   let coherenceController: CoherenceController | null = null;
   let flowController: FlowController | null = null;
   let batchFramer: BatchFramer | null = null;
   if (clientMode === "ts") {
-    tsClient = new QWormholeClient<Buffer>({
-      host: "127.0.0.1",
-      port,
-      framing: scenarioFraming,
-      serializer: benchSerializer,
-      deserializer: (data: Buffer) => data,
-      entropyMetrics: {
-        negIndex: BENCH_NEG_INDEX,
-        coherence: deriveBenchCoherence(),
-        entropyVelocity: "low",
-      },
-      onTrustSnapshot: (snapshot: TrustSnapshot) => {
-        clientFlowDiagnostics = snapshot.flowDiagnostics;
-        clientBatchStats = snapshot.batchStats;
-        clientSnapshotResolve?.();
-      },
-      peerIsNative: serverMode !== "ts",
-      socketHighWaterMark: BENCH_SOCKET_HWM,
-      disableFlowController: BENCH_DISABLE_FLOW,
-      flowFastPath: BENCH_FLOW_FAST,
-      coherence: BENCH_COHERENCE
-        ? { enabled: true, mode: BENCH_COHERENCE_MODE }
-        : undefined,
-    });
-    attachBenchClientErrorHandler(tsClient);
-    await tsClient.connect();
+    tsClients = await Promise.all(
+      Array.from({ length: BENCH_CLIENTS }, async (_unused, index) => {
+        const client = new QWormholeClient<Buffer>({
+          host: "127.0.0.1",
+          port,
+          framing: scenarioFraming,
+          serializer: benchSerializer,
+          deserializer: (data: Buffer) => data,
+          entropyMetrics: {
+            negIndex: BENCH_NEG_INDEX,
+            coherence: deriveBenchCoherence(),
+            entropyVelocity: "low",
+          },
+          onTrustSnapshot: (snapshot: TrustSnapshot) => {
+            if (index !== 0) return;
+            clientFlowDiagnostics = snapshot.flowDiagnostics;
+            clientBatchStats = snapshot.batchStats;
+            clientSnapshotResolve?.();
+          },
+          peerIsNative: serverMode !== "ts",
+          socketHighWaterMark: BENCH_SOCKET_HWM,
+          disableFlowController: BENCH_DISABLE_FLOW,
+          flowFastPath: BENCH_FLOW_FAST,
+          coherence: BENCH_COHERENCE
+            ? { enabled: true, mode: BENCH_COHERENCE_MODE }
+            : undefined,
+        });
+        attachBenchClientErrorHandler(client);
+        await client.connect();
+        return client;
+      }),
+    );
     // Extract FlowController and BatchFramer for coherence loop
-    const internal = tsClient as any;
+    const internal = tsClients[0] as any;
     flowController = internal.flowController ?? null;
     batchFramer = internal.outboundFramer ?? null;
     if (BENCH_COHERENCE && flowController && batchFramer) {
@@ -2268,13 +2359,20 @@ async function runScenario({
     }
   } else {
     const backend = clientMode === "native-lws" ? "lws" : "libsocket";
-    nativeClient = new NativeTcpClient(backend);
-    if (nativeClient.backend !== backend) {
+    nativeClients = Array.from(
+      { length: BENCH_CLIENTS },
+      () => new NativeTcpClient(backend),
+    );
+    if (nativeClients.some(client => client.backend !== backend)) {
+      for (const client of nativeClients) {
+        client.close();
+      }
       await serverInstance.close();
       return {
         id,
         serverMode: serverMode as Mode,
         clientMode,
+        concurrency,
         preferredServerBackend: serverBackend,
         durationMs: 0,
         messagesReceived: 0,
@@ -2284,7 +2382,9 @@ async function runScenario({
         reason: `Native client backend ${backend} unavailable`,
       };
     }
-    nativeClient.connect("127.0.0.1", port);
+    for (const client of nativeClients) {
+      client.connect("127.0.0.1", port);
+    }
   }
 
   let messagesReceived = 0;
@@ -2303,25 +2403,31 @@ async function runScenario({
     Number(process.env.QWORMHOLE_BENCH_BLOCK_SIZE ?? "1000") || 1000;
   let blockCount = 0;
   let blockStart = ENABLE_DIAGNOSTICS ? performance.now() : 0;
-  const nativeBatch: Buffer[] = [];
+  const nativeBatches = Array.from({ length: BENCH_CLIENTS }, () => [] as Buffer[]);
 
   try {
     if (WARMUP_MESSAGES > 0) {
       for (let i = 0; i < WARMUP_MESSAGES; i++) {
         if (BENCH_YIELD_EVERY && i > 0 && i % BENCH_YIELD_EVERY === 0) {
-          flushNativeBenchBatch(nativeClient, nativeBatch);
+          nativeClients.forEach((client, index) =>
+            flushNativeBenchBatch(client, nativeBatches[index]),
+          );
           await sleep(0);
         }
-        if (tsClient) {
-          sendBenchPayloadAt(i, tsClient, null, scenarioFraming);
-        } else if (nativeClient) {
+        const clientIndex = i % BENCH_CLIENTS;
+        if (tsClients.length > 0) {
+          sendBenchPayloadAt(i, tsClients[clientIndex], null, scenarioFraming);
+        } else if (nativeClients.length > 0) {
+          const nativeBatch = nativeBatches[clientIndex];
           nativeBatch.push(getNativePayload(i, scenarioFraming));
           if (nativeBatch.length >= NATIVE_SEND_BATCH_SIZE) {
-            flushNativeBenchBatch(nativeClient, nativeBatch);
+            flushNativeBenchBatch(nativeClients[clientIndex], nativeBatch);
           }
         }
       }
-      flushNativeBenchBatch(nativeClient, nativeBatch);
+      nativeClients.forEach((client, index) =>
+        flushNativeBenchBatch(client, nativeBatches[index]),
+      );
       const warmupCompleted = await waitForCompletion(
         () => messagesReceived >= WARMUP_MESSAGES,
         TIMEOUT_MS,
@@ -2356,15 +2462,24 @@ async function runScenario({
     }
     for (let i = 0; i < TOTAL_MESSAGES; i++) {
       if (BENCH_YIELD_EVERY && i > 0 && i % BENCH_YIELD_EVERY === 0) {
-        flushNativeBenchBatch(nativeClient, nativeBatch);
+        nativeClients.forEach((client, index) =>
+          flushNativeBenchBatch(client, nativeBatches[index]),
+        );
         await sleep(0);
       }
-      if (tsClient) {
-        sendBenchPayloadAt(i + WARMUP_MESSAGES, tsClient, null, scenarioFraming);
-      } else if (nativeClient) {
+      const clientIndex = i % BENCH_CLIENTS;
+      if (tsClients.length > 0) {
+        sendBenchPayloadAt(
+          i + WARMUP_MESSAGES,
+          tsClients[clientIndex],
+          null,
+          scenarioFraming,
+        );
+      } else if (nativeClients.length > 0) {
+        const nativeBatch = nativeBatches[clientIndex];
         nativeBatch.push(getNativePayload(i + WARMUP_MESSAGES, scenarioFraming));
         if (nativeBatch.length >= NATIVE_SEND_BATCH_SIZE) {
-          flushNativeBenchBatch(nativeClient, nativeBatch);
+          flushNativeBenchBatch(nativeClients[clientIndex], nativeBatch);
         }
       }
       if (ENABLE_DIAGNOSTICS) {
@@ -2429,7 +2544,9 @@ async function runScenario({
         }
       }
     }
-    flushNativeBenchBatch(nativeClient, nativeBatch);
+    nativeClients.forEach((client, index) =>
+      flushNativeBenchBatch(client, nativeBatches[index]),
+    );
     const completed = await waitForCompletion(
       () => messagesReceived >= TOTAL_MESSAGES,
       TIMEOUT_MS,
@@ -2463,19 +2580,23 @@ async function runScenario({
       heapEnd = process.memoryUsage();
     }
     serverInstance.off("message", onMessage as never);
-    if (tsClient) {
-      const clientSnapshot = await snapshotClientDiagnostics(tsClient);
+    if (tsClients.length > 0) {
+      const clientSnapshot = await snapshotClientDiagnostics(tsClients[0]);
       clientFlowDiagnostics = clientSnapshot.flow ?? clientFlowDiagnostics;
       clientBatchStats = clientSnapshot.batch ?? clientBatchStats;
       clientQueueStats = clientSnapshot.queue ?? clientQueueStats;
-      tsClient.disconnect();
+      for (const client of tsClients) {
+        client.disconnect();
+      }
     }
-    if (nativeClient) {
-      nativeClient.close();
+    if (nativeClients.length > 0) {
+      for (const client of nativeClients) {
+        client.close();
+      }
     }
     await serverInstance.close();
     await Promise.race([trustSnapshotWaiter, sleep(50)]);
-    if (tsClient) {
+    if (tsClients.length > 0) {
       await Promise.race([clientSnapshotWaiter, sleep(50)]);
     }
     const blockStats =
@@ -2516,6 +2637,7 @@ async function runScenario({
     id,
     serverMode: serverMode as Mode,
     clientMode,
+    concurrency,
     preferredServerBackend: serverBackend,
     durationMs: duration,
     messagesReceived,
@@ -3014,6 +3136,7 @@ const buildJsonlEntry = (
     scenario: res.id,
     serverMode: res.serverMode,
     clientMode: res.clientMode,
+    concurrency: res.concurrency,
     framing: res.framing,
     messagesReceived: res.messagesReceived,
     bytesReceived: res.bytesReceived,
@@ -3098,6 +3221,7 @@ const writeBenchReport = async (results: ScenarioResult[]): Promise<void> => {
     res.id,
     res.serverMode,
     res.clientMode,
+    res.concurrency?.clients ?? BENCH_CLIENTS,
     res.durationMs ? formatNumber(res.durationMs) : "-",
     res.messagesReceived,
     res.bytesReceived,
@@ -3211,6 +3335,7 @@ const writeBenchReport = async (results: ScenarioResult[]): Promise<void> => {
         "Scenario",
         "Server",
         "Client",
+        "Clients",
         "Duration (ms)",
         "Messages",
         "Bytes",
@@ -3365,6 +3490,9 @@ async function mainBench() {
 
   const pad = (s: string, n: number) => s.toString().padEnd(n);
   const header = `${pad("Scenario", 28)}${pad("Server", 15)}${pad("Client", 15)}${pad(
+    "Clients",
+    10,
+  )}${pad(
     "Duration (ms)",
     16,
   )}${pad("Messages", 12)}${pad("Bytes", 12)}${pad("Msg/s", 12)}${pad(
@@ -3376,6 +3504,9 @@ async function mainBench() {
   for (const res of results) {
     console.log(
       `${pad(res.id, 28)}${pad(res.serverMode, 15)}${pad(res.clientMode, 15)}${pad(
+        `${res.concurrency?.clients ?? BENCH_CLIENTS}`,
+        10,
+      )}${pad(
         res.durationMs ? res.durationMs.toFixed(2) : "-",
         16,
       )}${pad(`${res.messagesReceived ?? "-"}`, 12)}${pad(
