@@ -1,5 +1,6 @@
 import { availableParallelism } from "node:os";
 import cluster from "node:cluster";
+import type { Worker as ClusterWorker } from "node:cluster";
 
 import { createRequire } from "node:module";
 import path from "node:path";
@@ -156,7 +157,7 @@ const assertSerializableOptions = (
 };
 
 const onProcess = (
-  worker: cluster.Worker,
+  worker: ClusterWorker,
   event: string,
   listener: (...args: unknown[]) => void,
 ): void => {
@@ -168,7 +169,7 @@ const onProcess = (
 };
 
 const offProcess = (
-  worker: cluster.Worker,
+  worker: ClusterWorker,
   event: string,
   listener: (...args: unknown[]) => void,
 ): void => {
@@ -180,7 +181,7 @@ const offProcess = (
 };
 
 const onceProcess = (
-  worker: cluster.Worker,
+  worker: ClusterWorker,
   event: string,
   listener: (...args: unknown[]) => void,
 ): void => {
@@ -196,7 +197,7 @@ export class WorkerShardedServer {
   private readonly workerEntry = resolveProcessEntry();
   private readonly tsxCli = resolveTsxCli();
   private readonly shardStats = new Map<number, WorkerShardStats>();
-  private readonly workers: cluster.Worker[] = [];
+  private readonly workers: ClusterWorker[] = [];
   private listening = false;
 
   constructor(options: WorkerShardedServerOptions) {
