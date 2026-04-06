@@ -355,8 +355,8 @@ describe("QWormholeClient", () => {
       port,
       protocolVersion: "1.0.0",
       deserializer: jsonDeserializer,
-      rateLimitBytesPerSec: 1,
-      rateLimitBurstBytes: 1,
+      rateLimitBytesPerSec: 128,
+      rateLimitBurstBytes: 32,
     });
     await client.connect();
     await client.send("test");

@@ -33,6 +33,11 @@ import { TransportMetrics } from "src/types/TransportMetrics";
 import { CoherenceController } from "./CoherenceController";
 import { TokenBucket } from "./qos";
 import { CoherenceLevel, EntropyVelocity } from "src/schema/scp";
+import type { TransportGovernancePolicy } from "./transport-governance-policy";
+import {
+  computeTransportCoherence,
+  type TransportCoherenceSnapshot,
+} from "./transport-coherence";
 
 /**
  * Session flow policy derived during handshake negotiation
@@ -137,6 +142,14 @@ export const FLOW_DEFAULTS = {
   TS_PEER_MAX_SLICE: 24,
   /** TS peer max slice for high-trust peers (negIndex >= 0.85) */
   TS_PEER_HIGH_TRUST_MAX_SLICE: 64,
+  /** Native-peer slice floor for TS senders under healthy conditions */
+  NATIVE_PEER_MIN_SLICE: 11,
+  /** Native-peer framer cap to keep writev batches dense */
+  NATIVE_PEER_MAX_BUFFERS: 112,
+  /** Native-peer framer byte budget */
+  NATIVE_PEER_MAX_BYTES: 176 * 1024,
+  /** Native-peer framer minimum bytes target */
+  NATIVE_PEER_MIN_BYTES: 28 * 1024,
   /** TS framer caps to keep batching in the micro-batch envelope */
   TS_FRAMER_MAX_BUFFERS: (() => {
     const raw = process.env.QWORMHOLE_TS_FRAMER_MAX_BUFFERS;
@@ -169,6 +182,36 @@ export const FLOW_DEFAULTS = {
   /** Upper bound on token bucket induced delay */
   MAX_RESERVE_DELAY_MS: 200,
 } as const;
+
+type NativePeerTuneProfile = "stable" | "balanced" | "throughput";
+
+const NATIVE_PEER_TUNE: NativePeerTuneProfile = (() => {
+  const raw = (process.env.QWORMHOLE_NATIVE_PEER_TUNE ?? "balanced")
+    .trim()
+    .toLowerCase();
+  if (raw === "stable" || raw === "balanced" || raw === "throughput") {
+    return raw;
+  }
+  return "balanced";
+})();
+
+const nativePeerContractionRatio = (): number => {
+  if (NATIVE_PEER_TUNE === "stable") return 0.88;
+  if (NATIVE_PEER_TUNE === "throughput") return 0.9;
+  return 0.89;
+};
+
+const nativePeerExpansionBufferRatio = (): number => {
+  if (NATIVE_PEER_TUNE === "stable") return 1.1;
+  if (NATIVE_PEER_TUNE === "throughput") return 1.2;
+  return 1.15;
+};
+
+const nativePeerExpansionByteRatio = (): number => {
+  if (NATIVE_PEER_TUNE === "stable") return 1.06;
+  if (NATIVE_PEER_TUNE === "throughput") return 1.1;
+  return 1.08;
+};
 
 const ADAPTIVE_DEFAULTS: AdaptiveConfig = {
   mode: "off",
@@ -246,11 +289,14 @@ const TS_FLUSH_INTERVAL_MS = (() => {
   return Number.isFinite(parsed) && parsed >= 0 ? parsed : undefined;
 })();
 
+const TRANSPORT_COHERENCE_ENABLED =
+  process.env.QWORMHOLE_TRANSPORT_COHERENCE === "1";
+
 function tuneAdaptiveConfig(config: AdaptiveConfig, peer: PeerProfile): void {
   if (peer.isNative) {
-    config.sampleEvery = Math.min(config.sampleEvery, 16);
-    config.adaptEvery = Math.min(config.adaptEvery, 16);
-    config.driftStep = Math.max(config.driftStep, 8);
+    config.sampleEvery = Math.min(config.sampleEvery, 8);
+    config.adaptEvery = Math.min(config.adaptEvery, 8);
+    config.driftStep = Math.max(config.driftStep, 10);
     config.idleTarget = Math.min(config.idleTarget, 0.1);
     return;
   }
@@ -380,11 +426,16 @@ export class FlowController extends TypedEventEmitter<FlowControllerEvents> {
   private adaptive?: AdaptiveInternals;
   private readonly negDiagnostics = new NegentropicDiagnostics();
   private lastEluBaseline?: ReturnType<typeof performance.eventLoopUtilization>;
+  private governancePolicy?: TransportGovernancePolicy;
 
   // Diagnostics
   private totalFlushes = 0;
   private totalBytes = 0;
   private sliceHistory: Array<{ timestamp: number; size: number }> = [];
+  private flushHistory: Array<{ timestamp: number; bytes: number; frames: number }> = [];
+  private backpressureHistory: number[] = [];
+  private flushHistoryCursor = 0;
+  private backpressureHistoryCursor = 0;
 
   constructor(
     policy: SessionFlowPolicy,
@@ -408,7 +459,9 @@ export class FlowController extends TypedEventEmitter<FlowControllerEvents> {
     this.runtimeMetrics.getELU = () => this.readEventLoopUtilization();
     // Initialize slice size as half of preferred, clamped to bounds
     const preferredSlice = this.clamp(
-      Math.round(policy.preferredBatchSize / 2),
+      Math.round(
+        policy.preferredBatchSize * (policy.peerIsNative ? 0.75 : 0.5),
+      ),
       policy.minSlice,
       this.getEffectiveMaxSlice(),
     );
@@ -507,6 +560,9 @@ export class FlowController extends TypedEventEmitter<FlowControllerEvents> {
    */
   onBackpressure(queuedBytes: number): void {
     this.backpressureCount += 1;
+    if (TRANSPORT_COHERENCE_ENABLED) {
+      this.recordBackpressureSample(Date.now());
+    }
     if (this.adaptive) {
       this.adaptive.state.backpressureCount += 1;
       this.adaptive.cooldownRemaining = Math.max(
@@ -523,10 +579,13 @@ export class FlowController extends TypedEventEmitter<FlowControllerEvents> {
     }
 
     const previousSize = this.sliceSize;
-    // Contract gently (75%) to avoid over-thrashing while relieving pressure.
+    const contractionRatio = this.policy.peerIsNative ? 0.85 : 0.85;
+    const minSlice = this.policy.peerIsNative
+      ? Math.max(this.policy.minSlice, FLOW_DEFAULTS.NATIVE_PEER_MIN_SLICE)
+      : this.policy.minSlice;
     this.sliceSize = Math.max(
-      this.policy.minSlice,
-      Math.floor(this.sliceSize * 0.75),
+      minSlice,
+      Math.floor(this.sliceSize * contractionRatio),
     );
 
     if (previousSize !== this.sliceSize) {
@@ -545,7 +604,6 @@ export class FlowController extends TypedEventEmitter<FlowControllerEvents> {
    * Handle drain event - expand slice size
    */
   onDrain(): void {
-    const maxSlice = this.getEffectiveMaxSlice();
     if (this.adaptive && this.adaptive.state.backpressureCount > 0) {
       this.adaptive.state.backpressureCount = Math.max(
         0,
@@ -560,10 +618,14 @@ export class FlowController extends TypedEventEmitter<FlowControllerEvents> {
       return;
     }
 
+    const maxSlice = this.getEffectiveMaxSlice();
     const previousSize = this.sliceSize;
+    const driftStep = this.policy.peerIsNative
+      ? FLOW_DEFAULTS.DRIFT_STEP * 2
+      : FLOW_DEFAULTS.DRIFT_STEP;
     this.sliceSize = Math.min(
       maxSlice,
-      this.sliceSize + FLOW_DEFAULTS.DRIFT_STEP,
+      this.sliceSize + driftStep,
     );
 
     if (previousSize !== this.sliceSize) {
@@ -813,7 +875,12 @@ export class FlowController extends TypedEventEmitter<FlowControllerEvents> {
         );
 
     const bounds = peerIsNative
-      ? { minBuf: 8, maxBuf: 96, minBytes: 16 * 1024, maxBytes: 128 * 1024 }
+      ? {
+          minBuf: 16,
+          maxBuf: FLOW_DEFAULTS.NATIVE_PEER_MAX_BUFFERS,
+          minBytes: FLOW_DEFAULTS.NATIVE_PEER_MIN_BYTES,
+          maxBytes: FLOW_DEFAULTS.NATIVE_PEER_MAX_BYTES,
+        }
       : fastPathActive
         ? {
             minBuf: 16,
@@ -845,14 +912,44 @@ export class FlowController extends TypedEventEmitter<FlowControllerEvents> {
 
       // Only contract on real pressure (GC/backpressure); otherwise nudge caps upward.
       if (!idleOK || !gcOK || bp) {
-        maxBuffers = Math.max(bounds.minBuf, Math.round(maxBuffers * 0.75));
-        maxBytes = Math.max(bounds.minBytes, Math.round(maxBytes * 0.75));
-        flushMs = Math.max(flushMs, 2 + (bp ? 1 : 0));
+        const contractionRatio = peerIsNative
+          ? nativePeerContractionRatio()
+          : 0.75;
+        maxBuffers = Math.max(bounds.minBuf, Math.round(maxBuffers * contractionRatio));
+        maxBytes = Math.max(bounds.minBytes, Math.round(maxBytes * contractionRatio));
+        flushMs = peerIsNative
+          ? Math.max(flushMs, 1 + (bp ? 1 : 0))
+          : Math.max(flushMs, 2 + (bp ? 1 : 0));
       } else {
-        maxBuffers = Math.min(bounds.maxBuf, Math.round(maxBuffers * 1.1));
-        maxBytes = Math.min(bounds.maxBytes, Math.round(maxBytes * 1.05));
+        maxBuffers = Math.min(
+          bounds.maxBuf,
+          Math.round(
+            maxBuffers *
+              (peerIsNative ? nativePeerExpansionBufferRatio() : 1.1),
+          ),
+        );
+        maxBytes = Math.min(
+          bounds.maxBytes,
+          Math.round(
+            maxBytes *
+              (peerIsNative ? nativePeerExpansionByteRatio() : 1.05),
+          ),
+        );
         flushMs = Math.max(1, flushMs);
       }
+    }
+
+    const governance = this.governancePolicy;
+    if (governance) {
+      maxBuffers = Math.max(
+        bounds.minBuf,
+        Math.min(bounds.maxBuf, Math.round(maxBuffers * governance.batchScale)),
+      );
+      maxBytes = Math.max(
+        bounds.minBytes,
+        Math.min(bounds.maxBytes, Math.round(maxBytes * governance.bufferScale)),
+      );
+      flushMs = Math.max(1, Math.round(flushMs * governance.flushScale));
     }
 
     return { maxBuffers, maxBytes, flushMs };
@@ -864,7 +961,15 @@ export class FlowController extends TypedEventEmitter<FlowControllerEvents> {
     }
     const caps = this.resolveFramerCaps(peerIsNative);
     const preferred = Math.max(this.sliceSize, this.policy.preferredBatchSize);
-    return Math.min(preferred, caps.maxBuffers);
+    const governanceScale = this.governancePolicy?.batchScale ?? 1;
+    return Math.max(
+      this.policy.minSlice,
+      Math.min(Math.round(preferred * governanceScale), caps.maxBuffers),
+    );
+  }
+
+  setGovernancePolicy(policy?: TransportGovernancePolicy): void {
+    this.governancePolicy = policy;
   }
 
   /**
@@ -872,6 +977,23 @@ export class FlowController extends TypedEventEmitter<FlowControllerEvents> {
    */
   getDiagnostics(): FlowControllerDiagnostics {
     const negentropic = this.negDiagnostics.getSnapshot();
+    const flushHistory = TRANSPORT_COHERENCE_ENABLED
+      ? this.getOrderedFlushHistory()
+      : [];
+    const backpressureHistory = TRANSPORT_COHERENCE_ENABLED
+      ? this.getOrderedBackpressureHistory()
+      : [];
+    const transportCoherence = TRANSPORT_COHERENCE_ENABLED
+      ? computeTransportCoherence({
+          sliceHistory: this.sliceHistory.slice(-32),
+          flushHistory: flushHistory.slice(-64),
+          backpressureHistory: backpressureHistory.slice(-64),
+          eluIdleRatioAvg: this.adaptive?.state.eluIdleRatioAvg,
+          gcPauseMaxMs: this.adaptive?.state.gcPauseMaxMs,
+          payloadEntropy: negentropic.entropy,
+          payloadNegentropy: negentropic.negentropy,
+        })
+      : undefined;
     return {
       currentSliceSize: this.sliceSize,
       forceSliceSize: this.forceSliceSize,
@@ -888,6 +1010,10 @@ export class FlowController extends TypedEventEmitter<FlowControllerEvents> {
         peerIsNative: this.policy.peerIsNative,
       },
       sliceHistory: this.sliceHistory.slice(-10), // Last 10 changes
+      flushHistory: TRANSPORT_COHERENCE_ENABLED ? flushHistory.slice(-16) : [],
+      backpressureHistory: TRANSPORT_COHERENCE_ENABLED
+        ? backpressureHistory.slice(-16)
+        : [],
       adaptive: this.adaptive
         ? {
             mode: this.adaptive.state.mode,
@@ -896,6 +1022,13 @@ export class FlowController extends TypedEventEmitter<FlowControllerEvents> {
             bytesPerFlushAvg: this.adaptive.state.bytesPerFlushAvg,
             eluIdleRatioAvg: this.adaptive.state.eluIdleRatioAvg,
             gcPauseMaxMs: this.adaptive.state.gcPauseMaxMs,
+          }
+        : undefined,
+      transportCoherence,
+      governance: this.governancePolicy
+        ? {
+            mode: this.governancePolicy.mode,
+            reason: this.governancePolicy.reason,
           }
         : undefined,
       negentropic,
@@ -912,6 +1045,10 @@ export class FlowController extends TypedEventEmitter<FlowControllerEvents> {
         size: this.sliceSize,
       },
     ];
+    this.flushHistory = [];
+    this.backpressureHistory = [];
+    this.flushHistoryCursor = 0;
+    this.backpressureHistoryCursor = 0;
     this.negDiagnostics.reset();
   }
 
@@ -953,9 +1090,17 @@ export class FlowController extends TypedEventEmitter<FlowControllerEvents> {
     bytes: number,
     _reserveDelayMs: number,
   ): void {
-    if (!this.adaptive || frameCount <= 0 || bytes <= 0) return;
-    const { state, config } = this.adaptive;
+    if (frameCount <= 0 || bytes <= 0) return;
     const now = performance.now();
+    if (TRANSPORT_COHERENCE_ENABLED) {
+      this.recordFlushSample({
+        timestamp: Date.now(),
+        bytes,
+        frames: frameCount,
+      });
+    }
+    if (!this.adaptive) return;
+    const { state, config, peer } = this.adaptive;
     const dt = state.lastFlushAt ? now - state.lastFlushAt : 0;
     state.lastFlushAt = now;
     if (dt > 0) {
@@ -975,7 +1120,9 @@ export class FlowController extends TypedEventEmitter<FlowControllerEvents> {
         readRecentGcPause(),
       );
       if (state.backpressureCount > 0) {
-        state.backpressureCount = Math.max(0, state.backpressureCount - 1);
+        state.backpressureCount = peer.isNative
+          ? Math.floor(state.backpressureCount * 0.5)
+          : Math.max(0, state.backpressureCount - 1);
       }
     }
 
@@ -1002,7 +1149,10 @@ export class FlowController extends TypedEventEmitter<FlowControllerEvents> {
     const idleOK = state.eluIdleRatioAvg >= config.idleTarget;
     const gcOK = state.gcPauseMaxMs <= config.gcBudgetMs;
     const cooldownActive = this.adaptive.cooldownRemaining > 0;
-    const bpOK = state.backpressureCount === 0 && !cooldownActive;
+    const bpOK = peer.isNative
+      ? state.backpressureCount <= 1 && !cooldownActive
+      : state.backpressureCount === 0 && !cooldownActive;
+    const allowExpansion = idleOK && gcOK && bpOK;
 
     const expansionBase =
       peer.isNative || peer.nIndex >= 0.9
@@ -1019,19 +1169,24 @@ export class FlowController extends TypedEventEmitter<FlowControllerEvents> {
     }
 
     const contractionBase =
-      !gcOK && state.gcPauseMaxMs > config.gcBudgetMs * 1.5
-        ? config.driftStep * 2
-        : config.driftStep;
+      peer.isNative
+        ? Math.max(2, Math.floor(config.driftStep / 2))
+        : !gcOK && state.gcPauseMaxMs > config.gcBudgetMs * 1.5
+          ? Math.max(2, Math.floor(config.driftStep * 1.5))
+          : Math.max(1, Math.floor(config.driftStep / 2));
 
     let desired = this.sliceSize;
-    if (idleOK && gcOK && bpOK) {
+    if (allowExpansion) {
       desired = Math.min(peerMax, this.sliceSize + expansionStep);
     } else {
       desired = Math.max(bounds.minSlice, this.sliceSize - contractionBase);
     }
 
     if (cooldownActive) {
-      desired = bounds.minSlice;
+      desired = Math.min(
+        desired,
+        Math.max(bounds.minSlice, this.sliceSize - contractionBase),
+      );
       this.adaptive.cooldownRemaining = Math.max(
         0,
         this.adaptive.cooldownRemaining - config.adaptEvery,
@@ -1106,6 +1261,52 @@ export class FlowController extends TypedEventEmitter<FlowControllerEvents> {
   private resolveForcedSlice(): number | undefined {
     return this.forceSliceSize ?? this.externalSliceSize;
   }
+
+  private recordFlushSample(sample: {
+    timestamp: number;
+    bytes: number;
+    frames: number;
+  }): void {
+    if (this.flushHistory.length < 128) {
+      this.flushHistory.push(sample);
+      return;
+    }
+    this.flushHistory[this.flushHistoryCursor] = sample;
+    this.flushHistoryCursor = (this.flushHistoryCursor + 1) % 128;
+  }
+
+  private recordBackpressureSample(timestamp: number): void {
+    if (this.backpressureHistory.length < 128) {
+      this.backpressureHistory.push(timestamp);
+      return;
+    }
+    this.backpressureHistory[this.backpressureHistoryCursor] = timestamp;
+    this.backpressureHistoryCursor = (this.backpressureHistoryCursor + 1) % 128;
+  }
+
+  private getOrderedFlushHistory(): Array<{
+    timestamp: number;
+    bytes: number;
+    frames: number;
+  }> {
+    if (this.flushHistory.length < 128) {
+      return this.flushHistory;
+    }
+    return [
+      ...this.flushHistory.slice(this.flushHistoryCursor),
+      ...this.flushHistory.slice(0, this.flushHistoryCursor),
+    ];
+  }
+
+  private getOrderedBackpressureHistory(): number[] {
+    if (this.backpressureHistory.length < 128) {
+      return this.backpressureHistory;
+    }
+    return [
+      ...this.backpressureHistory.slice(this.backpressureHistoryCursor),
+      ...this.backpressureHistory.slice(0, this.backpressureHistoryCursor),
+    ];
+  }
 }
 
 /**
@@ -1127,6 +1328,8 @@ export interface FlowControllerDiagnostics {
     peerIsNative: boolean;
   };
   sliceHistory: Array<{ timestamp: number; size: number }>;
+  flushHistory: Array<{ timestamp: number; bytes: number; frames: number }>;
+  backpressureHistory: number[];
   adaptive?: {
     mode: AdaptiveMode;
     sliceSize: number;
@@ -1135,6 +1338,11 @@ export interface FlowControllerDiagnostics {
     eluIdleRatioAvg: number;
     gcPauseMaxMs: number;
   };
+  governance?: {
+    mode: string;
+    reason: string[];
+  };
+  transportCoherence?: TransportCoherenceSnapshot;
   negentropic: NegentropicSnapshot;
 }
 

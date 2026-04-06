@@ -1,119 +1,79 @@
-# Security Policy
+# QWormhole Security
 
-## Supported Versions
+## Current posture
 
-| Version | Supported          |
-| ------- | ------------------ |
-| 0.2.x   | :white_check_mark: |
+`QWormhole` supports:
 
-## Reporting a Vulnerability
+- TLS transport
+- protocol-versioned handshake
+- handshake verification
+- TLS fingerprint binding inside handshake metadata
 
-If you discover a security vulnerability in QWormhole, please report it responsibly.
+Those features were not previously guaranteed by default at runtime. The package now applies env-backed security defaults to both client and server construction.
 
-### How to Report
+## Recommended env contract
 
-1. **Do NOT open a public GitHub issue** for security vulnerabilities.
+Set these in the repo root `.env` if multiple services share the same transport policy.
 
-2. **Email the maintainers directly** with:
-   - A description of the vulnerability
-   - Steps to reproduce
-   - Potential impact assessment
-   - Any suggested fixes (optional)
+Required for secure transport:
 
-3. **Response timeline**:
-   - Initial response: within 48 hours
-   - Status update: within 7 days
-   - Fix timeline: depends on severity (critical: ASAP, high: 14 days, medium: 30 days)
+```env
+QWORMHOLE_PROTOCOL_VERSION=1.0.0
+QWORMHOLE_REQUIRE_HANDSHAKE=1
+QWORMHOLE_HANDSHAKE_REQUIRED_TAGS=service
+QWORMHOLE_TLS_ENABLED=1
+QWORMHOLE_TLS_CERT_PATH=./secrets/qwormhole/server-cert.pem
+QWORMHOLE_TLS_KEY_PATH=./secrets/qwormhole/server-key.pem
+QWORMHOLE_TLS_CA_PATHS=./secrets/qwormhole/ca-cert.pem
+QWORMHOLE_TLS_REJECT_UNAUTHORIZED=1
+```
 
-### What to Include
+Optional:
 
-When reporting a vulnerability, please include:
+```env
+QWORMHOLE_TLS_REQUEST_CERT=1
+QWORMHOLE_TLS_SERVERNAME=qwormhole.internal
+QWORMHOLE_TLS_ALPN=qwormhole
+QWORMHOLE_BIND_HOST=127.0.0.1
+```
 
-- **Type of vulnerability** (e.g., buffer overflow, injection, authentication bypass)
-- **Location** (file path, function name, line number if known)
-- **Reproduction steps** with minimal code example
-- **Impact assessment** (what an attacker could achieve)
-- **Environment details** (OS, Node.js version, native backend if applicable)
+## Behavior
 
-## Security Considerations
+- `QWormholeClient` will pick up:
+  - `QWORMHOLE_PROTOCOL_VERSION`
+  - TLS material/options
+- `QWormholeServer` will pick up:
+  - `QWORMHOLE_PROTOCOL_VERSION`
+  - TLS material/options
+  - env-derived handshake verifier when `QWORMHOLE_REQUIRE_HANDSHAKE=1`
+- `QWormholeRuntime.listen()` will use `QWORMHOLE_BIND_HOST` if set
+- Secure server options force the TypeScript server path instead of native server mode so TLS and handshake policy are enforced consistently
 
-### Transport Security
+## Important limitations
 
-QWormhole is a transport layer library. By default, it does **not** encrypt traffic.
+- `WorkerShardedServer` and `RoutedShardedServer` do not serialize custom `verifyHandshake` callbacks across workers.
+- With the env-backed defaults above, workers still inherit secure server behavior because the verifier is reconstructed inside the server implementation.
+- `QWormholeRuntime.listen()` still defaults to `0.0.0.0` if `QWORMHOLE_BIND_HOST` is not set. Set it explicitly.
 
-**To secure your deployment:**
+## Scope recommendation
 
-1. **Enable TLS** - Use the built-in TLS support:
-   ```typescript
-   const server = new QWormholeServer({
-     tls: {
-       enabled: true,
-       cert: fs.readFileSync('./cert.pem'),
-       key: fs.readFileSync('./key.pem'),
-     }
-   });
-   ```
+- Put shared transport env vars in the repo root when:
+  - `vera`
+  - `vera-torch`
+  - `campus`
+  - `qwormhole-bridge`
+  all use the same internal transport trust policy.
 
-2. **Use WireGuard** - For mesh networks, run QWormhole over WireGuard tunnels.
+- Put scoped env vars in package-local env files only when a service needs a distinct identity or certificate set.
 
-3. **Network isolation** - Deploy on private networks or VPNs.
+Practical split:
 
-See [docs/tls-examples.md](docs/tls-examples.md) for detailed TLS configurations.
+- root `.env`
+  - `QWORMHOLE_*`
+  - `VERA_SERVICE_TOKEN`
+  - `VERA_ADMIN_TOKEN`
+- service-local `.env`
+  - service URLs
+  - model selection
+  - role-specific overrides
 
-### Native Backend Security
-
-The libwebsockets native backend supports TLS with the same options as the TypeScript transport.
-
-> **Important**: The libsocket backend is plaintext-only and will throw if TLS is requested. This prevents accidental security downgrades.
-
-
-### Handshake & Authentication
-
-QWormhole supports several authentication mechanisms:
-
-1. **Protocol versioning** - Reject clients with incompatible versions (now 0.2.0+)
-2. **Handshake tags** - Include identity metadata and negentropic diagnostics in handshakes
-3. **TLS fingerprint pinning** - Validate client certificates
-4. **Negentropic signatures** - Cryptographically signed handshakes, entropy/negentropy, coherence/velocity enums
-5. **Custom verification** - Implement `verifyHandshake` for custom logic
-
-### Rate Limiting & DoS Protection
-
-Built-in protections:
-
-- **Rate limiting** (`rateLimitBytesPerSec`)
-- **Backpressure limits** (`maxBackpressureBytes`)
-- **Connection limits** (`maxClients`)
-- **Idle timeouts** (`idleTimeoutMs`)
-
-### Known Limitations
-
-1. **Native server is experimental** - The libwebsockets server wrapper has ~60% test coverage. Use the TypeScript server for production until parity is achieved.
-
-2. **Session key rotation** - Not yet implemented. Planned for v1.x.
-
-3. **Replay protection** - Not yet implemented. Planned for v1.x.
-
-## Security Roadmap
-
-See [ROADMAP.md](ROADMAP.md) for planned security enhancements:
-
-- [ ] Session key rotation
-- [ ] Replay protection
-- [ ] Forward secrecy toggle
-- [ ] Native server parity with full coverage
-
-## Disclosure Policy
-
-We follow coordinated disclosure:
-
-1. Reporter notifies maintainers privately
-2. Maintainers acknowledge and investigate
-3. Fix is developed and tested
-4. Advisory is prepared
-5. Fix is released with advisory
-6. Public disclosure after patch is available
-
-## Credits
-
-We appreciate security researchers who help keep QWormhole safe. Contributors will be acknowledged in the release notes (unless they prefer to remain anonymous).

@@ -5,6 +5,7 @@ import type {
   NativeBackend,
   NativeSocketOptions,
   QWTlsOptions,
+  INativeTcpClient,
 } from "src/types/types";
 
 const DEBUG_NATIVE = process.env.QWORMHOLE_DEBUG_NATIVE === "1";
@@ -42,10 +43,11 @@ const serializeAlpn = (protocols?: string[]): string | undefined => {
   return protocols.join(",");
 };
 
-type NativeBindingClient = {
+type NativeBindingClient = INativeTcpClient & {
   connect(host: string, port: number): void;
   connect(opts: NativeSocketOptions): void;
   send(data: string | Buffer): void;
+  sendMany?(data: Array<string | Buffer>): number | void;
   recv(length?: number): Buffer;
   isConnected?(): boolean;
   setEventHandler?(
@@ -271,6 +273,16 @@ export class NativeTcpClient implements NativeBindingClient {
 
   send(data: string | Buffer): void {
     this.impl.send(data);
+  }
+
+  sendMany(data: Array<string | Buffer>): number | void {
+    if (typeof this.impl.sendMany === "function") {
+      return this.impl.sendMany(data);
+    }
+    for (const chunk of data) {
+      this.impl.send(chunk);
+    }
+    return data.length;
   }
 
   recv(length?: number): Buffer {

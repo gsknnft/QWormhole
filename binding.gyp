@@ -82,8 +82,9 @@
       "sources": ["c/qwormhole_lws.cpp"],
       "include_dirs": [
         "<!@(node -p \"require('node-addon-api').include\")",
-        "<(module_root_dir)/libwebsockets/include",
-        "<(module_root_dir)/libwebsockets/build"
+        "<(module_root_dir)/libwebsockets/build/include",
+        "<(module_root_dir)/libwebsockets/build",
+        "<(module_root_dir)/libwebsockets/include"
       ],
       "dependencies": [
         "<!(node -p \"require('node-addon-api').gyp\")"
@@ -114,6 +115,9 @@
               "vcruntime.lib"
             ],
             "msvs_settings": {
+              "VCCLCompilerTool": {
+                "ExceptionHandling": 1
+              },
               "VCLinkerTool": {
                 "AdditionalLibraryDirectories": [
                   "<!(node -p \"process.env.OPENSSL_LIB_DIR || 'C:/Program Files/OpenSSL-Win64/lib/VC/x64/MD' \")"

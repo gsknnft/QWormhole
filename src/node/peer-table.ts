@@ -1,5 +1,5 @@
 // QWormhole/src/node/peer-table.ts
-import { PeerId, Peer } from "./peer-types";
+import { Peer , PeerId} from "src/types";
 
 export class PeerTable {
   private peers = new Map<PeerId, Peer>();

@@ -10,6 +10,7 @@ import {
   deriveEntropyPolicy,
   type EntropyMetrics,
 } from "../handshake/entropy-policy";
+import { applyQWormholeServerSecurityDefaults } from "../security/env";
 import type {
   Deserializer,
   NativeBackend,
@@ -333,13 +334,14 @@ export class NativeQWormholeServer<TMessage = Buffer> extends TypedEventEmitter<
   private buildOptions(
     options: QWormholeServerOptions<TMessage>,
   ): InternalServerOptions<TMessage> {
-    const deserializer = (options.deserializer ??
+    const secured = applyQWormholeServerSecurityDefaults(options);
+    const deserializer = (secured.deserializer ??
       bufferDeserializer) as Deserializer<TMessage>;
     return {
-      serializer: options.serializer ?? defaultSerializer,
+      serializer: secured.serializer ?? defaultSerializer,
       deserializer,
-      verifyHandshake: options.verifyHandshake,
-      maxBackpressureBytes: options.maxBackpressureBytes,
+      verifyHandshake: secured.verifyHandshake,
+      maxBackpressureBytes: secured.maxBackpressureBytes,
     };
   }
 

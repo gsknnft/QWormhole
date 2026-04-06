@@ -11,6 +11,7 @@
 
 import net from "node:net";
 import { TypedEventEmitter } from "../utils/typedEmitter";
+import type { QWormholeSocketLike } from "../types/types";
 
 const HEADER_LENGTH = 4;
 const DEFAULT_MAX_FRAME_LENGTH = 4 * 1024 * 1024; // 4 MiB
@@ -411,8 +412,7 @@ export class BatchFramer extends TypedEventEmitter<BatchFramerEvents> {
           await this.writevBatch(chunk, chunkIndices);
         }
       } else {
-        const combined = Buffer.concat(flushBuffers);
-        await this.writeBuffer(combined);
+        await this.writeBuffer(flushBuffers[0]);
       }
     } finally {
       this.releaseSlots(flushSlotIndices);
@@ -437,6 +437,17 @@ export class BatchFramer extends TypedEventEmitter<BatchFramerEvents> {
 
     return new Promise<void>((resolve, reject) => {
       const socket = this.socket!;
+      const transport = socket as net.Socket & QWormholeSocketLike;
+      if (typeof transport.writev === "function") {
+        const canWrite = transport.writev(buffers.map(chunk => ({ chunk })));
+        if (!canWrite) {
+          this.handleBackpressure(socket.writableLength ?? 0);
+          this.waitForSocketDrain(socket, resolve, reject);
+          return;
+        }
+        resolve();
+        return;
+      }
 
       // Node.js socket.cork() + multiple writes + uncork() is effectively writev
       socket.cork();
@@ -457,32 +468,7 @@ export class BatchFramer extends TypedEventEmitter<BatchFramerEvents> {
       queueMicrotask(() => socket.uncork());
 
       if (this.draining) {
-        // Cleanup function to remove all listeners
-        const cleanup = () => {
-          socket.off("drain", onDrain);
-          socket.off("error", onError);
-          socket.off("close", onClose);
-        };
-
-        const onDrain = () => {
-          cleanup();
-          this.draining = false;
-          resolve();
-        };
-
-        const onError = (err: Error) => {
-          cleanup();
-          reject(err);
-        };
-
-        const onClose = () => {
-          cleanup();
-          reject(new Error("Socket closed while waiting for drain"));
-        };
-
-        socket.once("drain", onDrain);
-        socket.once("error", onError);
-        socket.once("close", onClose);
+        this.waitForSocketDrain(socket, resolve, reject);
       } else {
         resolve();
       }
@@ -501,33 +487,7 @@ export class BatchFramer extends TypedEventEmitter<BatchFramerEvents> {
 
       if (!canWrite) {
         this.handleBackpressure(socket.writableLength);
-
-        // Cleanup function to remove all listeners
-        const cleanup = () => {
-          socket.off("drain", onDrain);
-          socket.off("error", onError);
-          socket.off("close", onClose);
-        };
-
-        const onDrain = () => {
-          cleanup();
-          this.draining = false;
-          resolve();
-        };
-
-        const onError = (err: Error) => {
-          cleanup();
-          reject(err);
-        };
-
-        const onClose = () => {
-          cleanup();
-          reject(new Error("Socket closed while waiting for drain"));
-        };
-
-        socket.once("drain", onDrain);
-        socket.once("error", onError);
-        socket.once("close", onClose);
+        this.waitForSocketDrain(socket, resolve, reject);
       } else {
         resolve();
       }
@@ -604,11 +564,47 @@ export class BatchFramer extends TypedEventEmitter<BatchFramerEvents> {
     return promise;
   }
 
+  private waitForSocketDrain(
+    socket: net.Socket,
+    resolve: () => void,
+    reject: (err: Error) => void,
+  ): void {
+    const cleanup = () => {
+      socket.off("drain", onDrain);
+      socket.off("error", onError);
+      socket.off("close", onClose);
+    };
+
+    const onDrain = () => {
+      cleanup();
+      this.draining = false;
+      resolve();
+    };
+
+    const onError = (err: Error) => {
+      cleanup();
+      reject(err);
+    };
+
+    const onClose = () => {
+      cleanup();
+      reject(new Error("Socket closed while waiting for drain"));
+    };
+
+    socket.once("drain", onDrain);
+    socket.once("error", onError);
+    socket.once("close", onClose);
+  }
+
   /**
    * Push incoming data for parsing
    */
   push(chunk: Buffer): void {
-    this.inBuffer = Buffer.concat([this.inBuffer, chunk]);
+    if (this.inBuffer.length === 0) {
+      this.inBuffer = chunk;
+    } else {
+      this.inBuffer = Buffer.concat([this.inBuffer, chunk]);
+    }
     this.maxInBufferBytes = Math.max(this.maxInBufferBytes, this.inBuffer.length);
 
     while (this.inBuffer.length >= HEADER_LENGTH) {
@@ -631,6 +627,9 @@ export class BatchFramer extends TypedEventEmitter<BatchFramerEvents> {
       const end = HEADER_LENGTH + frameLength;
       const frame = this.inBuffer.subarray(start, end);
       this.inBuffer = this.inBuffer.subarray(end);
+      if (this.inBuffer.length === 0) {
+        this.inBuffer = Buffer.alloc(0);
+      }
       this.emit("message", frame);
     }
   }

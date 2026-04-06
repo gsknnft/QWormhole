@@ -116,6 +116,16 @@ const LOG_INTERVAL_MS = numberFlag({
   env: "QW_WRITEV_LOG_MS",
   defaultValue: 1000,
 });
+const ADAPT_SHRINK_FACTOR = numberFlag({
+  name: "shrinkFactor",
+  env: "QW_WRITEV_SHRINK_FACTOR",
+  defaultValue: 0.85,
+});
+const ADAPT_RECOVERY_FLUSHES = numberFlag({
+  name: "recoveryFlushes",
+  env: "QW_WRITEV_RECOVERY_FLUSHES",
+  defaultValue: 192,
+});
 const ROLLING_WINDOW = numberFlag({
   name: "rolling",
   env: "QW_WRITEV_ROLLING",
@@ -221,6 +231,8 @@ async function mainBenchWritev(): Promise<void> {
   const serverFramers = new Set<BatchFramer>();
   const rollingLatencies: number[] = [];
   let logTimer: NodeJS.Timeout | undefined;
+  let lastShrinkBackpressureCount = 0;
+  let flushesSinceBackpressure = 0;
 
   const { server } = createQWormholeServer<Buffer>({
     host: "127.0.0.1",
@@ -249,18 +261,43 @@ async function mainBenchWritev(): Promise<void> {
 
   const maybeAdaptBatch = (backpressureCount: number): void => {
     if (!ADAPT_BACKPRESSURE) return;
-    if (backpressureCount < BACKPRESSURE_THRESHOLD) return;
+    flushesSinceBackpressure = 0;
+    if (
+      backpressureCount - lastShrinkBackpressureCount <
+      BACKPRESSURE_THRESHOLD
+    ) {
+      return;
+    }
     const next = clamp(
-      Math.floor(currentBatchSize * 0.75),
+      Math.floor(currentBatchSize * ADAPT_SHRINK_FACTOR),
       MIN_BATCH_SIZE,
       BATCH_SIZE,
     );
     if (next < currentBatchSize) {
       currentBatchSize = next;
+      lastShrinkBackpressureCount = backpressureCount;
       applyFramerConfig();
       console.log(
-        `[adaptive] backpressure ${backpressureCount} → shrinking batch to ${currentBatchSize}`,
+        `[adaptive] backpressure ${backpressureCount} -> shrinking batch to ${currentBatchSize}`,
       );
+    }
+  };
+
+  const maybeRecoverBatch = (): void => {
+    if (!ADAPT_BACKPRESSURE) return;
+    if (currentBatchSize >= BATCH_SIZE) return;
+    flushesSinceBackpressure += 1;
+    if (flushesSinceBackpressure < ADAPT_RECOVERY_FLUSHES) return;
+    flushesSinceBackpressure = 0;
+    const next = clamp(
+      Math.ceil(currentBatchSize * 1.15),
+      MIN_BATCH_SIZE,
+      BATCH_SIZE,
+    );
+    if (next > currentBatchSize) {
+      currentBatchSize = next;
+      applyFramerConfig();
+      console.log(`[adaptive] recovery -> expanding batch to ${currentBatchSize}`);
     }
   };
 
@@ -272,8 +309,10 @@ async function mainBenchWritev(): Promise<void> {
       serverFramers.add(framer);
       tuneFramer(framer, currentBatchSize, currentFlushInterval);
       attachFlushObservers(framer, serverFlush, {
-        onFlush: () =>
-          tuneFramer(framer, currentBatchSize, currentFlushInterval),
+        onFlush: () => {
+          tuneFramer(framer, currentBatchSize, currentFlushInterval);
+          maybeRecoverBatch();
+        },
         onBackpressure: () => maybeAdaptBatch(serverFlush.backpressureEvents),
       });
       serverFramerAttached.add(client.id);
@@ -284,8 +323,10 @@ async function mainBenchWritev(): Promise<void> {
   const clientFramer = (client as unknown as { outboundFramer?: BatchFramer })
     .outboundFramer;
   attachFlushObservers(clientFramer, clientFlush, {
-    onFlush: () =>
-      tuneFramer(clientFramer, currentBatchSize, currentFlushInterval),
+    onFlush: () => {
+      tuneFramer(clientFramer, currentBatchSize, currentFlushInterval);
+      maybeRecoverBatch();
+    },
     onBackpressure: () => maybeAdaptBatch(clientFlush.backpressureEvents),
   });
   tuneFramer(clientFramer, currentBatchSize, currentFlushInterval);
@@ -305,7 +346,7 @@ async function mainBenchWritev(): Promise<void> {
         const elapsedSec = (performance.now() - startTs) / 1000;
         const tput = elapsedSec > 0 ? durationsMs.length / elapsedSec : 0;
         console.log(
-          `[live] batch=${currentBatchSize} flushMs=${currentFlushInterval}${JITTER_MS > 0 ? `±${JITTER_MS}` : ""} recv=${durationsMs.length} bp(client/server)=${clientFlush.backpressureEvents}/${serverFlush.backpressureEvents} p50=${rollP50.toFixed(2)}ms p99=${rollP99.toFixed(2)}ms thr=${tput.toFixed(0)} msg/s`,
+          `[live] batch=${currentBatchSize} flushMs=${currentFlushInterval}${JITTER_MS > 0 ? `+/-${JITTER_MS}` : ""} recv=${durationsMs.length} bp(client/server)=${clientFlush.backpressureEvents}/${serverFlush.backpressureEvents} p50=${rollP50.toFixed(2)}ms p99=${rollP99.toFixed(2)}ms thr=${tput.toFixed(0)} msg/s`,
         );
       }, LOG_INTERVAL_MS);
     }
@@ -403,7 +444,7 @@ async function mainBenchWritev(): Promise<void> {
       `frames=${TOTAL_FRAMES}, payload=${PAYLOAD_BYTES} bytes, timeout=${TIMEOUT_MS} ms`,
     );
     console.log(
-      `batchSize=${currentBatchSize} (initial ${BATCH_SIZE}), flushIntervalMs=${currentFlushInterval}${JITTER_MS > 0 ? `±${JITTER_MS}` : ""}`,
+      `batchSize=${currentBatchSize} (initial ${BATCH_SIZE}), flushIntervalMs=${currentFlushInterval}${JITTER_MS > 0 ? `+/-${JITTER_MS}` : ""}`,
     );
     console.log(
       `latency: p50=${p50.toFixed(2)} ms, p99=${p99.toFixed(
@@ -503,3 +544,4 @@ void mainBenchWritev()
 
 
 export { mainBenchWritev };
+

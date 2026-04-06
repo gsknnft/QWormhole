@@ -1,6 +1,33 @@
 # Changelog
 
-## Unreleased (next: 0.3.0)
+## Unreleased (next: 0.3.1)
+
+- `fitj.ts`: uncommented and fully enabled polynomial regression exports
+  (`RegressionOrder`, `FitResult`, `fitJ`, `evalFitJ`, `gradFitJ`). Pivot guard
+  prevents rank-deficient inversion; all regression orders (1–3) now produce
+  finite gradient and value estimates.
+- `jSpaceResolution.ts`: fixed cubic-order polynomial evaluation (`evalFitJ`
+  called with correct argument, not a raw number literal) and gradient
+  computation; J-space attractor-basin estimates are now geometrically correct.
+- `invariants.ts`: tightened coherence invariant assertions for structural
+  persistence under attractor-comparison regime transitions.
+- `transport-governance-policy.ts`: wired `driftRate` from per-role latency CV
+  into governance escalation thresholds; `DRIFT_RATE_GUARDED_THRESHOLD` gate
+  (0.55) activates role-level recovery posture before consensus-layer escalation.
+
+## 0.3.0 - 2026-04-06
+
+- Bench and release-lane clarification:
+  - `bench:core:report` is explicitly the raw core transport lane again.
+  - Transport coherence history sampling is opt-in via `QWORMHOLE_TRANSPORT_COHERENCE=1` to avoid contaminating throughput measurements.
+  - Added `bench:core:structure` as a separate structural validation lane writing to `data/core_diagnostics.structure.*`.
+  - Added `bench:compare:report` as a separate competitor/baseline comparison lane.
+  - QWormhole publication from `main` is intentionally paused until `@gsknnft/coherence` is ready for external release.
+  - Recovered raw-core throughput after isolating structural metrics off the hot path:
+    - `ts-server+ts`: ~114k msg/s
+    - `ts-server+native-lws`: ~115k msg/s
+    - `native-server(lws)+ts`: ~101k msg/s
+    - `native-server(lws)+native-lws`: ~108k msg/s
 
 - Prebuilt-native distribution lane added:
   - Added `native:stage-prebuilds` to stage `prebuilds/<platform>-<arch>/*.node`.

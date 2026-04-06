@@ -8,7 +8,9 @@ import {
   type EventLoopUtilization,
 } from "node:perf_hooks";
 import { fork } from "node:child_process";
-import type { EventEmitter } from "node:events";
+import { once, type EventEmitter } from "node:events";
+import fs from "node:fs/promises";
+import net from "node:net";
 import {
   QWormholeClient,
   NativeTcpClient,
@@ -19,6 +21,7 @@ import {
   quicAvailable,
 } from "../src/index";
 import path from "node:path";
+import { NativeSocketAdapter } from "../src/core/native-socket";
 import { shutdownFlowControllerMonitors } from "../src/core/flow-controller";
 import { isNativeServerAvailable } from "../src/core/native-server";
 import { BatchFramer } from "../src/core/batch-framer";
@@ -40,6 +43,7 @@ import type {
   QWormholeServerOptions,
   Serializer,
 } from "../src/types/types";
+import WebSocket, { WebSocketServer } from "ws";
 import * as dotenv from "dotenv";
 import {
   ScenarioDiagnostics,
@@ -52,7 +56,38 @@ import {
   DiagnosticsExtras,
   CoherenceDecisionSample,
 } from "../test/testtypes";
-dotenv.config();
+dotenv.config({
+  quiet: process.env.QWORMHOLE_BENCH_CHILD === "1",
+});
+
+const BENCH_SECURE_TRANSPORT =
+  process.env.QWORMHOLE_BENCH_SECURE_TRANSPORT === "1";
+const BENCH_ALLOW_NATIVE_SECURE =
+  process.env.QWORMHOLE_BENCH_ALLOW_NATIVE_SECURE !== "0";
+
+if (!BENCH_SECURE_TRANSPORT) {
+  delete process.env.QWORMHOLE_TLS_ENABLED;
+  delete process.env.QWORMHOLE_TLS_CERT;
+  delete process.env.QWORMHOLE_TLS_CERT_PATH;
+  delete process.env.QWORMHOLE_TLS_KEY;
+  delete process.env.QWORMHOLE_TLS_KEY_PATH;
+  delete process.env.QWORMHOLE_TLS_CA;
+  delete process.env.QWORMHOLE_TLS_CA_PATH;
+  delete process.env.QWORMHOLE_TLS_CA_PATHS;
+  delete process.env.QWORMHOLE_TLS_REJECT_UNAUTHORIZED;
+  delete process.env.QWORMHOLE_TLS_REQUEST_CERT;
+  delete process.env.QWORMHOLE_TLS_SERVERNAME;
+  delete process.env.QWORMHOLE_TLS_ALPN;
+  delete process.env.QWORMHOLE_TLS_CLIENT_CERT;
+  delete process.env.QWORMHOLE_TLS_CLIENT_CERT_PATH;
+  delete process.env.QWORMHOLE_TLS_CLIENT_KEY;
+  delete process.env.QWORMHOLE_TLS_CLIENT_KEY_PATH;
+  delete process.env.QWORMHOLE_TLS_CLIENT_PASSPHRASE;
+  delete process.env.QWORMHOLE_REQUIRE_HANDSHAKE;
+  delete process.env.QWORMHOLE_HANDSHAKE_REQUIRED_TAGS;
+  delete process.env.QWORMHOLE_HANDSHAKE_ALLOWED_VERSIONS;
+  delete process.env.QWORMHOLE_PROTOCOL_VERSION;
+}
 interface TrustSnapshot {
   flowDiagnostics?: FlowControllerDiagnostics;
   batchStats?: BatchFramerStats;
@@ -103,9 +138,22 @@ interface QWormholeClientOptions {
 const BENCH_COHERENCE = process.env.QWORMHOLE_BENCH_COHERENCE === "1";
 const BENCH_COHERENCE_MODE =
   process.env.QWORMHOLE_BENCH_COHERENCE_MODE ?? "observe";
+const BENCH_TRANSPORT_COHERENCE =
+  process.env.QWORMHOLE_TRANSPORT_COHERENCE === "1";
 const BENCH_TRACE = process.env.QWORMHOLE_BENCH_TRACE === "1";
 const BENCH_FORK = process.env.QWORMHOLE_BENCH_FORK === "1";
 const BENCH_CHILD = process.env.QWORMHOLE_BENCH_CHILD === "1";
+const DEFAULT_BENCH_HANDSHAKE_TAGS = {
+  service: process.env.QWORMHOLE_BENCH_SERVICE_TAG ?? "bench",
+};
+const SECURE_TRANSPORT_ACTIVE =
+  process.env.QWORMHOLE_TLS_ENABLED === "1" ||
+  process.env.QWORMHOLE_REQUIRE_HANDSHAKE === "1" ||
+  Boolean(process.env.QWORMHOLE_PROTOCOL_VERSION);
+const BENCH_REPEAT = Math.max(
+  1,
+  Number(process.env.QWORMHOLE_BENCH_REPEAT ?? "1") || 1,
+);
 
 type BenchChildInit = {
   type: "init";
@@ -128,6 +176,7 @@ type BenchChildDone = {
   bytesReceived: number;
   serverMode: Mode;
   diagnostics?: ScenarioDiagnostics;
+  result?: ScenarioResult;
 };
 
 type BenchChildSkip = {
@@ -180,11 +229,15 @@ const getCsvPath = () => {
 };
 const BENCH_CSV_PATH = getCsvPath();
 const BENCH_JSONL_PATH = process.env.QWORMHOLE_BENCH_JSONL;
+const BENCH_REPORT_PATH = process.env.QWORMHOLE_BENCH_REPORT;
 
 type Mode =
   | "ts"
   | "native-lws"
   | "native-libsocket"
+  | "net"
+  | "ws"
+  | "uwebsockets"
   | "kcp"
   | "kcp-arq"
   | "quic";
@@ -210,12 +263,17 @@ interface BenchResult {
 }
 
 const SOCKET_MODES: Mode[] = ["ts", "native-lws", "native-libsocket", "quic"];
-const ALL_MODES: Mode[] = [...SOCKET_MODES, "kcp", "quic"];
+const BASELINE_MODES: Mode[] = ["net", "ws", "uwebsockets"];
+const ALL_MODES: Mode[] = [...SOCKET_MODES, ...BASELINE_MODES, "kcp", "quic"];
+const CORE_MODES: Mode[] = ["ts", "native-lws", "native-libsocket"];
+const COMPARE_MODES: Mode[] = [...CORE_MODES, ...BASELINE_MODES];
 function parseModeArg(): Mode[] {
   const arg = process.argv.find(a => a.startsWith("--mode="));
   if (!arg) return ALL_MODES;
   const val = arg.split("=")[1];
   if (val === "all") return ALL_MODES;
+  if (val === "core") return CORE_MODES;
+  if (val === "compare") return COMPARE_MODES;
   if (ALL_MODES.includes(val as Mode)) return [val as Mode];
   return ALL_MODES;
 }
@@ -224,6 +282,21 @@ const PAYLOAD = Buffer.alloc(1024, 1);
 const TOTAL_MESSAGES = Math.max(
   1,
   Number(process.env.QWORMHOLE_BENCH_MESSAGES ?? "10000") || 10000,
+);
+const BENCH_CLIENTS = Math.max(
+  1,
+  Number(process.env.QWORMHOLE_BENCH_CLIENTS ?? "1") || 1,
+);
+const MESSAGES_PER_CLIENT = Math.ceil(TOTAL_MESSAGES / BENCH_CLIENTS);
+const WARMUP_MESSAGES = Math.max(
+  0,
+  Math.min(
+    TOTAL_MESSAGES,
+    Number(
+      process.env.QWORMHOLE_BENCH_WARMUP_MESSAGES ??
+        String(Math.min(2000, Math.max(100, Math.floor(TOTAL_MESSAGES / 10)))),
+    ) || 0,
+  ),
 );
 const TIMEOUT_MS = 5000;
 const KCP_TIMEOUT_MS =
@@ -274,10 +347,18 @@ const BENCH_NEG_INDEX = (() => {
   return Math.min(Math.max(parsed, 0), 1);
 })();
 const FRAME_HEADER_BYTES = 4;
+const DEFAULT_MAX_FRAME_LENGTH = 16 * 1024 * 1024;
 const MACRO_BATCH_TARGET_BYTES = 128 * 1024;
 const ENABLE_DIAGNOSTICS =
   process.argv.includes("--diagnostics") ||
   process.env.QWORMHOLE_BENCH_DIAGNOSTICS === "1";
+
+const formatTransportMetric = (value?: number): string => {
+  if (Number.isFinite(value)) {
+    return (value as number).toFixed(3);
+  }
+  return BENCH_TRANSPORT_COHERENCE ? "-" : "off";
+};
 
 const padToBytes = (prefix: string, targetBytes: number): string => {
   const size = Buffer.byteLength(prefix);
@@ -345,6 +426,24 @@ const detectNativeBackend = (backend: "lws" | "libsocket") => {
 const availableLws = detectNativeBackend("lws");
 const availableLibsocket = detectNativeBackend("libsocket");
 
+let uwsModulePromise: Promise<any | null> | null = null;
+const loadUwsModule = async (): Promise<any | null> => {
+  if (!uwsModulePromise) {
+    uwsModulePromise = (async () => {
+      try {
+        const importer = new Function(
+          "specifier",
+          "return import(specifier)",
+        ) as (specifier: string) => Promise<any>;
+        return await importer("uWebSockets.js");
+      } catch {
+        return null;
+      }
+    })();
+  }
+  return uwsModulePromise;
+};
+
 const serverBackends: NativeBackend[] = [];
 if (isNativeServerAvailable("lws")) {
   serverBackends.push("lws");
@@ -378,6 +477,27 @@ for (const preferNativeServer of [false, true]) {
   }
 }
 
+const baselineScenarios: Scenario[] = [
+  {
+    id: "net-server+net",
+    preferNativeServer: false,
+    clientMode: "net",
+  },
+  {
+    id: "ws-server+ws",
+    preferNativeServer: false,
+    clientMode: "ws",
+  },
+  {
+    id: "uwebsockets-server+ws",
+    preferNativeServer: false,
+    clientMode: "uwebsockets",
+  },
+];
+
+const framingForClientMode = (mode: Mode): FramingMode =>
+  isBaselineMode(mode) ? "none" : BENCH_FRAMING;
+
 const toBytes: Serializer = (payload: Payload): Buffer => {
   if (Buffer.isBuffer(payload)) return payload;
   if (payload instanceof Uint8Array) return Buffer.from(payload);
@@ -398,7 +518,7 @@ const benchSerializer: Serializer = (() => {
     return encoded;
   };
 })();
-const summarizePayloadBytes = (): PayloadSummary => {
+const summarizePayloadBytes = (framing: FramingMode): PayloadSummary => {
   const sizes = BENCH_PAYLOADS.map(payload => benchSerializer(payload).length);
   const count = sizes.length;
   const minBytes = count ? Math.min(...sizes) : 0;
@@ -415,25 +535,65 @@ const summarizePayloadBytes = (): PayloadSummary => {
     maxBytes,
     avgBytes,
     types,
-    framing: BENCH_FRAMING,
-    frameHeaderBytes: BENCH_FRAMING === "length-prefixed" ? FRAME_HEADER_BYTES : 0,
+    framing,
+    frameHeaderBytes: framing === "length-prefixed" ? FRAME_HEADER_BYTES : 0,
   };
 };
-const PAYLOAD_SUMMARY = summarizePayloadBytes();
+const PAYLOAD_SUMMARY = summarizePayloadBytes(BENCH_FRAMING);
 
-const NATIVE_PAYLOADS = BENCH_PAYLOADS.map(payload => {
-  const bytes = toBytes(payload);
-  return BENCH_FRAMING === "length-prefixed"
-    ? encodeLengthPrefixed(bytes)
-    : bytes;
-});
-const getNativePayload = (i: number): Buffer =>
-  NATIVE_PAYLOADS[i % NATIVE_PAYLOADS.length];
+const buildNativePayloads = (framing: FramingMode): Buffer[] =>
+  BENCH_PAYLOADS.map(payload => {
+    const bytes = toBytes(payload);
+    return framing === "length-prefixed"
+      ? encodeLengthPrefixed(bytes)
+      : bytes;
+  });
+const NATIVE_PAYLOADS_BY_FRAMING: Record<FramingMode, Buffer[]> = {
+  "length-prefixed": buildNativePayloads("length-prefixed"),
+  none: buildNativePayloads("none"),
+};
+const getNativePayload = (i: number, framing: FramingMode): Buffer => {
+  const payloads = NATIVE_PAYLOADS_BY_FRAMING[framing];
+  return payloads[i % payloads.length];
+};
 
 const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
+const NATIVE_SEND_BATCH_SIZE = Math.max(
+  1,
+  Number(process.env.QWORMHOLE_BENCH_NATIVE_SEND_BATCH ?? "64") || 64,
+);
+
+const sendBenchPayloadAt = (
+  index: number,
+  tsClient: QWormholeClient<Buffer> | null,
+  nativeClient: NativeTcpClient | null,
+  framing: FramingMode,
+): void => {
+  const payload = getBenchPayload(index);
+  if (tsClient) {
+    void tsClient.send(payload);
+  } else if (nativeClient) {
+    nativeClient.send(getNativePayload(index, framing));
+  }
+};
+
+const flushNativeBenchBatch = (
+  nativeClient: NativeTcpClient | null,
+  batch: Buffer[],
+): void => {
+  if (!nativeClient || batch.length === 0) return;
+  if (batch.length === 1) {
+    nativeClient.send(batch[0]);
+  } else {
+    nativeClient.sendMany(batch);
+  }
+  batch.length = 0;
+};
 
 const clientModeAvailable = (mode: Mode): boolean => {
   if (mode === "ts") return true;
+  if (mode === "net" || mode === "ws") return true;
+  if (mode === "uwebsockets") return true;
   if (mode === "native-lws") return availableLws && isNativeAvailable();
   if (mode === "quic") return quicAvailable();
   return availableLibsocket && isNativeAvailable();
@@ -456,12 +616,13 @@ const deriveBenchCoherence = (): "high" | "medium" | "low" | "chaos" => {
 
 const buildBenchConfigSummary = (
   flowController?: FlowController | null,
+  framing: FramingMode = BENCH_FRAMING,
 ): BenchConfigSummary => {
   const summary: BenchConfigSummary = {
     macroBatchTargetBytes: MACRO_BATCH_TARGET_BYTES,
     yieldEvery: BENCH_YIELD_EVERY,
     flowFastPath: BENCH_FLOW_FAST,
-    payload: PAYLOAD_SUMMARY,
+    payload: summarizePayloadBytes(framing),
   };
   if (!flowController) return summary;
   const diag = flowController.getDiagnostics();
@@ -556,6 +717,9 @@ const diffGcTotals = (start: GcTotals): GcTotals => {
 
 let batchFramerPatched = false;
 let activeBatchCollector: BatchFlushStats | null = null;
+type TransportCallStats = NonNullable<ScenarioDiagnostics["transportCalls"]>;
+let transportCallsPatched = false;
+let activeTransportCollector: TransportCallStats | null = null;
 
 const ensureBatchFramerDiagnostics = () => {
   if (batchFramerPatched) return;
@@ -588,6 +752,88 @@ const ensureBatchFramerDiagnostics = () => {
   batchFramerPatched = true;
 };
 
+const ensureTransportCallDiagnostics = () => {
+  if (transportCallsPatched) return;
+
+  const batchFramerProto = BatchFramer.prototype as BatchFramer & {
+    writevBatch?: (buffers: Buffer[], slotIndices?: number[]) => Promise<void>;
+    writeBuffer?: (buffer: Buffer) => Promise<void>;
+  };
+
+  if (typeof batchFramerProto.writevBatch === "function") {
+    const originalWritevBatch = batchFramerProto.writevBatch;
+    batchFramerProto.writevBatch = async function (
+      this: BatchFramer,
+      buffers: Buffer[],
+      slotIndices?: number[],
+    ): Promise<void> {
+      if (activeTransportCollector) {
+        activeTransportCollector.batchWritevCalls += 1;
+        activeTransportCollector.batchWritevBuffers += buffers.length;
+        activeTransportCollector.batchWritevBytes += buffers.reduce(
+          (sum, buffer) => sum + buffer.length,
+          0,
+        );
+      }
+      return originalWritevBatch.call(this, buffers, slotIndices);
+    };
+  }
+
+  if (typeof batchFramerProto.writeBuffer === "function") {
+    const originalWriteBuffer = batchFramerProto.writeBuffer;
+    batchFramerProto.writeBuffer = async function (
+      this: BatchFramer,
+      buffer: Buffer,
+    ): Promise<void> {
+      if (activeTransportCollector) {
+        activeTransportCollector.writeBufferCalls += 1;
+        activeTransportCollector.writeBufferBytes += buffer.length;
+      }
+      return originalWriteBuffer.call(this, buffer);
+    };
+  }
+
+  const nativeTcpProto = NativeTcpClient.prototype as NativeTcpClient & {
+    sendMany?: (frames: Uint8Array[], fin?: boolean) => number | void;
+    send?: (frame: Uint8Array | Buffer | string, fin?: boolean) => number | void;
+  };
+
+  if (typeof nativeTcpProto.sendMany === "function") {
+    const originalSendMany = nativeTcpProto.sendMany;
+    nativeTcpProto.sendMany = function (
+      this: NativeTcpClient,
+      frames: Uint8Array[],
+      fin?: boolean,
+    ): number | void {
+      if (activeTransportCollector) {
+        activeTransportCollector.nativeSendManyCalls += 1;
+        activeTransportCollector.nativeSendManyItems += frames.length;
+        activeTransportCollector.nativeSendManyBytes += frames.reduce(
+          (sum, frame) => sum + frame.byteLength,
+          0,
+        );
+      }
+      return originalSendMany.call(this, frames, fin);
+    };
+  }
+
+  if (typeof nativeTcpProto.send === "function") {
+    const originalSend = nativeTcpProto.send;
+    nativeTcpProto.send = function (
+      this: NativeTcpClient,
+      frame: Uint8Array | Buffer | string,
+      fin?: boolean,
+    ): number | void {
+      if (activeTransportCollector) {
+        activeTransportCollector.nativeSendCalls += 1;
+      }
+      return originalSend.call(this, frame, fin);
+    };
+  }
+
+  transportCallsPatched = true;
+};
+
 const microsToMillis = (value: number): number => value / 1000;
 const nanosToMillis = (value: number): number => value / 1_000_000;
 
@@ -596,6 +842,7 @@ const startDiagnostics = (
 ): DiagnosticsScope => {
   if (ENABLE_DIAGNOSTICS) {
     ensureBatchFramerDiagnostics();
+    ensureTransportCallDiagnostics();
   }
 
   const startGc = snapshotGcTotals();
@@ -627,15 +874,29 @@ const startDiagnostics = (
     maxBuffers: 0,
     maxBytes: 0,
   };
+  const transportCalls: TransportCallStats = {
+    batchWritevCalls: 0,
+    batchWritevBuffers: 0,
+    batchWritevBytes: 0,
+    writeBufferCalls: 0,
+    writeBufferBytes: 0,
+    nativeSendManyCalls: 0,
+    nativeSendManyItems: 0,
+    nativeSendManyBytes: 0,
+    nativeSendCalls: 0,
+  };
 
   const previousCollector = activeBatchCollector;
+  const previousTransportCollector = activeTransportCollector;
   activeBatchCollector = batchStats;
+  activeTransportCollector = transportCalls;
 
   return {
     stop: (extras?: DiagnosticsExtras) => {
       serverInstance.off("backpressure", onBackpressure as never);
       serverInstance.off("drain", onDrain as never);
       activeBatchCollector = previousCollector;
+      activeTransportCollector = previousTransportCollector;
       loopDelay.disable();
 
       const gc = diffGcTotals(startGc);
@@ -674,6 +935,7 @@ const startDiagnostics = (
         eventLoopDelay,
         backpressure,
         batching,
+        transportCalls,
         flow: extras?.flowDiagnostics,
         clientFlow: extras?.clientFlowDiagnostics,
         clientBatch: extras?.clientBatchStats,
@@ -730,6 +992,7 @@ const BENCH_ENV_KEYS = [
   "QWORMHOLE_BENCH_DIVERSITY",
   "QWORMHOLE_BENCH_DIAGNOSTICS",
   "QWORMHOLE_BENCH_MESSAGES",
+  "QWORMHOLE_BENCH_CLIENTS",
   "QWORMHOLE_BENCH_YIELD_EVERY",
   "QWORMHOLE_BENCH_HWM",
   "QWORMHOLE_BENCH_FLOW_FAST",
@@ -768,6 +1031,506 @@ async function waitForCompletion(
   return predicate();
 }
 
+const waitForSocketDrain = async (socket: net.Socket): Promise<void> => {
+  await once(socket, "drain");
+};
+
+const waitForWsBufferBelow = async (
+  socket: WebSocket,
+  thresholdBytes: number,
+): Promise<void> => {
+  while (
+    socket.readyState === WebSocket.OPEN &&
+    socket.bufferedAmount > thresholdBytes
+  ) {
+    await sleep(1);
+  }
+};
+
+const buildIncompleteScenarioResult = (
+  base: Omit<ScenarioResult, "skipped" | "reason">,
+  reason: string,
+): ScenarioResult => ({
+  ...base,
+  skipped: true,
+  reason,
+});
+
+const buildConcurrencySummary = () => ({
+  clients: BENCH_CLIENTS,
+  messagesPerClient: MESSAGES_PER_CLIENT,
+  totalMessages: TOTAL_MESSAGES,
+});
+
+const isBaselineMode = (mode: Mode): boolean =>
+  mode === "net" || mode === "ws" || mode === "uwebsockets";
+
+const runBaselineScenario = async (
+  mode: Mode,
+  framing: FramingMode,
+): Promise<ScenarioResult> => {
+  if (mode === "net") return runNetBaselineScenario(framing);
+  if (mode === "ws") return runWsBaselineScenario();
+  if (mode === "uwebsockets") return runUwsBaselineScenario();
+  throw new Error(`Unsupported baseline mode: ${mode}`);
+};
+
+const pickMedianResult = (results: ScenarioResult[]): ScenarioResult => {
+  if (results.length === 1) return results[0];
+  const viable = results.filter(
+    result => !result.skipped && result.durationMs > 0 && result.messagesReceived > 0,
+  );
+  const source = viable.length > 0 ? viable : results;
+  const sorted = [...source].sort((a, b) => a.durationMs - b.durationMs);
+  return sorted[Math.floor(sorted.length / 2)] ?? results[0];
+};
+
+const summarizeNumberSet = (
+  values: number[],
+): { median?: number; avg?: number; best?: number; worst?: number } | undefined => {
+  if (values.length === 0) return undefined;
+  const sorted = [...values].sort((a, b) => a - b);
+  const sum = values.reduce((acc, value) => acc + value, 0);
+  return {
+    median: sorted[Math.floor(sorted.length / 2)],
+    avg: sum / values.length,
+    best: Math.max(...values),
+    worst: Math.min(...values),
+  };
+};
+
+const attachRepeatStats = (
+  representative: ScenarioResult,
+  runs: ScenarioResult[],
+): ScenarioResult => {
+  const successful = runs.filter(run => !run.skipped);
+  const msgsPerSec = summarizeNumberSet(
+    successful
+      .map(run => run.msgsPerSec)
+      .filter((value): value is number => Number.isFinite(value)),
+  );
+  const durationMs = summarizeNumberSet(
+    successful
+      .map(run => run.durationMs)
+      .filter((value): value is number => Number.isFinite(value) && value > 0),
+  );
+
+  return {
+    ...representative,
+    repeatStats: {
+      runs: runs.length,
+      successfulRuns: successful.length,
+      skippedRuns: runs.length - successful.length,
+      representative: successful.length > 0 ? "median" : "first",
+      msgsPerSec,
+      durationMs,
+    },
+  };
+};
+
+const sendNetPayloadAt = async (
+  index: number,
+  socket: net.Socket,
+): Promise<void> => {
+  const payload = encodeLengthPrefixed(toBytes(getBenchPayload(index)));
+  if (!socket.write(payload)) {
+    await waitForSocketDrain(socket);
+  }
+};
+
+const sendWsPayloadAt = async (
+  index: number,
+  socket: WebSocket,
+): Promise<void> => {
+  socket.send(toBytes(getBenchPayload(index)));
+  if (socket.bufferedAmount > MACRO_BATCH_TARGET_BYTES) {
+    await waitForWsBufferBelow(socket, MACRO_BATCH_TARGET_BYTES / 2);
+  }
+};
+
+async function runNetBaselineScenario(
+  framing: FramingMode,
+): Promise<ScenarioResult> {
+  const concurrency = buildConcurrencySummary();
+  if (framing !== "none") {
+    return {
+      id: "net-server+net",
+      serverMode: "net",
+      clientMode: "net",
+      concurrency,
+      durationMs: 0,
+      messagesReceived: 0,
+      bytesReceived: 0,
+      framing: "none",
+      skipped: true,
+      reason: "raw net baseline requires framing=none",
+    };
+  }
+
+  let messagesReceived = 0;
+  let bytesReceived = 0;
+
+  const server = net.createServer(socket => {
+    socket.setNoDelay(true);
+    const framer = new LengthPrefixedFramer({
+      maxFrameLength: DEFAULT_MAX_FRAME_LENGTH,
+    });
+    framer.on("message", frame => {
+      socket.write(encodeLengthPrefixed(frame));
+    });
+    socket.on("data", chunk => framer.push(chunk));
+  });
+
+  await new Promise<void>((resolve, reject) => {
+    server.once("error", reject);
+    server.listen(0, "127.0.0.1", () => {
+      server.off("error", reject);
+      resolve();
+    });
+  });
+
+  const address = server.address();
+  const port =
+    address && typeof address === "object" && "port" in address
+      ? address.port
+      : 0;
+  if (!port) {
+    server.close();
+    return {
+      id: "net-server+net",
+      serverMode: "net",
+      clientMode: "net",
+      concurrency,
+      durationMs: 0,
+      messagesReceived: 0,
+      bytesReceived: 0,
+      framing: "length-prefixed",
+      skipped: true,
+      reason: "raw net server failed to bind",
+    };
+  }
+
+  const clients = await Promise.all(
+    Array.from({ length: BENCH_CLIENTS }, async () => {
+      const client = net.createConnection({ host: "127.0.0.1", port });
+      await once(client, "connect");
+      client.setNoDelay(true);
+      const clientFramer = new LengthPrefixedFramer({
+        maxFrameLength: DEFAULT_MAX_FRAME_LENGTH,
+      });
+      clientFramer.on("message", frame => {
+        bytesReceived += frame.length;
+        messagesReceived += 1;
+      });
+      client.on("data", chunk => clientFramer.push(chunk));
+      return client;
+    }),
+  );
+
+  if (WARMUP_MESSAGES > 0) {
+    for (let i = 0; i < WARMUP_MESSAGES; i++) {
+      if (BENCH_YIELD_EVERY && i > 0 && i % BENCH_YIELD_EVERY === 0) {
+        await sleep(0);
+      }
+      await sendNetPayloadAt(i, clients[i % clients.length]);
+    }
+    await waitForCompletion(
+      () => messagesReceived >= WARMUP_MESSAGES,
+      TIMEOUT_MS,
+    );
+    messagesReceived = 0;
+    bytesReceived = 0;
+  }
+
+  const start = performance.now();
+  for (let i = 0; i < TOTAL_MESSAGES; i++) {
+    if (BENCH_YIELD_EVERY && i > 0 && i % BENCH_YIELD_EVERY === 0) {
+      await sleep(0);
+    }
+    await sendNetPayloadAt(
+      i + WARMUP_MESSAGES,
+      clients[i % clients.length],
+    );
+  }
+
+  const completed = await waitForCompletion(
+    () => messagesReceived >= TOTAL_MESSAGES,
+    TIMEOUT_MS,
+  );
+  const duration = performance.now() - start;
+
+  for (const client of clients) {
+    client.destroy();
+  }
+  server.close();
+
+  const seconds = duration / 1000;
+  const result: ScenarioResult = {
+    id: "net-server+net",
+    serverMode: "net",
+    clientMode: "net",
+    concurrency,
+    durationMs: duration,
+    messagesReceived,
+    bytesReceived,
+    framing: "length-prefixed",
+    msgsPerSec: seconds > 0 ? messagesReceived / seconds : undefined,
+    mbPerSec:
+      seconds > 0 ? bytesReceived / seconds / (1024 * 1024) : undefined,
+  };
+  return completed
+    ? result
+    : buildIncompleteScenarioResult(
+        result,
+        `timed out after ${TIMEOUT_MS}ms (${messagesReceived}/${TOTAL_MESSAGES} messages)`,
+      );
+}
+
+async function runWsBaselineScenario(): Promise<ScenarioResult> {
+  const concurrency = buildConcurrencySummary();
+  let messagesReceived = 0;
+  let bytesReceived = 0;
+
+  const server = new WebSocketServer({ host: "127.0.0.1", port: 0 });
+  server.on("connection", socket => {
+    socket.on("message", data => {
+      socket.send(data, { binary: true });
+    });
+  });
+
+  await once(server, "listening");
+  const address = server.address();
+  const port = typeof address === "object" && address ? address.port : 0;
+  if (!port) {
+    await new Promise(resolve => server.close(resolve));
+    return {
+      id: "ws-server+ws",
+      serverMode: "ws",
+      clientMode: "ws",
+      concurrency,
+      durationMs: 0,
+      messagesReceived: 0,
+      bytesReceived: 0,
+      framing: "none",
+      skipped: true,
+      reason: "ws server failed to bind",
+    };
+  }
+
+  const clients = await Promise.all(
+    Array.from({ length: BENCH_CLIENTS }, async () => {
+      const client = new WebSocket(`ws://127.0.0.1:${port}`);
+      client.binaryType = "nodebuffer";
+      client.on("message", data => {
+        const size = Buffer.isBuffer(data)
+          ? data.length
+          : data instanceof ArrayBuffer
+            ? data.byteLength
+            : Buffer.byteLength(String(data));
+        bytesReceived += size;
+        messagesReceived += 1;
+      });
+      await once(client, "open");
+      return client;
+    }),
+  );
+
+  if (WARMUP_MESSAGES > 0) {
+    for (let i = 0; i < WARMUP_MESSAGES; i++) {
+      if (BENCH_YIELD_EVERY && i > 0 && i % BENCH_YIELD_EVERY === 0) {
+        await sleep(0);
+      }
+      await sendWsPayloadAt(i, clients[i % clients.length]);
+    }
+    await waitForCompletion(
+      () => messagesReceived >= WARMUP_MESSAGES,
+      TIMEOUT_MS,
+    );
+    messagesReceived = 0;
+    bytesReceived = 0;
+  }
+
+  const start = performance.now();
+  for (let i = 0; i < TOTAL_MESSAGES; i++) {
+    if (BENCH_YIELD_EVERY && i > 0 && i % BENCH_YIELD_EVERY === 0) {
+      await sleep(0);
+    }
+    await sendWsPayloadAt(
+      i + WARMUP_MESSAGES,
+      clients[i % clients.length],
+    );
+  }
+
+  const completed = await waitForCompletion(
+    () => messagesReceived >= TOTAL_MESSAGES,
+    TIMEOUT_MS,
+  );
+  const duration = performance.now() - start;
+
+  for (const client of clients) {
+    client.close();
+  }
+  await new Promise(resolve => server.close(resolve));
+
+  const seconds = duration / 1000;
+  const result: ScenarioResult = {
+    id: "ws-server+ws",
+    serverMode: "ws",
+    clientMode: "ws",
+    concurrency,
+    durationMs: duration,
+    messagesReceived,
+    bytesReceived,
+    framing: "none",
+    msgsPerSec: seconds > 0 ? messagesReceived / seconds : undefined,
+    mbPerSec:
+      seconds > 0 ? bytesReceived / seconds / (1024 * 1024) : undefined,
+  };
+  return completed
+    ? result
+    : buildIncompleteScenarioResult(
+        result,
+        `timed out after ${TIMEOUT_MS}ms (${messagesReceived}/${TOTAL_MESSAGES} messages)`,
+      );
+}
+
+async function runUwsBaselineScenario(): Promise<ScenarioResult> {
+  const concurrency = buildConcurrencySummary();
+  const uws = await loadUwsModule();
+  if (!uws) {
+    return {
+      id: "uwebsockets-server+ws",
+      serverMode: "uwebsockets",
+      clientMode: "ws",
+      concurrency,
+      durationMs: 0,
+      messagesReceived: 0,
+      bytesReceived: 0,
+      framing: "none",
+      skipped: true,
+      reason: "uWebSockets.js unavailable",
+    };
+  }
+
+  let messagesReceived = 0;
+  let bytesReceived = 0;
+  let listenSocket: unknown = null;
+
+  const port = await new Promise<number>((resolve, reject) => {
+    uws
+      .App()
+      .ws("/*", {
+        maxBackpressure: 64 * 1024 * 1024,
+        closeOnBackpressureLimit: false,
+        idleTimeout: 0,
+        message: (socket: any, message: ArrayBuffer, isBinary: boolean) => {
+          socket.send(message, isBinary, false);
+        },
+      })
+      .listen("127.0.0.1", 0, (token: unknown) => {
+        if (!token) {
+          reject(new Error("uWebSockets.js failed to bind"));
+          return;
+        }
+        listenSocket = token;
+        resolve(uws.us_socket_local_port(token));
+      });
+  }).catch(() => 0);
+
+  if (!port) {
+    return {
+      id: "uwebsockets-server+ws",
+      serverMode: "uwebsockets",
+      clientMode: "ws",
+      concurrency,
+      durationMs: 0,
+      messagesReceived: 0,
+      bytesReceived: 0,
+      framing: "none",
+      skipped: true,
+      reason: "uWebSockets.js server failed to bind",
+    };
+  }
+
+  const clients = await Promise.all(
+    Array.from({ length: BENCH_CLIENTS }, async () => {
+      const client = new WebSocket(`ws://127.0.0.1:${port}`);
+      client.binaryType = "nodebuffer";
+      client.on("message", data => {
+        const size = Buffer.isBuffer(data)
+          ? data.length
+          : data instanceof ArrayBuffer
+            ? data.byteLength
+            : Buffer.byteLength(String(data));
+        bytesReceived += size;
+        messagesReceived += 1;
+      });
+      await once(client, "open");
+      return client;
+    }),
+  );
+
+  if (WARMUP_MESSAGES > 0) {
+    for (let i = 0; i < WARMUP_MESSAGES; i++) {
+      if (BENCH_YIELD_EVERY && i > 0 && i % BENCH_YIELD_EVERY === 0) {
+        await sleep(0);
+      }
+      await sendWsPayloadAt(i, clients[i % clients.length]);
+    }
+    await waitForCompletion(
+      () => messagesReceived >= WARMUP_MESSAGES,
+      TIMEOUT_MS,
+    );
+    messagesReceived = 0;
+    bytesReceived = 0;
+  }
+
+  const start = performance.now();
+  for (let i = 0; i < TOTAL_MESSAGES; i++) {
+    if (BENCH_YIELD_EVERY && i > 0 && i % BENCH_YIELD_EVERY === 0) {
+      await sleep(0);
+    }
+    await sendWsPayloadAt(
+      i + WARMUP_MESSAGES,
+      clients[i % clients.length],
+    );
+  }
+
+  const completed = await waitForCompletion(
+    () => messagesReceived >= TOTAL_MESSAGES,
+    TIMEOUT_MS,
+  );
+  const duration = performance.now() - start;
+
+  for (const client of clients) {
+    client.close();
+  }
+  if (listenSocket && typeof uws.us_listen_socket_close === "function") {
+    uws.us_listen_socket_close(listenSocket);
+  }
+
+  const seconds = duration / 1000;
+  const result: ScenarioResult = {
+    id: "uwebsockets-server+ws",
+    serverMode: "uwebsockets",
+    clientMode: "ws",
+    concurrency,
+    durationMs: duration,
+    messagesReceived,
+    bytesReceived,
+    framing: "none",
+    msgsPerSec: seconds > 0 ? messagesReceived / seconds : undefined,
+    mbPerSec:
+      seconds > 0 ? bytesReceived / seconds / (1024 * 1024) : undefined,
+  };
+  return completed
+    ? result
+    : buildIncompleteScenarioResult(
+        result,
+        `timed out after ${TIMEOUT_MS}ms (${messagesReceived}/${TOTAL_MESSAGES} messages)`,
+      );
+}
+
 const resolveExecArgv = (): string[] => {
   if (process.execArgv.some(arg => arg.includes("tsx"))) {
     return process.execArgv;
@@ -786,6 +1549,54 @@ const attachBenchClientErrorHandler = (client: QWormholeClient<Buffer>) => {
   });
 };
 
+const resolveBenchHandshakeTags = (): Record<string, string | number> => ({
+  ...DEFAULT_BENCH_HANDSHAKE_TAGS,
+  ...(parseHandshakeTags(process.env.QWORMHOLE_HANDSHAKE_TAGS) ?? {}),
+});
+
+const nativeServerSkipReason = () =>
+  SECURE_TRANSPORT_ACTIVE
+    ? "Native server path disabled under secure transport policy"
+    : "Native backend unavailable";
+
+const nativeClientSkipReason = (backend: NativeBackend) =>
+  SECURE_TRANSPORT_ACTIVE
+    ? `Native client backend ${backend} disabled under secure transport policy`
+    : `Native client backend ${backend} unavailable`;
+
+const createManagedNativeBenchClient = (
+  backend: NativeBackend,
+  port: number,
+  framing: FramingMode,
+  onTrustSnapshot?: (snapshot: TrustSnapshot) => void,
+): QWormholeClient<Buffer> =>
+  new QWormholeClient<Buffer>({
+    host: "127.0.0.1",
+    port,
+    framing,
+    handshakeTags: resolveBenchHandshakeTags(),
+    serializer: benchSerializer,
+    deserializer: (data: Buffer): Buffer => data,
+    entropyMetrics: {
+      negIndex: BENCH_NEG_INDEX,
+      coherence: deriveBenchCoherence(),
+      entropyVelocity: "low",
+    },
+    onTrustSnapshot,
+    peerIsNative: true,
+    socketHighWaterMark: BENCH_SOCKET_HWM,
+    disableFlowController: BENCH_DISABLE_FLOW,
+    flowFastPath: BENCH_FLOW_FAST,
+    coherence: BENCH_COHERENCE
+      ? { enabled: true, mode: BENCH_COHERENCE_MODE }
+      : undefined,
+    socketFactory: socketOpts =>
+      new NativeSocketAdapter({
+        ...socketOpts,
+        preferredBackend: backend,
+      }),
+  });
+
 const snapshotClientDiagnostics = async (
   client: QWormholeClient<Buffer>,
 ): Promise<{
@@ -802,14 +1613,34 @@ const snapshotClientDiagnostics = async (
     return {};
   }
   const [flow, batch] = await Promise.all([
-    internal.flowController.snapshot?.(internal.outboundFramer),
-    internal.outboundFramer.snapshot?.(),
+    withTimeout(
+      internal.flowController.snapshot?.(internal.outboundFramer),
+      250,
+      "flow snapshot timed out",
+    ),
+    withTimeout(
+      internal.outboundFramer.snapshot?.(),
+      250,
+      "batch snapshot timed out",
+    ),
   ]);
   return {
     flow: flow ?? undefined,
     batch: batch ?? undefined,
     queue: internal.queue?.snapshot?.() ?? undefined,
   };
+};
+
+const withTimeout = async <T>(
+  promise: Promise<T> | T | undefined,
+  timeoutMs: number,
+  _label: string,
+): Promise<T | undefined> => {
+  if (!promise) return undefined;
+  return Promise.race([
+    Promise.resolve(promise),
+    sleep(timeoutMs).then(() => undefined),
+  ]);
 };
 
 const forkBenchChild = () =>
@@ -914,6 +1745,19 @@ async function childMain(): Promise<void> {
     totalMessages = msg.totalMessages;
 
     try {
+      if (isBaselineMode(msg.scenario.clientMode)) {
+        const result = await runBaselineScenario(msg.scenario.clientMode);
+        process.send?.({
+          type: "done",
+          messagesReceived: result.messagesReceived,
+          bytesReceived: result.bytesReceived,
+          serverMode: result.serverMode,
+          result,
+        } satisfies BenchChildDone);
+        shutdownFlowControllerMonitors();
+        process.exit(0);
+      }
+
       type BenchServerOptions = QWormholeServerOptions<Buffer> & {
         preferNative?: boolean;
         preferredNativeBackend?: NativeBackend;
@@ -941,7 +1785,7 @@ async function childMain(): Promise<void> {
         await serverResult.server.close();
         process.send?.({
           type: "skip",
-          reason: "Native backend unavailable",
+          reason: nativeServerSkipReason(),
           serverMode: serverResult.mode as Mode,
         } satisfies BenchChildSkip);
         return;
@@ -1038,6 +1882,70 @@ async function runScenarioForked({
   clientMode,
   serverBackend,
 }: Scenario): Promise<ScenarioResult> {
+  const scenarioFraming = framingForClientMode(clientMode);
+  if (isBaselineMode(clientMode)) {
+    const child = forkBenchChild();
+    let doneResolve: ((msg: BenchChildDone) => void) | null = null;
+    let doneReject: ((err: Error) => void) | null = null;
+    const donePromise = new Promise<BenchChildDone>((resolve, reject) => {
+      doneResolve = resolve;
+      doneReject = reject;
+    });
+
+    const onChildMessage = (msg: BenchChildMessage) => {
+      if (!msg || typeof msg !== "object") return;
+      if (msg.type === "done") {
+        doneResolve?.(msg);
+      } else if (msg.type === "error") {
+        const err = new Error(msg.message);
+        (err as Error & { stack?: string }).stack = msg.stack;
+        doneReject?.(err);
+      }
+    };
+    child.on("message", onChildMessage);
+
+    child.send?.({
+      type: "init",
+      scenario: { id, preferNativeServer, clientMode, serverBackend },
+      framing: scenarioFraming,
+      totalMessages: TOTAL_MESSAGES,
+      enableDiagnostics: false,
+      benchCoherence: false,
+    } satisfies BenchChildInit);
+
+    try {
+      const done = await waitForChildDone(donePromise, TIMEOUT_MS * 2, child);
+      child.send?.({ type: "stop" });
+      await waitForChildExit(child, 1000);
+      return (
+        done.result ?? {
+          id,
+          serverMode: clientMode,
+          clientMode,
+          durationMs: 0,
+          messagesReceived: done.messagesReceived,
+          bytesReceived: done.bytesReceived,
+          framing: scenarioFraming,
+          skipped: true,
+          reason: "baseline child returned no result",
+        }
+      );
+    } catch (err) {
+      child.kill();
+      return {
+        id,
+        serverMode: clientMode,
+        clientMode,
+        durationMs: 0,
+        messagesReceived: 0,
+        bytesReceived: 0,
+        framing: scenarioFraming,
+        skipped: true,
+        reason: err instanceof Error ? err.message : "baseline child error",
+      };
+    }
+  }
+
   if (!clientModeAvailable(clientMode)) {
     return {
       id,
@@ -1046,7 +1954,7 @@ async function runScenarioForked({
       durationMs: 0,
       messagesReceived: 0,
       bytesReceived: 0,
-      framing: BENCH_FRAMING,
+      framing: scenarioFraming,
       skipped: true,
       reason: "Native client backend unavailable",
     };
@@ -1061,7 +1969,7 @@ async function runScenarioForked({
       durationMs: 0,
       messagesReceived: 0,
       bytesReceived: 0,
-      framing: BENCH_FRAMING,
+      framing: scenarioFraming,
       skipped: true,
       reason: serverBackend
         ? `Native server backend ${serverBackend} unavailable`
@@ -1111,7 +2019,7 @@ async function runScenarioForked({
   child.send?.({
     type: "init",
     scenario: { id, preferNativeServer, clientMode, serverBackend },
-    framing: BENCH_FRAMING,
+    framing: scenarioFraming,
     totalMessages: TOTAL_MESSAGES,
     enableDiagnostics: ENABLE_DIAGNOSTICS,
     benchCoherence: BENCH_COHERENCE,
@@ -1126,11 +2034,12 @@ async function runScenarioForked({
       id,
       serverMode,
       clientMode,
+      concurrency: buildConcurrencySummary(),
       preferredServerBackend: serverBackend,
       durationMs: 0,
       messagesReceived: 0,
       bytesReceived: 0,
-      framing: BENCH_FRAMING,
+      framing: scenarioFraming,
       skipped: true,
       reason: err instanceof Error ? err.message : "child error",
     };
@@ -1143,11 +2052,12 @@ async function runScenarioForked({
       id,
       serverMode: ready.serverMode,
       clientMode,
+      concurrency: buildConcurrencySummary(),
       preferredServerBackend: serverBackend,
       durationMs: 0,
       messagesReceived: 0,
       bytesReceived: 0,
-      framing: BENCH_FRAMING,
+      framing: scenarioFraming,
       skipped: true,
       reason: ready.reason,
     };
@@ -1163,59 +2073,118 @@ async function runScenarioForked({
     clientSnapshotResolve = resolve;
   });
 
-  let tsClient: QWormholeClient<Buffer> | null = null;
-  let nativeClient: NativeTcpClient | null = null;
+  const concurrency = buildConcurrencySummary();
+  let tsClients: QWormholeClient<Buffer>[] = [];
+  let nativeClients: NativeTcpClient[] = [];
   if (clientMode === "ts") {
-    tsClient = new QWormholeClient<Buffer>({
-      host: "127.0.0.1",
-      port: (ready as BenchChildReady).port,
-      framing: BENCH_FRAMING,
-      serializer: benchSerializer,
-      deserializer: (data: Buffer): Buffer => data,
-      entropyMetrics: {
-        negIndex: BENCH_NEG_INDEX,
-        coherence: deriveBenchCoherence(),
-        entropyVelocity: "low",
-      },
-      onTrustSnapshot: (snapshot: TrustSnapshot) => {
-        clientFlowDiagnostics = snapshot.flowDiagnostics;
-        clientBatchStats = snapshot.batchStats;
-        clientQueueStats = snapshot.queueStats;
-        clientSnapshotResolve?.();
-      },
-      peerIsNative: serverMode !== "ts",
-      socketHighWaterMark: BENCH_SOCKET_HWM,
-      coherence: BENCH_COHERENCE
-        ? { enabled: true, mode: BENCH_COHERENCE_MODE }
-        : undefined,
-    } as QWormholeClientOptions);
-    attachBenchClientErrorHandler(tsClient);
-    await tsClient.connect();
-    const internal = tsClient as any;
-    benchConfig = buildBenchConfigSummary(internal.flowController ?? null);
+    tsClients = await Promise.all(
+      Array.from({ length: BENCH_CLIENTS }, async (_unused, index) => {
+        const client = new QWormholeClient<Buffer>({
+          host: "127.0.0.1",
+          port: (ready as BenchChildReady).port,
+          framing: scenarioFraming,
+          handshakeTags: resolveBenchHandshakeTags(),
+          serializer: benchSerializer,
+          deserializer: (data: Buffer): Buffer => data,
+          entropyMetrics: {
+            negIndex: BENCH_NEG_INDEX,
+            coherence: deriveBenchCoherence(),
+            entropyVelocity: "low",
+          },
+          onTrustSnapshot: (snapshot: TrustSnapshot) => {
+            if (index !== 0) return;
+            clientFlowDiagnostics = snapshot.flowDiagnostics;
+            clientBatchStats = snapshot.batchStats;
+            clientQueueStats = snapshot.queueStats;
+            clientSnapshotResolve?.();
+          },
+          peerIsNative: serverMode !== "ts",
+          socketHighWaterMark: BENCH_SOCKET_HWM,
+          coherence: BENCH_COHERENCE
+            ? { enabled: true, mode: BENCH_COHERENCE_MODE }
+            : undefined,
+        } as QWormholeClientOptions);
+        attachBenchClientErrorHandler(client);
+        await client.connect();
+        return client;
+      }),
+    );
+    const internal = tsClients[0] as any;
+    benchConfig = buildBenchConfigSummary(
+      internal.flowController ?? null,
+      scenarioFraming,
+    );
     if (benchConfig) {
       logBenchConfig(`${id} (forked)`, benchConfig);
     }
   } else {
     const backend = clientMode === "native-lws" ? "lws" : "libsocket";
-    nativeClient = new NativeTcpClient(backend);
-    if (nativeClient.backend !== backend) {
+    if (SECURE_TRANSPORT_ACTIVE && !BENCH_ALLOW_NATIVE_SECURE) {
       child.send?.({ type: "stop" });
       child.kill();
       return {
         id,
         serverMode,
         clientMode,
+        concurrency,
         preferredServerBackend: serverBackend,
         durationMs: 0,
         messagesReceived: 0,
         bytesReceived: 0,
-        framing: BENCH_FRAMING,
+        framing: scenarioFraming,
         skipped: true,
-        reason: `Native client backend ${backend} unavailable`,
+        reason: nativeClientSkipReason(backend),
       };
     }
-    nativeClient.connect("127.0.0.1", ready.port);
+    if (SECURE_TRANSPORT_ACTIVE) {
+      tsClients = await Promise.all(
+        Array.from({ length: BENCH_CLIENTS }, async (_unused, index) => {
+          const client = createManagedNativeBenchClient(
+            backend,
+            ready.port,
+            scenarioFraming,
+            snapshot => {
+              if (index !== 0) return;
+              clientFlowDiagnostics = snapshot.flowDiagnostics;
+              clientBatchStats = snapshot.batchStats;
+              clientQueueStats = snapshot.queueStats;
+              clientSnapshotResolve?.();
+            },
+          );
+          attachBenchClientErrorHandler(client);
+          await client.connect();
+          return client;
+        }),
+      );
+    } else {
+      nativeClients = Array.from(
+        { length: BENCH_CLIENTS },
+        () => new NativeTcpClient(backend),
+      );
+      if (nativeClients.some(client => client.backend !== backend)) {
+        for (const client of nativeClients) {
+          client.close();
+        }
+        child.send?.({ type: "stop" });
+        child.kill();
+        return {
+          id,
+          serverMode,
+          clientMode,
+          concurrency,
+          preferredServerBackend: serverBackend,
+          durationMs: 0,
+          messagesReceived: 0,
+          bytesReceived: 0,
+          framing: scenarioFraming,
+          skipped: true,
+          reason: nativeClientSkipReason(backend),
+        };
+      }
+      for (const client of nativeClients) {
+        client.connect("127.0.0.1", ready.port);
+      }
+    }
   }
 
   let duration = 0;
@@ -1225,6 +2194,7 @@ async function runScenarioForked({
     Number(process.env.QWORMHOLE_BENCH_BLOCK_SIZE ?? "1000") || 1000;
   let blockCount = 0;
   let blockStart = ENABLE_DIAGNOSTICS ? performance.now() : 0;
+  const nativeBatches = Array.from({ length: BENCH_CLIENTS }, () => [] as Buffer[]);
 
   let done: BenchChildDone | null = null;
   try {
@@ -1236,13 +2206,20 @@ async function runScenarioForked({
     }
     for (let i = 0; i < TOTAL_MESSAGES; i++) {
       if (BENCH_YIELD_EVERY && i > 0 && i % BENCH_YIELD_EVERY === 0) {
+        nativeClients.forEach((client, index) =>
+          flushNativeBenchBatch(client, nativeBatches[index]),
+        );
         await sleep(0);
       }
-      const payload = getBenchPayload(i);
-      if (tsClient) {
-        tsClient.send(payload);
-      } else if (nativeClient) {
-        nativeClient.send(getNativePayload(i));
+      const clientIndex = i % BENCH_CLIENTS;
+      if (tsClients.length > 0) {
+        tsClients[clientIndex].send(getBenchPayload(i));
+      } else if (nativeClients.length > 0) {
+        const nativeBatch = nativeBatches[clientIndex];
+        nativeBatch.push(getNativePayload(i, scenarioFraming));
+        if (nativeBatch.length >= NATIVE_SEND_BATCH_SIZE) {
+          flushNativeBenchBatch(nativeClients[clientIndex], nativeBatch);
+        }
       }
       if (ENABLE_DIAGNOSTICS) {
         blockCount += 1;
@@ -1257,6 +2234,9 @@ async function runScenarioForked({
         }
       }
     }
+    nativeClients.forEach((client, index) =>
+      flushNativeBenchBatch(client, nativeBatches[index]),
+    );
     done = await waitForChildDone(donePromise, TIMEOUT_MS, child);
     duration = performance.now() - start;
   } catch (err) {
@@ -1266,16 +2246,20 @@ async function runScenarioForked({
     if (ENABLE_DIAGNOSTICS) {
       heapEnd = process.memoryUsage();
     }
-    if (tsClient) {
-      const clientSnapshot = await snapshotClientDiagnostics(tsClient);
+    if (tsClients.length > 0) {
+      const clientSnapshot = await snapshotClientDiagnostics(tsClients[0]);
       clientFlowDiagnostics = clientSnapshot.flow ?? clientFlowDiagnostics;
       clientBatchStats = clientSnapshot.batch ?? clientBatchStats;
       clientQueueStats = clientSnapshot.queue ?? clientQueueStats;
-      tsClient.disconnect();
+      for (const client of tsClients) {
+        client.disconnect();
+      }
       await Promise.race([clientSnapshotWaiter, sleep(50)]);
     }
-    if (nativeClient) {
-      nativeClient.close();
+    if (nativeClients.length > 0) {
+      for (const client of nativeClients) {
+        client.close();
+      }
     }
     child.send?.({ type: "stop" });
     await waitForChildExit(child, 1000);
@@ -1325,11 +2309,13 @@ async function runScenarioForked({
     id,
     serverMode,
     clientMode,
+    concurrency,
     preferredServerBackend: serverBackend,
     durationMs: duration,
     messagesReceived,
     bytesReceived,
     framing: BENCH_FRAMING,
+    framing: scenarioFraming,
     msgsPerSec,
     mbPerSec,
     benchConfig,
@@ -1339,12 +2325,43 @@ async function runScenarioForked({
   };
 }
 
+async function runScenarioRepeated(scenario: Scenario): Promise<ScenarioResult> {
+  const runs: ScenarioResult[] = [];
+  for (let i = 0; i < BENCH_REPEAT; i++) {
+    if (BENCH_CSV_PATH !== "") {
+      console.log(
+        `[bench] starting ${scenario.id}${BENCH_REPEAT > 1 ? ` (run ${i + 1}/${BENCH_REPEAT})` : ""}`,
+      );
+    }
+    const result = isBaselineMode(scenario.clientMode)
+      ? await runBaselineScenario(
+          scenario.clientMode,
+          framingForClientMode(scenario.clientMode),
+        )
+      : BENCH_FORK && !BENCH_CHILD
+        ? await runScenarioForked(scenario)
+        : await runScenario(scenario);
+    runs.push(result);
+    if (BENCH_CSV_PATH !== "") {
+      console.log(
+        `[bench] finished ${scenario.id}: ${result.skipped ? result.reason ?? "skipped" : `${formatNumber(result.msgsPerSec, 0)} msg/s`}`,
+      );
+    }
+    if (result.skipped) {
+      break;
+    }
+  }
+  return attachRepeatStats(pickMedianResult(runs), runs);
+}
+
 async function runScenario({
   id,
   preferNativeServer,
   clientMode,
   serverBackend,
 }: Scenario): Promise<ScenarioResult> {
+  const concurrency = buildConcurrencySummary();
+  const scenarioFraming = framingForClientMode(clientMode);
   // --- Coherence Trace Setup ---
   const coherenceTrace: CoherenceDecisionSample[] = [];
   let lastCoherenceMode: string | undefined = undefined;
@@ -1364,6 +2381,7 @@ async function runScenario({
   let flowDiagnostics: DiagnosticsExtras["flowDiagnostics"];
   let clientFlowDiagnostics: FlowControllerDiagnostics | undefined;
   let clientBatchStats: BatchFramerStats | undefined;
+  let clientQueueStats: PriorityQueueStats | undefined;
   let clientSnapshotResolve: (() => void) | null = null;
   const clientSnapshotWaiter = new Promise<void>(resolve => {
     clientSnapshotResolve = resolve;
@@ -1382,10 +2400,11 @@ async function runScenario({
       id,
       clientMode,
       serverMode: preferNativeServer ? "native-lws" : "ts",
+      concurrency,
       durationMs: 0,
       messagesReceived: 0,
       bytesReceived: 0,
-      framing: BENCH_FRAMING,
+      framing: scenarioFraming,
       skipped: true,
       reason: "Native client backend unavailable",
     };
@@ -1396,11 +2415,12 @@ async function runScenario({
       id,
       clientMode,
       serverMode: "ts",
+      concurrency,
       preferredServerBackend: serverBackend,
       durationMs: 0,
       messagesReceived: 0,
       bytesReceived: 0,
-      framing: BENCH_FRAMING,
+      framing: scenarioFraming,
       skipped: true,
       reason: serverBackend
         ? `Native server backend ${serverBackend} unavailable`
@@ -1415,7 +2435,7 @@ async function runScenario({
   const serverResult = createQWormholeServer({
     host: "127.0.0.1",
     port: 0,
-    framing: BENCH_FRAMING,
+    framing: scenarioFraming,
     serializer: benchSerializer,
     deserializer: (data: Buffer) => data as Buffer,
     preferNative: preferNativeServer,
@@ -1432,17 +2452,18 @@ async function runScenario({
   } as BenchServerOptions);
   if (preferNativeServer && serverResult.mode === "ts") {
     await serverResult.server.close();
-    return {
-      id,
-      serverMode: serverResult.mode as Mode,
-      clientMode,
-      preferredServerBackend: serverBackend,
+      return {
+        id,
+        serverMode: serverResult.mode as Mode,
+        clientMode,
+        concurrency,
+        preferredServerBackend: serverBackend,
       durationMs: 0,
       messagesReceived: 0,
       bytesReceived: 0,
-      framing: BENCH_FRAMING,
+      framing: scenarioFraming,
       skipped: true,
-      reason: "Native backend unavailable",
+      reason: nativeServerSkipReason(),
     };
   }
   const serverMode = serverResult.mode;
@@ -1455,68 +2476,124 @@ async function runScenario({
   const address = await serverInstance.listen();
   const port = address.port;
 
-  let tsClient: QWormholeClient<Buffer> | null = null;
-  let nativeClient: NativeTcpClient | null = null;
+  let tsClients: QWormholeClient<Buffer>[] = [];
+  let nativeClients: NativeTcpClient[] = [];
   let coherenceController: CoherenceController | null = null;
   let flowController: FlowController | null = null;
   let batchFramer: BatchFramer | null = null;
   if (clientMode === "ts") {
-    tsClient = new QWormholeClient<Buffer>({
-      host: "127.0.0.1",
-      port,
-      framing: BENCH_FRAMING,
-      serializer: benchSerializer,
-      deserializer: (data: Buffer) => data,
-      entropyMetrics: {
-        negIndex: BENCH_NEG_INDEX,
-        coherence: deriveBenchCoherence(),
-        entropyVelocity: "low",
-      },
-      onTrustSnapshot: (snapshot: TrustSnapshot) => {
-        clientFlowDiagnostics = snapshot.flowDiagnostics;
-        clientBatchStats = snapshot.batchStats;
-        clientSnapshotResolve?.();
-      },
-      peerIsNative: serverMode !== "ts",
-      socketHighWaterMark: BENCH_SOCKET_HWM,
-      disableFlowController: BENCH_DISABLE_FLOW,
-      flowFastPath: BENCH_FLOW_FAST,
-      coherence: BENCH_COHERENCE
-        ? { enabled: true, mode: BENCH_COHERENCE_MODE }
-        : undefined,
-    });
-    attachBenchClientErrorHandler(tsClient);
-    await tsClient.connect();
+    tsClients = await Promise.all(
+      Array.from({ length: BENCH_CLIENTS }, async (_unused, index) => {
+        const client = new QWormholeClient<Buffer>({
+          host: "127.0.0.1",
+          port,
+          framing: scenarioFraming,
+          handshakeTags: resolveBenchHandshakeTags(),
+          serializer: benchSerializer,
+          deserializer: (data: Buffer) => data,
+          entropyMetrics: {
+            negIndex: BENCH_NEG_INDEX,
+            coherence: deriveBenchCoherence(),
+            entropyVelocity: "low",
+          },
+          onTrustSnapshot: (snapshot: TrustSnapshot) => {
+            if (index !== 0) return;
+            clientFlowDiagnostics = snapshot.flowDiagnostics;
+            clientBatchStats = snapshot.batchStats;
+            clientSnapshotResolve?.();
+          },
+          peerIsNative: serverMode !== "ts",
+          socketHighWaterMark: BENCH_SOCKET_HWM,
+          disableFlowController: BENCH_DISABLE_FLOW,
+          flowFastPath: BENCH_FLOW_FAST,
+          coherence: BENCH_COHERENCE
+            ? { enabled: true, mode: BENCH_COHERENCE_MODE }
+            : undefined,
+        });
+        attachBenchClientErrorHandler(client);
+        await client.connect();
+        return client;
+      }),
+    );
     // Extract FlowController and BatchFramer for coherence loop
-    const internal = tsClient as any;
+    const internal = tsClients[0] as any;
     flowController = internal.flowController ?? null;
     batchFramer = internal.outboundFramer ?? null;
-    if (flowController && batchFramer) {
+    if (BENCH_COHERENCE && flowController && batchFramer) {
       coherenceController = new CoherenceController();
     }
-    benchConfig = buildBenchConfigSummary(flowController);
+    benchConfig = buildBenchConfigSummary(flowController, scenarioFraming);
     if (benchConfig) {
       logBenchConfig(id, benchConfig);
     }
   } else {
     const backend = clientMode === "native-lws" ? "lws" : "libsocket";
-    nativeClient = new NativeTcpClient(backend);
-    if (nativeClient.backend !== backend) {
+    if (SECURE_TRANSPORT_ACTIVE && !BENCH_ALLOW_NATIVE_SECURE) {
       await serverInstance.close();
       return {
         id,
         serverMode: serverMode as Mode,
         clientMode,
+        concurrency,
         preferredServerBackend: serverBackend,
         durationMs: 0,
         messagesReceived: 0,
         bytesReceived: 0,
         framing: BENCH_FRAMING,
         skipped: true,
-        reason: `Native client backend ${backend} unavailable`,
+        reason: nativeClientSkipReason(backend),
       };
     }
-    nativeClient.connect("127.0.0.1", port);
+    if (SECURE_TRANSPORT_ACTIVE) {
+      tsClients = await Promise.all(
+        Array.from({ length: BENCH_CLIENTS }, async (_unused, index) => {
+          const client = createManagedNativeBenchClient(
+            backend,
+            port,
+            scenarioFraming,
+            snapshot => {
+              if (index !== 0) return;
+              clientFlowDiagnostics = snapshot.flowDiagnostics;
+              clientBatchStats = snapshot.batchStats;
+              clientSnapshotResolve?.();
+            },
+          );
+          attachBenchClientErrorHandler(client);
+          await client.connect();
+          return client;
+        }),
+      );
+      const internal = tsClients[0] as any;
+      flowController = internal.flowController ?? flowController;
+      batchFramer = internal.outboundFramer ?? batchFramer;
+    } else {
+      nativeClients = Array.from(
+        { length: BENCH_CLIENTS },
+        () => new NativeTcpClient(backend),
+      );
+      if (nativeClients.some(client => client.backend !== backend)) {
+        for (const client of nativeClients) {
+          client.close();
+        }
+        await serverInstance.close();
+        return {
+          id,
+          serverMode: serverMode as Mode,
+          clientMode,
+          concurrency,
+          preferredServerBackend: serverBackend,
+          durationMs: 0,
+          messagesReceived: 0,
+          bytesReceived: 0,
+          framing: BENCH_FRAMING,
+          skipped: true,
+          reason: nativeClientSkipReason(backend),
+        };
+      }
+      for (const client of nativeClients) {
+        client.connect("127.0.0.1", port);
+      }
+    }
   }
 
   let messagesReceived = 0;
@@ -1535,11 +2612,58 @@ async function runScenario({
     Number(process.env.QWORMHOLE_BENCH_BLOCK_SIZE ?? "1000") || 1000;
   let blockCount = 0;
   let blockStart = ENABLE_DIAGNOSTICS ? performance.now() : 0;
+  const nativeBatches = Array.from({ length: BENCH_CLIENTS }, () => [] as Buffer[]);
 
   try {
+    if (WARMUP_MESSAGES > 0) {
+      for (let i = 0; i < WARMUP_MESSAGES; i++) {
+        if (BENCH_YIELD_EVERY && i > 0 && i % BENCH_YIELD_EVERY === 0) {
+          nativeClients.forEach((client, index) =>
+            flushNativeBenchBatch(client, nativeBatches[index]),
+          );
+          await sleep(0);
+        }
+        const clientIndex = i % BENCH_CLIENTS;
+        if (tsClients.length > 0) {
+          sendBenchPayloadAt(i, tsClients[clientIndex], null, scenarioFraming);
+        } else if (nativeClients.length > 0) {
+          const nativeBatch = nativeBatches[clientIndex];
+          nativeBatch.push(getNativePayload(i, scenarioFraming));
+          if (nativeBatch.length >= NATIVE_SEND_BATCH_SIZE) {
+            flushNativeBenchBatch(nativeClients[clientIndex], nativeBatch);
+          }
+        }
+      }
+      nativeClients.forEach((client, index) =>
+        flushNativeBenchBatch(client, nativeBatches[index]),
+      );
+      const warmupCompleted = await waitForCompletion(
+        () => messagesReceived >= WARMUP_MESSAGES,
+        TIMEOUT_MS,
+      );
+      if (!warmupCompleted) {
+        return {
+          id,
+          serverMode: serverMode as Mode,
+          clientMode,
+          preferredServerBackend: serverBackend,
+          durationMs: 0,
+          messagesReceived,
+          bytesReceived,
+          framing: scenarioFraming,
+          benchConfig,
+          skipped: true,
+          reason: `warmup timed out after ${TIMEOUT_MS}ms (${messagesReceived}/${WARMUP_MESSAGES} messages)`,
+        };
+      }
+      messagesReceived = 0;
+      bytesReceived = 0;
+      sendBlockDurations.length = 0;
+      blockCount = 0;
+      blockStart = ENABLE_DIAGNOSTICS ? performance.now() : 0;
+    }
     const start = performance.now();
     const benchStart = performance.now();
-    const traceEvery = 1000; // log every 1000 messages
     if (ENABLE_DIAGNOSTICS) {
       heapStart = process.memoryUsage();
       heapPeakUsed = heapStart.heapUsed;
@@ -1547,13 +2671,25 @@ async function runScenario({
     }
     for (let i = 0; i < TOTAL_MESSAGES; i++) {
       if (BENCH_YIELD_EVERY && i > 0 && i % BENCH_YIELD_EVERY === 0) {
+        nativeClients.forEach((client, index) =>
+          flushNativeBenchBatch(client, nativeBatches[index]),
+        );
         await sleep(0);
       }
-      const payload = getBenchPayload(i);
-      if (tsClient) {
-        tsClient.send(payload);
-      } else if (nativeClient) {
-        nativeClient.send(getNativePayload(i));
+      const clientIndex = i % BENCH_CLIENTS;
+      if (tsClients.length > 0) {
+        sendBenchPayloadAt(
+          i + WARMUP_MESSAGES,
+          tsClients[clientIndex],
+          null,
+          scenarioFraming,
+        );
+      } else if (nativeClients.length > 0) {
+        const nativeBatch = nativeBatches[clientIndex];
+        nativeBatch.push(getNativePayload(i + WARMUP_MESSAGES, scenarioFraming));
+        if (nativeBatch.length >= NATIVE_SEND_BATCH_SIZE) {
+          flushNativeBenchBatch(nativeClients[clientIndex], nativeBatch);
+        }
       }
       if (ENABLE_DIAGNOSTICS) {
         blockCount += 1;
@@ -1617,29 +2753,59 @@ async function runScenario({
         }
       }
     }
-    await waitForCompletion(
+    nativeClients.forEach((client, index) =>
+      flushNativeBenchBatch(client, nativeBatches[index]),
+    );
+    const completed = await waitForCompletion(
       () => messagesReceived >= TOTAL_MESSAGES,
       TIMEOUT_MS,
     );
+    if (!completed) {
+      return {
+        id,
+        serverMode: serverMode as Mode,
+        clientMode,
+        preferredServerBackend: serverBackend,
+        durationMs: performance.now() - start,
+        messagesReceived,
+        bytesReceived,
+        framing: scenarioFraming,
+        msgsPerSec:
+          messagesReceived > 0
+            ? messagesReceived / ((performance.now() - start) / 1000)
+            : undefined,
+        mbPerSec:
+          bytesReceived > 0
+            ? bytesReceived / ((performance.now() - start) / 1000) / (1024 * 1024)
+            : undefined,
+        benchConfig,
+        skipped: true,
+        reason: `timed out after ${TIMEOUT_MS}ms (${messagesReceived}/${TOTAL_MESSAGES} messages)`,
+      };
+    }
     duration = performance.now() - start;
   } finally {
     if (ENABLE_DIAGNOSTICS) {
       heapEnd = process.memoryUsage();
     }
     serverInstance.off("message", onMessage as never);
-    if (tsClient) {
-      const clientSnapshot = await snapshotClientDiagnostics(tsClient);
+    if (tsClients.length > 0) {
+      const clientSnapshot = await snapshotClientDiagnostics(tsClients[0]);
       clientFlowDiagnostics = clientSnapshot.flow ?? clientFlowDiagnostics;
       clientBatchStats = clientSnapshot.batch ?? clientBatchStats;
       clientQueueStats = clientSnapshot.queue ?? clientQueueStats;
-      tsClient.disconnect();
+      for (const client of tsClients) {
+        client.disconnect();
+      }
     }
-    if (nativeClient) {
-      nativeClient.close();
+    if (nativeClients.length > 0) {
+      for (const client of nativeClients) {
+        client.close();
+      }
     }
     await serverInstance.close();
     await Promise.race([trustSnapshotWaiter, sleep(50)]);
-    if (tsClient) {
+    if (tsClients.length > 0) {
       await Promise.race([clientSnapshotWaiter, sleep(50)]);
     }
     const blockStats =
@@ -1680,11 +2846,13 @@ async function runScenario({
     id,
     serverMode: serverMode as Mode,
     clientMode,
+    concurrency,
     preferredServerBackend: serverBackend,
     durationMs: duration,
     messagesReceived,
     bytesReceived,
     framing: BENCH_FRAMING,
+    framing: scenarioFraming,
     msgsPerSec,
     mbPerSec,
     benchConfig,
@@ -2167,18 +3335,24 @@ const buildJsonlEntry = (
 ): Record<string, unknown> => {
   const diag = res.diagnostics;
   const flow = diag?.clientFlow ?? diag?.flow;
-  const payload = res.benchConfig?.payload ?? PAYLOAD_SUMMARY;
+  const payload =
+    res.benchConfig?.payload ??
+    summarizePayloadBytes(
+      res.framing === "none" ? "none" : "length-prefixed",
+    );
   return {
     timestamp: new Date().toISOString(),
     scenario: res.id,
     serverMode: res.serverMode,
     clientMode: res.clientMode,
+    concurrency: res.concurrency,
     framing: res.framing,
     messagesReceived: res.messagesReceived,
     bytesReceived: res.bytesReceived,
     durationMs: res.durationMs,
     msgsPerSec: res.msgsPerSec,
     mbPerSec: res.mbPerSec,
+    repeatStats: res.repeatStats,
     skipped: res.skipped ?? false,
     reason: res.reason,
     flags: {
@@ -2199,6 +3373,7 @@ const buildJsonlEntry = (
       macroBatchTargetBytes: res.benchConfig?.macroBatchTargetBytes,
       yieldEvery: res.benchConfig?.yieldEvery,
     },
+    governance: flow?.governance,
     payload: {
       count: payload.count,
       minBytes: payload.minBytes,
@@ -2226,6 +3401,240 @@ const buildJsonlEntry = (
   };
 };
 
+const renderMarkdownTable = (
+  headers: string[],
+  rows: Array<Array<string | number>>,
+): string => {
+  const headerRow = `| ${headers.join(" | ")} |`;
+  const divider = `| ${headers.map(() => "---").join(" | ")} |`;
+  const body = rows.map(row => `| ${row.map(value => String(value)).join(" | ")} |`);
+  return [headerRow, divider, ...body].join("\n");
+};
+
+const formatNumber = (
+  value: number | undefined,
+  digits = 2,
+  fallback = "-",
+): string => {
+  if (value === undefined || !Number.isFinite(value)) return fallback;
+  return value.toFixed(digits);
+};
+
+const writeBenchReport = async (results: ScenarioResult[]): Promise<void> => {
+  if (!BENCH_REPORT_PATH) return;
+
+  const env = pickBenchEnv();
+  const isCompareRun = results.some(
+    res => isBaselineMode(res.clientMode) || isBaselineMode(res.serverMode),
+  );
+  const summaryRows = results.map(res => [
+    res.id,
+    res.serverMode,
+    res.clientMode,
+    res.concurrency?.clients ?? BENCH_CLIENTS,
+    res.repeatStats?.runs ?? 1,
+    res.repeatStats?.representative ?? "-",
+    res.durationMs ? formatNumber(res.durationMs) : "-",
+    formatNumber(res.repeatStats?.durationMs?.avg),
+    res.messagesReceived,
+    res.bytesReceived,
+    formatNumber(res.msgsPerSec, 0),
+    formatNumber(res.repeatStats?.msgsPerSec?.avg, 0),
+    formatNumber(res.repeatStats?.msgsPerSec?.best, 0),
+    formatNumber(res.repeatStats?.msgsPerSec?.worst, 0),
+    formatNumber(res.mbPerSec),
+    res.framing,
+    res.skipped ? "skipped" : "ok",
+  ]);
+
+  const diagnosticsRows = results
+    .filter(res => !res.skipped && res.diagnostics)
+    .map(res => {
+      const diag = res.diagnostics!;
+      const transportCoherence =
+        diag.clientFlow?.transportCoherence ?? diag.flow?.transportCoherence;
+      return [
+        res.id,
+        diag.gc.count,
+        formatNumber(diag.gc.durationMs),
+        formatNumber(diag.eventLoop.utilization * 100),
+        diag.backpressure.events,
+        diag.backpressure.drainEvents,
+        diag.backpressure.maxQueuedBytes,
+        diag.batching.flushes,
+        formatNumber(diag.batching.avgBuffersPerFlush),
+        formatNumber(diag.batching.avgBytesPerFlush / 1024),
+        diag.batching.maxBuffers,
+        formatNumber(diag.batching.maxBytes / 1024),
+        diag.transportCalls?.batchWritevCalls ?? 0,
+        diag.transportCalls?.nativeSendManyCalls ?? 0,
+        diag.clientFlow?.governance?.mode ?? diag.flow?.governance?.mode ?? "-",
+        formatTransportMetric(transportCoherence?.transportSNI),
+        formatTransportMetric(transportCoherence?.transportSPI),
+        formatTransportMetric(transportCoherence?.transportMetastability),
+      ];
+    });
+
+  const transportRows = results
+    .filter(res => !res.skipped && res.diagnostics)
+    .map(res => {
+      const diag = res.diagnostics!;
+      const transportCoherence =
+        diag.clientFlow?.transportCoherence ?? diag.flow?.transportCoherence;
+      return {
+        id: res.id,
+        msgsPerSec: res.msgsPerSec ?? 0,
+        transportSNI: transportCoherence?.transportSNI,
+        transportSPI: transportCoherence?.transportSPI,
+        transportMetastability: transportCoherence?.transportMetastability,
+      };
+    })
+    .filter(row => Number.isFinite(row.transportSPI));
+
+  const transportSummaryRows = [...transportRows]
+    .sort((a, b) => (b.transportSPI ?? 0) - (a.transportSPI ?? 0))
+    .map((row, index) => [
+      index + 1,
+      row.id,
+      formatNumber(row.msgsPerSec, 0),
+      formatNumber(row.transportSNI, 3),
+      formatNumber(row.transportSPI, 3),
+      formatNumber(row.transportMetastability, 3),
+      classifyTransportHealth(
+        row.transportSPI ?? undefined,
+        row.transportMetastability ?? undefined,
+      ),
+    ]);
+
+  const bestTransport = transportRows[0]
+    ? [...transportRows].sort(
+        (a, b) => (b.transportSPI ?? 0) - (a.transportSPI ?? 0),
+      )[0]
+    : undefined;
+  const fastestTransport = transportRows[0]
+    ? [...transportRows].sort((a, b) => (b.msgsPerSec ?? 0) - (a.msgsPerSec ?? 0))[0]
+    : undefined;
+  const transportFindings = [
+    BENCH_TRANSPORT_COHERENCE
+      ? `Transport coherence sampling: enabled`
+      : `Transport coherence sampling: disabled in this raw lane. Run \`${isCompareRun ? "bench:compare:structure" : "bench:core:structure"}\` for tSNI / tSPI / tMeta.`,
+    bestTransport
+      ? `Best transport persistence: \`${bestTransport.id}\` (tSPI ${formatNumber(bestTransport.transportSPI, 3)}, tMeta ${formatNumber(bestTransport.transportMetastability, 3)})`
+      : `Best transport persistence: unavailable`,
+    !BENCH_TRANSPORT_COHERENCE
+      ? `Fastest transport-coherence row: unavailable (sampling disabled in this lane)`
+      : fastestTransport
+        ? `Fastest transport-coherence row: \`${fastestTransport.id}\` (${formatNumber(fastestTransport.msgsPerSec, 0)} msg/s)`
+        : `Fastest transport-coherence row: unavailable`,
+    bestTransport && fastestTransport && bestTransport.id !== fastestTransport.id
+      ? `Transport winner differs from throughput winner. Prefer tSPI when selecting a default path.`
+      : bestTransport && fastestTransport
+        ? `Throughput leader and transport-stability leader are aligned in this run.`
+        : `Transport/throughput alignment unavailable in this lane.`,
+  ];
+
+  const report = [
+    `# QWormhole Bench Report`,
+    ``,
+    `Generated: ${new Date().toISOString()}`,
+    ``,
+    `## Environment`,
+    ``,
+    "```json",
+    JSON.stringify(env, null, 2),
+    "```",
+    ``,
+    `## Summary`,
+    ``,
+    renderMarkdownTable(
+      [
+        "Scenario",
+        "Server",
+        "Client",
+        "Clients",
+        "Runs",
+        "Rep",
+        "Duration (ms)",
+        "Dur Avg",
+        "Messages",
+        "Bytes",
+        "Msg/s",
+        "Msg/s Avg",
+        "Best",
+        "Worst",
+        "MB/s",
+        "Framing",
+        "Status",
+      ],
+      summaryRows,
+    ),
+    ``,
+    `## Diagnostics`,
+    ``,
+    renderMarkdownTable(
+      [
+        "Scenario",
+        "GC",
+        "GC ms",
+        "ELU%",
+        "BP",
+        "Drain",
+        "MaxQueued",
+        "Flushes",
+        "AvgBuf",
+        "AvgKB",
+        "MaxBuf",
+        "MaxKB",
+        "WV",
+        "SM",
+        "Gov",
+        "tSNI",
+        "tSPI",
+        "tMeta",
+      ],
+      diagnosticsRows,
+    ),
+    ``,
+    `## Transport Coherence`,
+    ``,
+    ...transportFindings.map(line => `- ${line}`),
+    ``,
+    ...(transportSummaryRows.length > 0
+      ? [
+          renderMarkdownTable(
+            [
+              "Rank",
+              "Scenario",
+              "Msg/s",
+              "tSNI",
+              "tSPI",
+              "tMeta",
+              "Health",
+            ],
+            transportSummaryRows,
+          ),
+        ]
+      : [
+          BENCH_TRANSPORT_COHERENCE
+            ? "_No transport coherence rows were produced in this run._"
+            : "_Transport coherence metrics are intentionally off in the raw lane._",
+        ]),
+    ``,
+    `## Raw JSON`,
+    ``,
+    "```json",
+    JSON.stringify(results, null, 2),
+    "```",
+    ``,
+  ].join("\n");
+
+  await fs.mkdir(path.dirname(BENCH_REPORT_PATH), { recursive: true });
+  await fs.writeFile(BENCH_REPORT_PATH, report, "utf8");
+  if (BENCH_CSV_PATH !== "") {
+    console.log(`[bench] report written to ${BENCH_REPORT_PATH}`);
+  }
+};
+
 const writeJsonlResults = async (results: ScenarioResult[]): Promise<void> => {
   if (!BENCH_JSONL_PATH) return;
   const env = pickBenchEnv();
@@ -2233,22 +3642,43 @@ const writeJsonlResults = async (results: ScenarioResult[]): Promise<void> => {
     .map(res => JSON.stringify(buildJsonlEntry(res, env)))
     .join("\n")
     .concat("\n");
-  await import("node:fs/promises").then(fs =>
-    fs.appendFile(BENCH_JSONL_PATH, lines, "utf8"),
-  );
+  await fs.appendFile(BENCH_JSONL_PATH, lines, "utf8");
   if (BENCH_CSV_PATH !== "") {
     // eslint-disable-next-line no-console
     console.log(`[bench] jsonl appended to ${BENCH_JSONL_PATH}`);
   }
 };
 
+function classifyTransportHealth(
+  transportSPI?: number,
+  transportMetastability?: number,
+): string {
+  if (!Number.isFinite(transportSPI) || !Number.isFinite(transportMetastability)) {
+    return "unavailable";
+  }
+  if ((transportSPI as number) >= 0.7 && (transportMetastability as number) <= 0.35) {
+    return "stable";
+  }
+  if ((transportSPI as number) >= 0.55 && (transportMetastability as number) <= 0.5) {
+    return "watch";
+  }
+  return "unstable";
+}
+
 async function mainBench() {
   const modes = parseModeArg();
+  const isCompareRun = modes.some(mode => BASELINE_MODES.includes(mode));
   const results: ScenarioResult[] = [];
 
   for (const scenario of scenarios) {
     if (!modes.includes(scenario.clientMode)) continue;
-    const res = await runScenario(scenario);
+    const res = await runScenarioRepeated(scenario);
+    results.push(res);
+  }
+
+  for (const scenario of baselineScenarios) {
+    if (!modes.includes(scenario.clientMode)) continue;
+    const res = await runScenarioRepeated(scenario);
     results.push(res);
   }
 
@@ -2262,6 +3692,7 @@ async function mainBench() {
   }
 
   await writeJsonlResults(results);
+  await writeBenchReport(results);
 
   const csvPath = BENCH_CSV_PATH;
   if (csvPath !== undefined) {
@@ -2269,9 +3700,7 @@ async function mainBench() {
     const rows = results.map(formatCsvRow).join("");
     const csv = header + rows;
     if (csvPath) {
-      await import("node:fs/promises").then(fs =>
-        fs.writeFile(csvPath, csv, "utf8"),
-      );
+      await fs.writeFile(csvPath, csv, "utf8");
       console.log(`csv written to ${csvPath}`);
     } else {
       process.stdout.write(csv);
@@ -2283,9 +3712,30 @@ async function mainBench() {
 
   const pad = (s: string, n: number) => s.toString().padEnd(n);
   const header = `${pad("Scenario", 28)}${pad("Server", 15)}${pad("Client", 15)}${pad(
+    "Clients",
+    10,
+  )}${pad(
+    "Runs",
+    6,
+  )}${pad(
+    "Rep",
+    8,
+  )}${pad(
     "Duration (ms)",
     16,
+  )}${pad(
+    "Dur Avg",
+    12,
   )}${pad("Messages", 12)}${pad("Bytes", 12)}${pad("Msg/s", 12)}${pad(
+    "Msg/s Avg",
+    12,
+  )}${pad(
+    "Best",
+    12,
+  )}${pad(
+    "Worst",
+    12,
+  )}${pad(
     "MB/s",
     12,
   )}${pad("Framing", 12)}${pad("Status", 10)}`;
@@ -2294,8 +3744,20 @@ async function mainBench() {
   for (const res of results) {
     console.log(
       `${pad(res.id, 28)}${pad(res.serverMode, 15)}${pad(res.clientMode, 15)}${pad(
+        `${res.concurrency?.clients ?? BENCH_CLIENTS}`,
+        10,
+      )}${pad(
+        `${res.repeatStats?.runs ?? 1}`,
+        6,
+      )}${pad(
+        res.repeatStats?.representative ?? "-",
+        8,
+      )}${pad(
         res.durationMs ? res.durationMs.toFixed(2) : "-",
         16,
+      )}${pad(
+        formatNumber(res.repeatStats?.durationMs?.avg),
+        12,
       )}${pad(`${res.messagesReceived ?? "-"}`, 12)}${pad(
         `${res.bytesReceived ?? "-"}`,
         12,
@@ -2303,6 +3765,15 @@ async function mainBench() {
         res.msgsPerSec && Number.isFinite(res.msgsPerSec)
           ? res.msgsPerSec.toFixed(0)
           : "-",
+        12,
+      )}${pad(
+        formatNumber(res.repeatStats?.msgsPerSec?.avg, 0),
+        12,
+      )}${pad(
+        formatNumber(res.repeatStats?.msgsPerSec?.best, 0),
+        12,
+      )}${pad(
+        formatNumber(res.repeatStats?.msgsPerSec?.worst, 0),
         12,
       )}${pad(
         res.mbPerSec && Number.isFinite(res.mbPerSec)
@@ -2323,19 +3794,26 @@ async function mainBench() {
     )}${pad("Flushes", 10)}${pad("AvgBuf", 10)}${pad("AvgKB", 10)}${pad(
       "MaxBuf",
       10,
-    )}${pad("MaxKB", 10)}`;
+    )}${pad("MaxKB", 10)}${pad("Gov", 12)}${pad(
+      "tSNI",
+      8,
+    )}${pad("tSPI", 8)}${pad("tMeta", 8)}`;
     console.log("\n" + diagHeader);
     console.log("-".repeat(diagHeader.length));
     for (const res of results) {
       if (res.skipped || !res.diagnostics) continue;
-      const diag = res.diagnostics;
-      const eluPercent = (diag.eventLoop.utilization * 100).toFixed(2);
-      const avgKb = (diag.batching.avgBytesPerFlush / 1024).toFixed(2);
-      const maxKb = (diag.batching.maxBytes / 1024).toFixed(2);
-      const gcDuration = diag.gc.durationMs.toFixed(2);
-      console.log(
-        `${pad(res.id, 28)}${pad(`${diag.gc.count}`, 12)}${pad(
-          gcDuration,
+        const diag = res.diagnostics;
+        const transportCoherence =
+          diag.clientFlow?.transportCoherence ?? diag.flow?.transportCoherence;
+        const eluPercent = (diag.eventLoop.utilization * 100).toFixed(2);
+        const avgKb = (diag.batching.avgBytesPerFlush / 1024).toFixed(2);
+        const maxKb = (diag.batching.maxBytes / 1024).toFixed(2);
+        const gcDuration = diag.gc.durationMs.toFixed(2);
+        const governanceMode =
+          diag.clientFlow?.governance?.mode ?? diag.flow?.governance?.mode ?? "-";
+        console.log(
+          `${pad(res.id, 28)}${pad(`${diag.gc.count}`, 12)}${pad(
+            gcDuration,
           12,
         )}${pad(eluPercent, 10)}${pad(
           `${diag.backpressure.events}`,
@@ -2346,13 +3824,29 @@ async function mainBench() {
         )}${pad(`${diag.batching.flushes}`, 10)}${pad(
           diag.batching.avgBuffersPerFlush.toFixed(2),
           10,
-        )}${pad(avgKb, 10)}${pad(
-          `${diag.batching.maxBuffers}`,
-          10,
-        )}${pad(maxKb, 10)}`,
+          )}${pad(avgKb, 10)}${pad(
+            `${diag.batching.maxBuffers}`,
+            10,
+          )}${pad(maxKb, 10)}${pad(governanceMode, 12)}${pad(
+            formatTransportMetric(transportCoherence?.transportSNI),
+            8,
+          )}${pad(
+            formatTransportMetric(transportCoherence?.transportSPI),
+            8,
+          )}${pad(
+            formatTransportMetric(
+              transportCoherence?.transportMetastability,
+            ),
+            8,
+          )}`,
+        );
+      }
+    if (!BENCH_TRANSPORT_COHERENCE) {
+      console.log(
+        "\n[bench] transport coherence metrics are intentionally disabled in the raw lane; use bench:core:structure for tSNI/tSPI/tMeta.",
       );
     }
-  }
+    }
 }
 
 if (BENCH_CHILD) {
@@ -2382,6 +3876,9 @@ export type { Scenario, ScenarioResult, ScenarioDiagnostics, BenchResult };
 export {
   runScenario,
   runKcpScenario,
+  runNetBaselineScenario,
+  runWsBaselineScenario,
+  runUwsBaselineScenario,
   mainBench,
   runScenario as _runScenario, // for testing
   toBytes as _toBytes, // for testing

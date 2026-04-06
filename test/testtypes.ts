@@ -23,6 +23,9 @@ type Mode =
   | "ts"
   | "native-lws"
   | "native-libsocket"
+  | "net"
+  | "ws"
+  | "uwebsockets"
   | "kcp"
   | "kcp-arq"
   | "quic";
@@ -39,6 +42,11 @@ type ScenarioResult = {
   serverMode: Mode;
   clientMode: Mode;
   preferredServerBackend?: NativeBackend;
+  concurrency?: {
+    clients: number;
+    messagesPerClient: number;
+    totalMessages: number;
+  };
   durationMs: number;
   messagesReceived: number;
   bytesReceived: number;
@@ -70,6 +78,24 @@ type ScenarioResult = {
   kcpRttMs?: number;
   kcpLossRate?: number;
   kcpPending?: number;
+  repeatStats?: {
+    runs: number;
+    successfulRuns: number;
+    skippedRuns: number;
+    representative: "median" | "first";
+    msgsPerSec?: {
+      median?: number;
+      avg?: number;
+      best?: number;
+      worst?: number;
+    };
+    durationMs?: {
+      median?: number;
+      avg?: number;
+      best?: number;
+      worst?: number;
+    };
+  };
 };
 
 type BatchFlushStats = {
@@ -153,6 +179,17 @@ type ScenarioDiagnostics = {
     callsPerSec: number;
     avgPayloadBytes: number;
     pendingMaxBytes: number;
+  };
+  transportCalls?: {
+    batchWritevCalls: number;
+    batchWritevBuffers: number;
+    batchWritevBytes: number;
+    writeBufferCalls: number;
+    writeBufferBytes: number;
+    nativeSendManyCalls: number;
+    nativeSendManyItems: number;
+    nativeSendManyBytes: number;
+    nativeSendCalls: number;
   };
   flow?: FlowControllerDiagnostics;
   clientFlow?: FlowControllerDiagnostics;

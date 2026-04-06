@@ -23,6 +23,8 @@ export const coherenceStateSchema = z.object({
   confidence: z.number().optional(),
 });
 
+export const coherenceVector3Schema = z.tuple([z.number(), z.number(), z.number()]);
+
 export const couplingParamsSchema = z.object({
   batchSize: z.number(),
   concurrency: z.number(),
@@ -138,6 +140,233 @@ export const signalTrialResolutionObserverSchema = z.object({
   v: z.number(),
 });
 
+export const signalTrialJSpaceResolutionSchema = z.object({
+  resolved: z.boolean(),
+  reasons: z.array(z.string()),
+  gradNorm: z.number(),
+  lambdaMin: z.number(),
+  deltaJViolationRate: z.number(),
+  basinHoldMet: z.boolean(),
+});
+
+export const signalTrialSemanticRegimeSchema = z.object({
+  regime: z.enum([
+    "stable-gradient",
+    "stable-orbit",
+    "chaotic",
+    "turbulent",
+    "unstable",
+    "model-mismatch",
+  ]),
+  confidence: z.number(),
+  diagnostics: z.array(z.string()),
+});
+
+export const signalTrialGovernanceSchema = z.object({
+  driftRate: z.number().nonnegative(),
+  bound: z.number().positive(),
+  ratio: z.number().nonnegative(),
+  gamma: z.number().positive(),
+  boundExceeded: z.boolean(),
+  pointOfNoReturn: z.boolean(),
+  clipped: z.boolean(),
+  returnVelocity: z.number().positive(),
+  entropy: z.number().min(0).max(1).optional(),
+  confidence: z.number().min(0).max(1).optional(),
+  coherenceDensity: z.number().min(0).max(1).optional(),
+  structuralPersistence: z.number().min(0).max(1).optional(),
+  metastability: z.number().min(0).max(1).optional(),
+  dimensionEstimate: z.number().nullable().optional(),
+  dimensionBand: z
+    .enum(["fixed-point", "limit-cycle", "torus", "fractal", "diffusive", "undetermined"])
+    .optional(),
+  dimensionDiagnostics: z
+    .object({
+      available: z.boolean(),
+      samples: z.number().int().nonnegative(),
+      minSamples: z.number().int().nonnegative(),
+      windowSamples: z.number().int().positive(),
+      reason: z.string().optional(),
+      method: z.enum(["correlation", "pca-fallback"]).optional(),
+    })
+    .optional(),
+  posterior: z
+    .record(
+      z.enum([
+        "stable-gradient",
+        "stable-orbit",
+        "chaotic",
+        "turbulent",
+        "unstable",
+        "model-mismatch",
+      ]),
+      z.number().min(0).max(1),
+    )
+    .optional(),
+  bayesConfidence: z.number().min(0).max(1).optional(),
+  bayesEntropy: z.number().min(0).max(1.792).optional(),
+  bayesRegime: z
+    .enum([
+      "stable-gradient",
+      "stable-orbit",
+      "chaotic",
+      "turbulent",
+      "unstable",
+      "model-mismatch",
+    ])
+    .optional(),
+  linchpin: z
+    .object({
+      best: z
+        .object({
+          metric: z.enum([
+            "alignment",
+            "alignmentDelta",
+            "dimension",
+            "dimensionDelta",
+            "driftRate",
+            "driftAccel",
+            "gamma",
+            "entropy",
+            "lambdaMin",
+            "attractorSimilarity",
+          ]),
+          influence: z.number(),
+          correlation: z.number(),
+          leadSteps: z.number().int().nonnegative(),
+          sampleCount: z.number().int().nonnegative(),
+          eventCount: z.number().int().nonnegative(),
+          direction: z.enum(["positive", "negative", "mixed"]),
+        })
+        .nullable()
+        .optional(),
+      top: z
+        .array(
+          z.object({
+            metric: z.enum([
+              "alignment",
+              "alignmentDelta",
+              "dimension",
+              "dimensionDelta",
+              "driftRate",
+              "driftAccel",
+              "gamma",
+              "entropy",
+              "lambdaMin",
+              "attractorSimilarity",
+            ]),
+            influence: z.number(),
+            correlation: z.number(),
+            leadSteps: z.number().int().nonnegative(),
+            sampleCount: z.number().int().nonnegative(),
+            eventCount: z.number().int().nonnegative(),
+            direction: z.enum(["positive", "negative", "mixed"]),
+          }),
+        )
+        .optional(),
+      transitionRate: z.number().min(0).max(1).optional(),
+      transitionCount: z.number().int().nonnegative().optional(),
+      sampleCount: z.number().int().nonnegative().optional(),
+      notes: z.array(z.string()).optional(),
+    })
+    .optional(),
+});
+
+export const signalTrialGovernanceTrendPointSchema = z.object({
+  ts: z.number().int().nonnegative(),
+  gamma: z.number().positive(),
+  driftRate: z.number().nonnegative(),
+  jValue: z.number().optional(),
+  deltaHealth: z.number().optional(),
+  deltaLambdaMin: z.number().optional(),
+  deltaViolationRate: z.number().optional(),
+  deltaFlowMean: z.number().optional(),
+  deltaAttractorSim: z.number().optional(),
+  deltaDimension: z.number().optional(),
+  boundExceeded: z.boolean(),
+  pointOfNoReturn: z.boolean().optional(),
+  dimensionEstimate: z.number().nullable().optional(),
+  dimensionBand: z
+    .enum(["fixed-point", "limit-cycle", "torus", "fractal", "diffusive", "undetermined"])
+    .optional(),
+  flowAlignment: z.number().nullable().optional(),
+  lambdaMin: z.number().optional(),
+  attractorSimilarity: z.number().optional(),
+  bayesConfidence: z.number().min(0).max(1),
+  bayesEntropy: z.number().min(0).max(1.792),
+  bayesRegime: z.enum([
+    "stable-gradient",
+    "stable-orbit",
+    "chaotic",
+    "turbulent",
+    "unstable",
+    "model-mismatch",
+  ]),
+  deterministicRegime: z
+    .enum([
+      "stable-gradient",
+      "stable-orbit",
+      "chaotic",
+      "turbulent",
+      "unstable",
+      "model-mismatch",
+    ])
+    .optional(),
+});
+
+export const signalTrialTransportPolicySchema = z.object({
+  mode: z.enum(["throughput", "guarded", "recovery"]),
+  batchScale: z.number().positive(),
+  flushScale: z.number().positive(),
+  bufferScale: z.number().positive(),
+  paceScale: z.number().positive(),
+  reason: z.array(z.string()),
+});
+
+export const signalTrialAttractorComparisonSchema = z.object({
+  projection: z.enum(["xy", "xz", "yz"]),
+  bestMatch: z
+    .enum(["aizawa", "lorenz", "rossler", "henon", "duffing"])
+    .nullable(),
+  similarity: z.number(),
+  regime: z.enum(["coherent", "turbulent", "chaotic", "predatory"]),
+  scores: z.object({
+    aizawa: z.number(),
+    lorenz: z.number(),
+    rossler: z.number(),
+    henon: z.number(),
+    duffing: z.number(),
+  }),
+  diagnostics: z.object({
+    projection: z.enum(["xy", "xz", "yz"]),
+    fitError: z.number(),
+    symmetry: z.number(),
+    roughness: z.number(),
+    anisotropy: z.number(),
+    coherentGate: z.boolean(),
+    matchScore: z.number(),
+    flowAlignment: z.number().nullable(),
+    flowAlignmentAbs: z.number().nullable(),
+    flowAlignmentSamples: z.number(),
+    flowAlignmentMode: z.enum([
+      "descent",
+      "orthogonal",
+      "uphill",
+      "mixed",
+      "unavailable",
+    ]),
+    gradientUsed: z.boolean().optional(),
+    note: z.string().optional(),
+  }),
+  traceWindow: z
+    .object({
+      points: z.number().int().nonnegative(),
+      stride: z.number().int().positive(),
+      durationMs: z.number().nonnegative(),
+    })
+    .optional(),
+});
+
 export const signalTrialNboAlignmentSchema = z.enum([
   "stabilizing",
   "destabilizing",
@@ -211,6 +440,9 @@ export const signalTrialTelemetrySchema = z
     profile: signalTrialProfileSchema.optional(),
     controlMode: signalTrialControlModeSchema.optional(),
     state: coherenceStateSchema,
+    history: z.array(coherenceVector3Schema).optional(),
+    trajectory: z.array(coherenceVector3Schema).optional(),
+    trace: z.array(coherenceVector3Schema).optional(),
     coupling: couplingParamsSchema.optional(),
     sample: fieldSampleSchema.optional(),
     transport: transportMetricsSchema.optional(),
@@ -219,6 +451,12 @@ export const signalTrialTelemetrySchema = z
     ncf: signalTrialNcfSchema.optional(),
     state_source: z.string().optional(),
     regime_source: z.string().optional(),
+    governance: signalTrialGovernanceSchema.optional(),
+    governanceTrend: z.array(signalTrialGovernanceTrendPointSchema).optional(),
+    transportPolicy: signalTrialTransportPolicySchema.optional(),
+    jResolution: signalTrialJSpaceResolutionSchema.optional(),
+    regime: signalTrialSemanticRegimeSchema.optional(),
+    attractorComparison: signalTrialAttractorComparisonSchema.optional(),
     observer: signalTrialResolutionObserverSchema.optional(),
     nbo: signalTrialNboSummarySchema.optional(),
     stability: signalTrialStabilitySchema.optional(),
@@ -323,6 +561,10 @@ export type SignalTrialResolutionObserver = z.infer<
   typeof signalTrialResolutionObserverSchema
 >;
 export type SignalTrialNcf = z.infer<typeof signalTrialNcfSchema>;
+export type SignalTrialGovernance = z.infer<typeof signalTrialGovernanceSchema>;
+export type SignalTrialTransportPolicy = z.infer<
+  typeof signalTrialTransportPolicySchema
+>;
 export type SignalTrialResolutionTier = z.infer<
   typeof signalTrialResolutionTierSchema
 >;

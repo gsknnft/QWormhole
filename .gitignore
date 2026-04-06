@@ -1,6 +1,7 @@
 node_modules/
 dist/
 coverage/
+secrets/
 libwebsockets/scripts/
 *.o
 yarn.lock

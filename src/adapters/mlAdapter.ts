@@ -1,7 +1,7 @@
 import { ChildProcess, spawn } from "child_process";
 import { computeNegentropicIndex } from "../utils/randomId";
 
-export type JsonValue =
+type JsonValue =
   | string
   | number
   | boolean
@@ -9,7 +9,7 @@ export type JsonValue =
   | JsonValue[]
   | { [key: string]: JsonValue };
 
-export interface MLAdapter {
+interface MLAdapter {
   name: string;
   run(metrics: JsonValue): Promise<JsonValue>;
 }

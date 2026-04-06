@@ -16,11 +16,20 @@ export class NativeSocketAdapter extends EventEmitter {
   private readonly opts: NativeSocketAdapterOptions;
   private readonly client: NativeTcpClient;
   private pollTimer?: NodeJS.Timeout;
+  private idleTimer?: NodeJS.Timeout;
   private connectTimer?: NodeJS.Timeout;
+  private connectInterval?: NodeJS.Timeout;
   private connected = false;
   private lastActivity = Date.now();
   private idleTimeoutMs?: number;
   private usingEvents = false;
+  private pendingConnect?:
+    | {
+        resolve: () => void;
+        reject: (err: Error) => void;
+        settled: boolean;
+      }
+    | undefined;
   private tlsInfo?: {
     alpnProtocol?: string;
     protocol?: string;
@@ -44,6 +53,7 @@ export class NativeSocketAdapter extends EventEmitter {
       return Promise.reject(new Error("Native socket destroyed"));
     }
     return new Promise((resolve, reject) => {
+      this.pendingConnect = { resolve, reject, settled: false };
       try {
         this.client.connect({
           host: this.opts.host,
@@ -60,13 +70,14 @@ export class NativeSocketAdapter extends EventEmitter {
       }
 
       this.idleTimeoutMs = this.opts.idleTimeoutMs;
-      const timeoutMs = this.opts.connectTimeoutMs;
+      const timeoutMs = this.opts.connectTimeoutMs ?? 5_000;
       if (timeoutMs && timeoutMs > 0) {
         this.connectTimer = setTimeout(() => {
           if (this.connected) return;
-          this.emit("error", new Error("Native connect timeout"));
+          const err = new Error("Native connect timeout");
+          this.failPendingConnect(err);
+          this.emit("error", err);
           this.destroy();
-          reject(new Error("Native connect timeout"));
         }, timeoutMs);
       }
 
@@ -76,8 +87,7 @@ export class NativeSocketAdapter extends EventEmitter {
 
       const settle = () => {
         if (this.connected) {
-          if (this.connectTimer) clearTimeout(this.connectTimer);
-          resolve();
+          this.resolvePendingConnect();
         }
       };
 
@@ -91,14 +101,20 @@ export class NativeSocketAdapter extends EventEmitter {
             settle();
           }
         };
-        const interval = setInterval(check, this.opts.pollIntervalMs ?? 5);
+        this.connectInterval = setInterval(check, this.opts.pollIntervalMs ?? 5);
         setTimeout(() => {
-          clearInterval(interval);
-          check();
-          if (!this.connected) {
-            resolve();
+          if (this.connectInterval) {
+            clearInterval(this.connectInterval);
+            this.connectInterval = undefined;
           }
-        }, Math.min(timeoutMs ?? 200, 200));
+          check();
+          if (!this.connected && !this.destroyed) {
+            const err = new Error("Native connect timeout");
+            this.failPendingConnect(err);
+            this.emit("error", err);
+            this.destroy();
+          }
+        }, timeoutMs);
       }
     });
   }
@@ -117,10 +133,18 @@ export class NativeSocketAdapter extends EventEmitter {
 
   writev(buffers: Array<{ chunk: Buffer }>): boolean {
     if (this.destroyed) return false;
-    for (const entry of buffers) {
-      if (!this.write(entry.chunk)) return false;
+    try {
+      const payloads = buffers.map(entry => entry.chunk);
+      const result = this.client.sendMany?.(payloads);
+      this.touch();
+      if (typeof result === "number") {
+        return result >= payloads.length;
+      }
+      return true;
+    } catch (err) {
+      this.emit("error", err instanceof Error ? err : new Error(String(err)));
+      return false;
     }
-    return true;
   }
 
   cork(): void {
@@ -153,15 +177,19 @@ export class NativeSocketAdapter extends EventEmitter {
 
   setTimeout(timeoutMs: number): void {
     this.idleTimeoutMs = timeoutMs;
+    this.armIdleTimeout();
   }
 
   private touch(): void {
     this.lastActivity = Date.now();
+    this.armIdleTimeout();
   }
 
   private startPolling(): void {
     if (this.pollTimer) return;
-    const interval = this.opts.pollIntervalMs ?? 5;
+    const interval = this.usingEvents
+      ? Math.max(50, this.opts.pollIntervalMs ?? 50)
+      : this.opts.pollIntervalMs ?? 5;
     this.pollTimer = setInterval(() => {
       if (this.destroyed) return;
 
@@ -184,12 +212,6 @@ export class NativeSocketAdapter extends EventEmitter {
           }
         }
 
-        if (this.idleTimeoutMs && this.idleTimeoutMs > 0) {
-          if (Date.now() - this.lastActivity > this.idleTimeoutMs) {
-            this.emit("timeout");
-            this.destroy();
-          }
-        }
       } catch (err) {
         this.emit("error", err instanceof Error ? err : new Error(String(err)));
       }
@@ -201,9 +223,17 @@ export class NativeSocketAdapter extends EventEmitter {
       clearInterval(this.pollTimer);
       this.pollTimer = undefined;
     }
+    if (this.connectInterval) {
+      clearInterval(this.connectInterval);
+      this.connectInterval = undefined;
+    }
     if (this.connectTimer) {
       clearTimeout(this.connectTimer);
       this.connectTimer = undefined;
+    }
+    if (this.idleTimer) {
+      clearTimeout(this.idleTimer);
+      this.idleTimer = undefined;
     }
   }
 
@@ -214,7 +244,9 @@ export class NativeSocketAdapter extends EventEmitter {
       switch (evt.type) {
         case "connect":
           this.connected = true;
+          this.touch();
           this.refreshTlsInfo();
+          this.resolvePendingConnect();
           this.emit("connect");
           break;
         case "data":
@@ -225,16 +257,29 @@ export class NativeSocketAdapter extends EventEmitter {
           break;
         case "close":
           this.connected = false;
+          if (!this.destroyed) {
+            this.failPendingConnect(
+              new Error(
+                evt.hadError
+                  ? "Native client closed during connect with error"
+                  : "Native client closed during connect",
+              ),
+            );
+          }
+          this.stopPolling();
           this.emit("close", Boolean(evt.hadError));
           break;
         case "error":
+          this.failPendingConnect(
+            new Error(evt.error ?? "Native client error"),
+          );
           this.emit("error", new Error(evt.error ?? "Native client error"));
           break;
         default:
           break;
       }
     });
-    this.startPolling();
+    this.armIdleTimeout();
   }
 
   getPeerCertificate(_detailed?: boolean): {
@@ -278,5 +323,54 @@ export class NativeSocketAdapter extends EventEmitter {
       this.alpnProtocol = info.alpnProtocol;
       this.authorized = info.authorized;
     }
+  }
+
+  private armIdleTimeout(): void {
+    if (this.idleTimer) {
+      clearTimeout(this.idleTimer);
+      this.idleTimer = undefined;
+    }
+    if (!this.idleTimeoutMs || this.idleTimeoutMs <= 0 || this.destroyed) {
+      return;
+    }
+    this.idleTimer = setTimeout(() => {
+      if (this.destroyed) return;
+      if (Date.now() - this.lastActivity >= this.idleTimeoutMs!) {
+        this.emit("timeout");
+        this.destroy();
+        return;
+      }
+      this.armIdleTimeout();
+    }, this.idleTimeoutMs);
+  }
+
+  private resolvePendingConnect(): void {
+    if (!this.pendingConnect || this.pendingConnect.settled) return;
+    this.pendingConnect.settled = true;
+    if (this.connectTimer) {
+      clearTimeout(this.connectTimer);
+      this.connectTimer = undefined;
+    }
+    if (this.connectInterval) {
+      clearInterval(this.connectInterval);
+      this.connectInterval = undefined;
+    }
+    this.pendingConnect.resolve();
+    this.pendingConnect = undefined;
+  }
+
+  private failPendingConnect(err: Error): void {
+    if (!this.pendingConnect || this.pendingConnect.settled) return;
+    this.pendingConnect.settled = true;
+    if (this.connectTimer) {
+      clearTimeout(this.connectTimer);
+      this.connectTimer = undefined;
+    }
+    if (this.connectInterval) {
+      clearInterval(this.connectInterval);
+      this.connectInterval = undefined;
+    }
+    this.pendingConnect.reject(err);
+    this.pendingConnect = undefined;
   }
 }

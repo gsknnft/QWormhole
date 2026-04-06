@@ -83,11 +83,11 @@ describe("TokenBucket", () => {
 });
 
 describe("FlowController", () => {
-  it("initializes with half of preferred batch size", () => {
+  it("initializes native peers above half of preferred batch size", () => {
     const policy = createTestPolicy({ preferredBatchSize: 64 });
     const controller = new FlowController(policy);
 
-    expect(controller.currentSliceSize).toBe(32);
+    expect(controller.currentSliceSize).toBe(48);
   });
 
   it("clamps initial slice to bounds", () => {
@@ -110,7 +110,7 @@ describe("FlowController", () => {
     controller.onBackpressure(1024);
 
     expect(controller.currentSliceSize).toBe(
-      Math.floor(initialSize * 0.75),
+      Math.floor(initialSize * 0.85),
     );
   });
 
@@ -122,11 +122,11 @@ describe("FlowController", () => {
     controller.onDrain();
 
     expect(controller.currentSliceSize).toBe(
-      initialSize + FLOW_DEFAULTS.DRIFT_STEP,
+      initialSize + FLOW_DEFAULTS.DRIFT_STEP * 2,
     );
   });
 
-  it("respects minSlice on repeated backpressure", () => {
+  it("respects native peer operating floor on repeated backpressure", () => {
     const policy = createTestPolicy({ minSlice: 4 });
     const controller = new FlowController(policy);
 
@@ -135,7 +135,9 @@ describe("FlowController", () => {
       controller.onBackpressure(1024);
     }
 
-    expect(controller.currentSliceSize).toBe(4);
+    expect(controller.currentSliceSize).toBe(
+      FLOW_DEFAULTS.NATIVE_PEER_MIN_SLICE,
+    );
   });
 
   it("respects maxSlice on repeated drain", () => {
@@ -452,9 +454,8 @@ describe("FlowController integration with BatchFramer", () => {
     const flushHandler = vi.fn();
     smallController.on("flush", flushHandler);
 
-    // Slice size starts at 4 (half of 8)
-    // Enqueue 4 payloads to trigger flush
-    for (let i = 0; i < 4; i++) {
+    // Native peers bootstrap more aggressively than legacy tests assumed.
+    for (let i = 0; i < smallController.currentSliceSize; i++) {
       await smallController.enqueue(Buffer.from(`msg${i}`), framer);
     }
 

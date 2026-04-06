@@ -19,6 +19,11 @@ import type {
 } from "./types";
 import { BatchFramer } from "../core/batch-framer";
 import { FlowController } from "../core/flow-controller";
+import {
+  deriveTransportGovernancePolicy,
+  type TransportGovernanceSignals,
+} from "../core/transport-governance-policy";
+import type { TransportCoherenceSnapshot } from "../core/transport-coherence";
 
 export interface NboAdapterOptions extends NboOptions {
   enabled?: boolean;
@@ -44,6 +49,7 @@ export interface CoherenceAdapterOptions {
   minUpdateMs?: number;
   emit?: (entry: CoherenceTelemetryEntry) => void;
   nbo?: NboAdapterOptions;
+  governanceSignals?: () => TransportGovernanceSignals | undefined;
 }
 
 export interface CoherenceAdapterHandle {
@@ -73,10 +79,27 @@ export function attachCoherenceAdapter(
   const applyExternalSlice = (size?: number) => {
     const controller = flow as FlowController & {
       setExternalSliceSize?: (value?: number) => void;
+      setGovernancePolicy?: (value?: ReturnType<typeof deriveTransportGovernancePolicy>) => void;
     };
     if (typeof controller.setExternalSliceSize === "function") {
       controller.setExternalSliceSize(size);
     }
+  };
+  const applyGovernancePolicy = (signals?: TransportGovernanceSignals) => {
+    const controller = flow as FlowController & {
+      setGovernancePolicy?: (value?: ReturnType<typeof deriveTransportGovernancePolicy>) => void;
+    };
+    if (typeof controller.setGovernancePolicy !== "function") {
+      return;
+    }
+    const transportSignals = flow.getDiagnostics().transportCoherence;
+    if (!signals && !transportSignals) {
+      controller.setGovernancePolicy(undefined);
+      return;
+    }
+    controller.setGovernancePolicy(
+      deriveTransportGovernancePolicy(mergeGovernanceSignals(signals, transportSignals)),
+    );
   };
   let coupling: CouplingParams = {
     batchSize: flow.currentSliceSize,
@@ -211,6 +234,7 @@ export function attachCoherenceAdapter(
     }
 
     const state = loop.estimate();
+    applyGovernancePolicy(options.governanceSignals?.());
     const gcPressure =
       adaptive?.gcPauseMaxMs && adaptive.gcPauseMaxMs > 8
         ? adaptive.gcPauseMaxMs
@@ -273,6 +297,19 @@ export function attachCoherenceAdapter(
       flow.off("backpressure", onBackpressure);
       flow.off("flush", onFlush);
       applyExternalSlice(undefined);
+      applyGovernancePolicy(undefined);
     },
+  };
+}
+
+function mergeGovernanceSignals(
+  signals: TransportGovernanceSignals | undefined,
+  transport: TransportCoherenceSnapshot | undefined,
+): TransportGovernanceSignals {
+  return {
+    ...signals,
+    transportSNI: transport?.transportSNI,
+    transportSPI: transport?.transportSPI,
+    transportMetastability: transport?.transportMetastability,
   };
 }

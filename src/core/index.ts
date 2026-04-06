@@ -11,3 +11,5 @@ export * from './NativeTCPClient';
 export * from './qos';
 export * from './runtime';
 export * from './TcpClient';
+export * from './transport-coherence';
+export * from './transport-governance-policy';
