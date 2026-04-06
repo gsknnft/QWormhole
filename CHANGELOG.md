@@ -1,6 +1,21 @@
 # Changelog
 
-## Unreleased (next: 0.3.0)
+## Unreleased (next: 0.3.1)
+
+- `fitj.ts`: uncommented and fully enabled polynomial regression exports
+  (`RegressionOrder`, `FitResult`, `fitJ`, `evalFitJ`, `gradFitJ`). Pivot guard
+  prevents rank-deficient inversion; all regression orders (1–3) now produce
+  finite gradient and value estimates.
+- `jSpaceResolution.ts`: fixed cubic-order polynomial evaluation (`evalFitJ`
+  called with correct argument, not a raw number literal) and gradient
+  computation; J-space attractor-basin estimates are now geometrically correct.
+- `invariants.ts`: tightened coherence invariant assertions for structural
+  persistence under attractor-comparison regime transitions.
+- `transport-governance-policy.ts`: wired `driftRate` from per-role latency CV
+  into governance escalation thresholds; `DRIFT_RATE_GUARDED_THRESHOLD` gate
+  (0.55) activates role-level recovery posture before consensus-layer escalation.
+
+## 0.3.0 - 2026-04-06
 
 - Bench and release-lane clarification:
   - `bench:core:report` is explicitly the raw core transport lane again.

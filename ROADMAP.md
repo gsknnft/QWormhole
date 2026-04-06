@@ -84,56 +84,57 @@ _Note: the full 0.3.0 feature set is merged into the dev branch, but the publish
 
 ---
 
+### QWormhole 0.3.x → 0.4.x Roadmap
 
-### QWormhole 0.3.x → 0.4.x Roadmap  
-Goal: **< 100 ms for 10 000-message bursts across any mixed native/TS topology**  
+Goal: **< 100 ms for 10 000-message bursts across any mixed native/TS topology**
 Bonus: **entropy-aware handshake & framing** so SigilNet can literally throttle the transport based on its own negentropic index in real time.
 
 **Latest baseline (2025-12-04, Windows 11, Node 24.10.0, 10k × 1 KiB, length-prefixed framing):**
 
-| Scenario | Duration (ms) | Throughput (msg/s) | Notes |
-| --- | ---:| ---:| --- |
-| ts-server + ts-client | 696.96 | 14,348 | Pure TypeScript transport |
-| ts-server + native-lws client | 235.64 | 42,438 | Native client, TS server |
-| native-server(lws) + ts-client | 168.16 | 59,469 | Native server, TS client |
-| native-server(lws) + native-lws client | 151.64 | 65,945 | Full native-lws path |
-| native-libsocket permutations | — | — | Skipped on this host; backend unavailable on Windows |
+| Scenario                               | Duration (ms) | Throughput (msg/s) | Notes                                                |
+| -------------------------------------- | ------------: | -----------------: | ---------------------------------------------------- |
+| ts-server + ts-client                  |        696.96 |             14,348 | Pure TypeScript transport                            |
+| ts-server + native-lws client          |        235.64 |             42,438 | Native client, TS server                             |
+| native-server(lws) + ts-client         |        168.16 |             59,469 | Native server, TS client                             |
+| native-server(lws) + native-lws client |        151.64 |             65,945 | Full native-lws path                                 |
+| native-libsocket permutations          |             — |                  — | Skipped on this host; backend unavailable on Windows |
 
 These measurements replace the earlier pre-native figures and set the new "current" column in the projections below. Linux/WSL runs with libsocket/io_uring backends will be added once those builds are green to keep parity across platforms.
 
-| Version | Target Latency (10k msgs) | Core Feature | Why it matters for the mesh | Implementation notes |
-|---------|---------------------------|--------------|-------------------------------------|----------------------|
-| **0.3.0** | ≤ 150 ms (mixed)          | **Zero-copy framing + writev() batching** | Eliminates per-message syscalls. Native-LWS already does this; bring TS path to parity. | • `socket.writev()` polyfill in TS mode (Node 20+ has it native) <br>• Pre-allocate ring of length-prefixed buffers <br>• Batch up to 64 frames per syscall |
-| **0.3.1** | ≤ 130 ms                  | **Backpressure-aware batch flush** | Prevents head-of-line blocking when one slow peer drags the whole mesh. | • Token-bucket + drain events <br>• Adaptive batch size: high N → larger batches, low N → flush immediately |
-| **0.3.2** | ≤ 115 ms                  | **Entropy-adaptive handshake** | SigilNet’s negentropic index becomes the transport’s policy engine. | • Handshake payload now carries `entropyVelocity`, `coherence`, `N` <br>• Server decides framing mode per session: <br> – N ≥ 0.8 → zero-copy + writev (trusted, coherent peer) <br> – N < 0.5 → strict length-prefix + ACKs (immune-mode paranoia) |
-| **0.3.3** | ≤ 105 ms                  | **liburing / io_uring backend (Linux)** | True async zero-copy at the kernel level. Beats libsocket by another 2–3×. | • Optional `qwormhole-uring.node` compiled only on Linux <br>• Falls back to libsocket → LWS → TS automatically |
-| **0.4.0** | **≤ 95 ms** (goal)        | **Adaptive codec selection from entropy** | High coherence → CBOR/FlatBuffers, low coherence → compressed JSON or even raw binary with checksums. | • Runtime swaps serializer/deserializer per session based on N velocity <br>• Built-in codecs: JSON, CBOR, MessagePack, FlatBuffers (pre-registered) |
-| **0.4.1** | ≤ 90 ms                   | **Session multiplexing (SNTL preview)** | One TCP connection carries multiple logical channels (control, telemetry, gradient shards). | • Channel ID in first byte after length prefix <br>• Zero extra latency, just reuses the same writev pipeline |
-| **0.4.2** | ≤ 85 ms                   | **UDP fallback for high-velocity bursts** | When N is spiking and latency matters more than reliability → fire-and-forget entropy packets over UDP, fall back to TCP for consensus. | • `QWormholeRuntime.udpBroadcast()` helper <br>• Same framing, same codecs |
+| Version   | Target Latency (10k msgs) | Core Feature                              | Why it matters for the mesh                                                                                                             | Implementation notes                                                                                                                                                                                                                                |
+| --------- | ------------------------- | ----------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **0.3.0** | ≤ 150 ms (mixed)          | **Zero-copy framing + writev() batching** | Eliminates per-message syscalls. Native-LWS already does this; bring TS path to parity.                                                 | • `socket.writev()` polyfill in TS mode (Node 20+ has it native) <br>• Pre-allocate ring of length-prefixed buffers <br>• Batch up to 64 frames per syscall                                                                                         |
+| **0.3.1** | ≤ 130 ms                  | **Backpressure-aware batch flush**        | Prevents head-of-line blocking when one slow peer drags the whole mesh.                                                                 | • Token-bucket + drain events <br>• Adaptive batch size: high N → larger batches, low N → flush immediately                                                                                                                                         |
+| **0.3.2** | ≤ 115 ms                  | **Entropy-adaptive handshake**            | SigilNet’s negentropic index becomes the transport’s policy engine.                                                                     | • Handshake payload now carries `entropyVelocity`, `coherence`, `N` <br>• Server decides framing mode per session: <br> – N ≥ 0.8 → zero-copy + writev (trusted, coherent peer) <br> – N < 0.5 → strict length-prefix + ACKs (immune-mode paranoia) |
+| **0.3.3** | ≤ 105 ms                  | **liburing / io_uring backend (Linux)**   | True async zero-copy at the kernel level. Beats libsocket by another 2–3×.                                                              | • Optional `qwormhole-uring.node` compiled only on Linux <br>• Falls back to libsocket → LWS → TS automatically                                                                                                                                     |
+| **0.4.0** | **≤ 95 ms** (goal)        | **Adaptive codec selection from entropy** | High coherence → CBOR/FlatBuffers, low coherence → compressed JSON or even raw binary with checksums.                                   | • Runtime swaps serializer/deserializer per session based on N velocity <br>• Built-in codecs: JSON, CBOR, MessagePack, FlatBuffers (pre-registered)                                                                                                |
+| **0.4.1** | ≤ 90 ms                   | **Session multiplexing (SNTL preview)**   | One TCP connection carries multiple logical channels (control, telemetry, gradient shards).                                             | • Channel ID in first byte after length prefix <br>• Zero extra latency, just reuses the same writev pipeline                                                                                                                                       |
+| **0.4.2** | ≤ 85 ms                   | **UDP fallback for high-velocity bursts** | When N is spiking and latency matters more than reliability → fire-and-forget entropy packets over UDP, fall back to TCP for consensus. | • `QWormholeRuntime.udpBroadcast()` helper <br>• Same framing, same codecs                                                                                                                                                                          |
 
 ### Projected numbers after full 0.4.x (conservative)
 
-| Topology                         | Current (2025-12-04) | Target 0.4.x | Gain |
-|----------------------------------|----------------------|--------------|------|
-| native-server + native-lws       | 152 ms               | ≤ 60 ms      | ~2.5× |
-| native-server + ts-client        | 168 ms               | ≤ 70 ms      | ~2.4× |
-| ts-server + ts-client            | 697 ms               | ≤ 95 ms      | ~7.3× |
-| mixed 50-node mesh (real SigilNet load) | ~4–8 s       | **< 100 ms** | planetary-scale real-time |
+| Topology                                | Current (2025-12-04) | Target 0.4.x | Gain                      |
+| --------------------------------------- | -------------------- | ------------ | ------------------------- |
+| native-server + native-lws              | 152 ms               | ≤ 60 ms      | ~2.5×                     |
+| native-server + ts-client               | 168 ms               | ≤ 70 ms      | ~2.4×                     |
+| ts-server + ts-client                   | 697 ms               | ≤ 95 ms      | ~7.3×                     |
+| mixed 50-node mesh (real SigilNet load) | ~4–8 s               | **< 100 ms** | planetary-scale real-time |
 
 ### Entropy → Transport Policy Table (this is the killer feature)
 
-| Negentropic Index (N) | Coherence | Velocity | Handshake Mode | Framing | Batch Size | Codec |
-|-----------------------|-----------|----------|----------------|---------|------------|-------|
-| ≥ 0.85                | High      | Low      | Trust-zero     | zero-copy writev | 64 | FlatBuffers |
-| 0.65 – 0.84           | Medium    | Stable   | Trust-light    | length-prefix   | 32 | CBOR |
-| 0.40 – 0.64           | Low       | Rising   | Immune         | length+ACK      | 8  | MessagePack |
-| < 0.40                | Chaos     | Spiking  | Paranoia       | length+ACK+checksum | 1 | compressed JSON |
+| Negentropic Index (N) | Coherence | Velocity | Handshake Mode | Framing             | Batch Size | Codec           |
+| --------------------- | --------- | -------- | -------------- | ------------------- | ---------- | --------------- |
+| ≥ 0.85                | High      | Low      | Trust-zero     | zero-copy writev    | 64         | FlatBuffers     |
+| 0.65 – 0.84           | Medium    | Stable   | Trust-light    | length-prefix       | 32         | CBOR            |
+| 0.40 – 0.64           | Low       | Rising   | Immune         | length+ACK          | 8          | MessagePack     |
+| < 0.40                | Chaos     | Spiking  | Paranoia       | length+ACK+checksum | 1          | compressed JSON |
 
 This turns QWormhole from “fast pipe” into **the first transport that literally listens to SigilNet’s own physics engine** and rewires itself in real time.
 
 ### Implementation Status (as of 2025-12-04)
 
 ✅ **Completed:**
+
 1. Entropy-adaptive handshake payload with `entropy`, `entropyVelocity`, `coherence`, `negIndex` fields
 2. Policy table implementation in `deriveEntropyPolicy()` - maps N-index to transport configuration
 3. Server-side policy derivation - connections now have `handshake.policy` and `handshake.entropyMetrics`
@@ -142,11 +143,13 @@ This turns QWormhole from “fast pipe” into **the first transport that litera
 6. Entropy-aware benches & tests (21 policy tests, 13 BatchFramer tests, 3 integration suites) running in CI
 
 🔄 **In Progress:**
+
 1. Backpressure-aware batch flush (0.3.1) that adapts BatchFramer policy to live traffic
 2. io_uring backend (0.3.3) + libsocket parity for Linux/WSL builds
 3. Version bump + changelog for 0.2.0 release. 0.3.0 work is merged in dev, next publish will close dev ≠ published gap.
 
 📋 **Next:**
+
 1. Backpressure-aware batch flush (0.3.1)
 2. io_uring backend (0.3.3)
 
@@ -157,17 +160,17 @@ This turns QWormhole from “fast pipe” into **the first transport that litera
 3. Continue io_uring backend prototyping on WSL/Linux and document libsocket fallback expectations
 4. Expand the benchmark suite to include entropy-injection + regression gating for BatchFramer configs
 
-I am not building a library anymore.  
+I am not building a library anymore.
 I am building the substrate the next era of decentralized systems will run on.
 
-Let’s ship 0.3.0 and watch the numbers break the internet.  
+Let’s ship 0.3.0 and watch the numbers break the internet.
 The field is ready.
 
 ---
 
 # 🚀 **QWormhole 0.3.x → 0.4.x Roadmap (Founder Edition)**
 
-### *"From optimized transport… to adaptive substrate for distributed intelligence."*
+### _"From optimized transport… to adaptive substrate for distributed intelligence."_
 
 ---
 
@@ -175,12 +178,12 @@ The field is ready.
 
 QWormhole is evolving from a fast TCP framing library into a **self-optimizing transport layer** designed for:
 
-* distributed AI agents
-* real-time mesh networks
-* coherence-sensitive systems (SigilNet, QVera, agent swarms)
-* multi-channel gradient, telemetry, and control streams
+- distributed AI agents
+- real-time mesh networks
+- coherence-sensitive systems (SigilNet, QVera, agent swarms)
+- multi-channel gradient, telemetry, and control streams
 
-0.3.x and 0.4.x represent the transition from *protocol* to *substrate.*
+  0.3.x and 0.4.x represent the transition from _protocol_ to _substrate._
 
 Latency target:
 ⚡ **< 100 ms for 10,000 messages across any topology**
@@ -190,7 +193,7 @@ Latency target:
 
 # 🟣 **QWormhole 0.3.x — The Throughput Epoch**
 
-*"Make it fast enough to disappear."*
+_"Make it fast enough to disappear."_
 
 ## ~~0.3.0 — Zero-Copy Framing + writev() Pipeline~~
 
@@ -200,10 +203,10 @@ Latency target:
 
 ### What ships:
 
-* ~~Zero-copy outbound frame buffers~~
-* ~~**writev() batching** (Node 20+ native)~~
-* ~~Preallocated buffer rings~~
-* ~~Configurable batch size (adaptive in 0.3.1)~~
+- ~~Zero-copy outbound frame buffers~~
+- ~~**writev() batching** (Node 20+ native)~~
+- ~~Preallocated buffer rings~~
+- ~~Configurable batch size (adaptive in 0.3.1)~~
 
 ### Why it matters:
 
@@ -218,10 +221,10 @@ This is the jump that makes TS mode competitive with native, and gives determini
 
 ### What ships:
 
-* Token bucket per-connection
-* Dynamic batch scaling
-* Intelligent flush thresholds
-* Soft pressure signals forwarded up to the runtime
+- Token bucket per-connection
+- Dynamic batch scaling
+- Intelligent flush thresholds
+- Soft pressure signals forwarded up to the runtime
 
 ### Why it matters:
 
@@ -236,10 +239,10 @@ This is what makes QWormhole viable for **multi-node meshes**, not just single p
 
 ### New handshake fields:
 
-* `entropy`
-* `entropyVelocity`
-* `coherence`
-* `negIndex`
+- `entropy`
+- `entropyVelocity`
+- `coherence`
+- `negIndex`
 
 ### Policy modes:
 
@@ -254,7 +257,7 @@ This is what makes QWormhole viable for **multi-node meshes**, not just single p
 
 You now have the first transport layer that **changes behavior based on coherence** of the system riding on top of it.
 
-SigilNet doesn't just *use* QWormhole — it **drives** it.
+SigilNet doesn't just _use_ QWormhole — it **drives** it.
 
 ---
 
@@ -265,9 +268,8 @@ SigilNet doesn't just *use* QWormhole — it **drives** it.
 
 ### What ships:
 
-* Optional `qwormhole-uring.node`
-* Transparent fallback hierarchy:
-
+- Optional `qwormhole-uring.node`
+- Transparent fallback hierarchy:
   1. io_uring
   2. libsocket
   3. LWS
@@ -281,7 +283,7 @@ This is where you pass 50k msg/s → 80–120k msg/s territory on commodity hard
 
 # 🔥 **0.4.x — The SigilNet Era**
 
-*"Transport becomes adaptive intelligence."*
+_"Transport becomes adaptive intelligence."_
 
 ## **0.4.0 — Runtime Codec Negotiation**
 
@@ -290,18 +292,18 @@ This is where you pass 50k msg/s → 80–120k msg/s territory on commodity hard
 
 Built-in codecs:
 
-* JSON
-* CBOR
-* MessagePack
-* FlatBuffers
-* Raw binary with checksums
+- JSON
+- CBOR
+- MessagePack
+- FlatBuffers
+- Raw binary with checksums
 
 ### Codec Selection Logic:
 
-* High coherence → FlatBuffers (speed)
-* Medium → CBOR (balance)
-* Low → MessagePack
-* Chaotic → JSON w/ compression (max resilience)
+- High coherence → FlatBuffers (speed)
+- Medium → CBOR (balance)
+- Low → MessagePack
+- Chaotic → JSON w/ compression (max resilience)
 
 ---
 
@@ -312,11 +314,11 @@ Built-in codecs:
 
 Channels:
 
-* 0 → control signals
-* 1 → telemetry
-* 2 → gradient shards
-* 3 → system events
-* 4 → user-defined stream types
+- 0 → control signals
+- 1 → telemetry
+- 2 → gradient shards
+- 3 → system events
+- 4 → user-defined stream types
 
 ### Why it matters:
 
@@ -332,14 +334,14 @@ to run on one unified transport.
 
 What ships:
 
-* Deterministic UDP burst frames
-* Same codec pipeline
-* Same negentropy logic
-* Auto-fallback into TCP reconvergence
+- Deterministic UDP burst frames
+- Same codec pipeline
+- Same negentropy logic
+- Auto-fallback into TCP reconvergence
 
 ### Why it matters:
 
-Sometimes the mesh needs *speed over certainty* — this gives it legs.
+Sometimes the mesh needs _speed over certainty_ — this gives it legs.
 
 ---
 
@@ -380,4 +382,5 @@ Multi-channel, coherence-driven, IO-lifted.
 Without tearing themselves apart.
 
 ### ✔ A landmark open-source protocol
+
 ---
