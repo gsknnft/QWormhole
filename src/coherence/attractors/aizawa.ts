@@ -1,4 +1,4 @@
-// @sigilnet/coherence/src/attractors/aizawa.ts
+// @gsknnft/coherence/src/attractors/aizawa.ts
 
 import { PolarPoint } from "../superformula";
 
@@ -7,8 +7,6 @@ export interface AizawaPoint3D {
   y: number;
   z: number;
 }
-
-
 
 export const DEFAULT_PARAMS = {
   a: 0.95,
@@ -37,14 +35,14 @@ export function generateAizawaAttractor(
   y0: number,
   z0: number,
 ): PolarPoint[] {
-    const a = 0.95;
-    const b = 0.7;
-    const c = 0.6;
-    const d = 3.5;
-    const e = 0.25;
-    const f = 0.1;
-    const dt = 0.01;
-    const steps = 10000;
+  const a = 0.95;
+  const b = 0.7;
+  const c = 0.6;
+  const d = 3.5;
+  const e = 0.25;
+  const f = 0.1;
+  const dt = 0.01;
+  const steps = 10000;
   const trajectory = [];
   let x = x0,
     y = y0,
@@ -52,7 +50,8 @@ export function generateAizawaAttractor(
   for (let i = 0; i < steps; i++) {
     const dx = (z - b) * x - d * y;
     const dy = d * x + (z - b) * y;
-    const dz = c + a * z - (z ** 3) / 3 - (x ** 2 + y ** 2) * (1 + e * z) + f * z * (x ** 3);
+    const dz =
+      c + a * z - z ** 3 / 3 - (x ** 2 + y ** 2) * (1 + e * z) + f * z * x ** 3;
     x += dx * dt;
     y += dy * dt;
     z += dz * dt;

@@ -1,4 +1,4 @@
-// @sigilnet/coherence/src/attractors/projection.ts
+// @gsknnft/coherence/src/attractors/projection.ts
 
 import type { PolarPoint } from "../superformula";
 

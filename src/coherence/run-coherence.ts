@@ -1,37 +1,6 @@
-import WebSocket, { WebSocketServer } from "ws";
 import { resolve } from "path";
-import { CoherenceLoop } from "./loop";
-import { CommitmentDetector } from "./commitment-detector";
-import { ResolutionDetector } from "./resolution";
-import { deriveNcfSummary, NCF_SOURCE } from "./ncf";
-import {
-  buildIdentityMatrix,
-  buildNboSignal,
-  nboVectorized,
-  normalizeTopologyRows,
-  summarizeNbo,
-} from "./nbo";
-import type {
-  CoherenceConfig,
-  CoherenceState,
-  CouplingParams,
-  FieldSample,
-  NboSummary,
-  FitModel,
-  FitSample,
-  Vector3,
-  CoherenceGeometry,
-} from "./types";
-import { resolveLatencyVar } from "./latency";
-import {
-  buildSamples,
-  certifyGeometry,
-  fitGeometry,
-  minimumSamplesForModel,
-} from "./field-stability";
-import { isJSpaceResolved } from "./jSpaceResolution";
-import { WSTransport, WSTransportServer } from "../transports/ws/ws-transport";
-import type { MuxStream } from "../transports/mux/mux-stream";
+import WebSocket, { WebSocketServer } from "ws";
+import { deriveTransportGovernancePolicy } from "../core/transport-governance-policy";
 import {
   signalTrialMessageSchema,
   type SignalTrialAction,
@@ -40,12 +9,43 @@ import {
   type SignalTrialMessage,
   type SignalTrialPhase,
   type SignalTrialProfile,
-  type SignalTrialTelemetry,
   type SignalTrialResolutionTier,
-  type SignalTrialTransportPolicy,
+  type SignalTrialTelemetry,
   type SignalTrialTier,
+  type SignalTrialTransportPolicy,
 } from "../schema/signal-trial";
-import { deriveTransportGovernancePolicy } from "../core/transport-governance-policy";
+import type { MuxStream } from "../transports/mux/mux-stream";
+import { WSTransport, WSTransportServer } from "../transports/ws/ws-transport";
+import { CommitmentDetector } from "./commitment-detector";
+import {
+  buildSamples,
+  certifyGeometry,
+  fitGeometry,
+  minimumSamplesForModel,
+} from "./field-stability";
+import { isJSpaceResolved } from "./jSpaceResolution";
+import { resolveLatencyVar } from "./latency";
+import { CoherenceLoop } from "./loop";
+import {
+  buildIdentityMatrix,
+  buildNboSignal,
+  nboVectorized,
+  normalizeTopologyRows,
+  summarizeNbo,
+} from "./nbo";
+import { deriveNcfSummary, NCF_SOURCE } from "./ncf";
+import { ResolutionDetector } from "./resolution";
+import type {
+  CoherenceConfig,
+  CoherenceGeometry,
+  CoherenceState,
+  CouplingParams,
+  FieldSample,
+  FitModel,
+  FitSample,
+  NboSummary,
+  Vector3,
+} from "./types";
 
 const cfg: CoherenceConfig = {
   Hmin: 1.2,
@@ -87,10 +87,34 @@ type GateConfig = {
 };
 
 const difficultyGates: Record<SignalTrialDifficulty, GateConfig> = {
-  easy: { minUptimeMs: 8000, minActions: 1, holdMs: 3000, quietHoldMs: 3000, collapseHoldMs: 700 },
-  standard: { minUptimeMs: 12000, minActions: 2, holdMs: 5000, quietHoldMs: 5000, collapseHoldMs: 900 },
-  hard: { minUptimeMs: 16000, minActions: 3, holdMs: 7000, quietHoldMs: 7000, collapseHoldMs: 1100 },
-  chaos: { minUptimeMs: 20000, minActions: 4, holdMs: 9000, quietHoldMs: 9000, collapseHoldMs: 1300 },
+  easy: {
+    minUptimeMs: 8000,
+    minActions: 1,
+    holdMs: 3000,
+    quietHoldMs: 3000,
+    collapseHoldMs: 700,
+  },
+  standard: {
+    minUptimeMs: 12000,
+    minActions: 2,
+    holdMs: 5000,
+    quietHoldMs: 5000,
+    collapseHoldMs: 900,
+  },
+  hard: {
+    minUptimeMs: 16000,
+    minActions: 3,
+    holdMs: 7000,
+    quietHoldMs: 7000,
+    collapseHoldMs: 1100,
+  },
+  chaos: {
+    minUptimeMs: 20000,
+    minActions: 4,
+    holdMs: 9000,
+    quietHoldMs: 9000,
+    collapseHoldMs: 1300,
+  },
 };
 
 const difficultyGateScale: Record<SignalTrialDifficulty, number> = {
@@ -108,27 +132,32 @@ const actionTimingScale: Record<SignalTrialDifficulty, number> = {
 };
 
 const clamp01 = (value: number) => Math.min(1, Math.max(0, value));
-const clampRange = (value: number, min: number, max: number) => Math.min(max, Math.max(min, value));
+const clampRange = (value: number, min: number, max: number) =>
+  Math.min(max, Math.max(min, value));
 const rand = (min: number, max: number) => min + Math.random() * (max - min);
 const readNumber = (value: unknown, fallback: number) => {
   const num = typeof value === "number" ? value : Number(value);
   return Number.isFinite(num) ? num : fallback;
 };
 const average = (values: number[]) =>
-  values.length > 0 ? values.reduce((sum, value) => sum + value, 0) / values.length : 0;
+  values.length > 0
+    ? values.reduce((sum, value) => sum + value, 0) / values.length
+    : 0;
 
 const deriveGeometryTrusted = (geometry: CoherenceGeometry): boolean =>
   Boolean(
     geometry.stability.stable &&
-      geometry.stability.violationRate < 0.02 &&
-      geometry.curvature.lambdaMin >= -1e-9,
+    geometry.stability.violationRate < 0.02 &&
+    geometry.curvature.lambdaMin >= -1e-9,
   );
 
 const buildGeometryValidity = (geometry: CoherenceGeometry) => {
   const trusted = deriveGeometryTrusted(geometry);
   return {
     trusted,
-    reasons: trusted ? ["signaltrial:run-coherence"] : ["signaltrial:geometry_untrusted"],
+    reasons: trusted
+      ? ["signaltrial:run-coherence"]
+      : ["signaltrial:geometry_untrusted"],
     minSamplesMet: geometry.stability.samples >= 16,
     r2AboveFloor: true,
     psdInflationOk: geometry.conditioning.psdInflation <= 0.25,
@@ -140,7 +169,7 @@ const buildGeometryValidity = (geometry: CoherenceGeometry) => {
   };
 };
 
-const CANONICAL_COHERENCE_SOURCE = "@sigilnet/coherence";
+const CANONICAL_COHERENCE_SOURCE = "@gsknnft/coherence";
 const CANONICAL_REGIME_SOURCE = `${CANONICAL_COHERENCE_SOURCE}:geometric-regime`;
 const CANONICAL_ATTRACTOR_SOURCE = `${CANONICAL_COHERENCE_SOURCE}:attractors`;
 
@@ -192,7 +221,12 @@ type AttractorComparisonTelemetry = {
     flowAlignment: number | null;
     flowAlignmentAbs: number | null;
     flowAlignmentSamples: number;
-    flowAlignmentMode: "descent" | "orthogonal" | "uphill" | "mixed" | "unavailable";
+    flowAlignmentMode:
+      | "descent"
+      | "orthogonal"
+      | "uphill"
+      | "mixed"
+      | "unavailable";
     gradientUsed: boolean;
     note?: string;
   };
@@ -268,7 +302,9 @@ type EvaluateLorentzBarrierFn = (
   returnVelocity: number;
 };
 
-type ComputeSpectralNegentropyIndexFn = (input: ArrayLike<readonly number[]>) => {
+type ComputeSpectralNegentropyIndexFn = (
+  input: ArrayLike<readonly number[]>,
+) => {
   score: number;
 };
 
@@ -284,7 +320,11 @@ type StructuralPersistenceObservation = {
 
 type EvaluateStructuralPersistenceFn = (
   observations: StructuralPersistenceObservation[],
-  options?: { minSamples?: number; gateThreshold?: number; gammaAlert?: number },
+  options?: {
+    minSamples?: number;
+    gateThreshold?: number;
+    gammaAlert?: number;
+  },
 ) => {
   score: number;
   metastability: number;
@@ -364,19 +404,22 @@ let evaluateGeometricRegimeFn: EvaluateGeometricRegimeFn | null = null;
 let featuresFromFrameFn: FeaturesFromFrameFn | null = null;
 let driftRateFn: DriftRateFn | null = null;
 let evaluateLorentzBarrierFn: EvaluateLorentzBarrierFn | null = null;
-let computeSpectralNegentropyIndexFn: ComputeSpectralNegentropyIndexFn | null = null;
-let evaluateStructuralPersistenceFn: EvaluateStructuralPersistenceFn | null = null;
+let computeSpectralNegentropyIndexFn: ComputeSpectralNegentropyIndexFn | null =
+  null;
+let evaluateStructuralPersistenceFn: EvaluateStructuralPersistenceFn | null =
+  null;
 let uniformPosteriorFn: UniformPosteriorFn | null = null;
 let updateRegimePosteriorFn: UpdateRegimePosteriorFn | null = null;
 let posteriorArgmaxFn: PosteriorArgmaxFn | null = null;
 let posteriorEntropyFn: PosteriorEntropyFn | null = null;
 let posteriorConfidenceFn: PosteriorConfidenceFn | null = null;
-let estimateCorrelationDimensionFn: EstimateCorrelationDimensionFn | null = null;
+let estimateCorrelationDimensionFn: EstimateCorrelationDimensionFn | null =
+  null;
 let classifyDimensionBandFn: ClassifyDimensionBandFn | null = null;
 let analyzeLinchpinFn: AnalyzeLinchpinFn | null = null;
 const compareToAttractorsLoad = (async () => {
   try {
-    const modPath = "@sigilnet/coherence/browser";
+    const modPath = "@gsknnft/coherence/browser";
     const mod = (await import(modPath)) as {
       compareToAttractors?: CompareToAttractorsFn;
       evaluateGeometricRegime?: EvaluateGeometricRegimeFn;
@@ -458,7 +501,6 @@ const compareToAttractorsLoad = (async () => {
   }
 })();
 
-
 const stabilityDefaults: StabilityConfig = {
   bufferSize: 128,
   analysisWindow: 64,
@@ -481,15 +523,24 @@ const resolveStabilityConvention = (value: unknown): StabilityConvention =>
 const buildStabilityConfig = (): StabilityConfig => ({
   bufferSize: Math.max(
     16,
-    readNumber(process.env.SIGNAL_TRIAL_STABILITY_BUFFER, stabilityDefaults.bufferSize),
+    readNumber(
+      process.env.SIGNAL_TRIAL_STABILITY_BUFFER,
+      stabilityDefaults.bufferSize,
+    ),
   ),
   analysisWindow: Math.max(
     8,
-    readNumber(process.env.SIGNAL_TRIAL_STABILITY_WINDOW, stabilityDefaults.analysisWindow),
+    readNumber(
+      process.env.SIGNAL_TRIAL_STABILITY_WINDOW,
+      stabilityDefaults.analysisWindow,
+    ),
   ),
   analysisEvery: Math.max(
     1,
-    readNumber(process.env.SIGNAL_TRIAL_STABILITY_EVERY, stabilityDefaults.analysisEvery),
+    readNumber(
+      process.env.SIGNAL_TRIAL_STABILITY_EVERY,
+      stabilityDefaults.analysisEvery,
+    ),
   ),
   model: resolveStabilityModel(process.env.SIGNAL_TRIAL_STABILITY_MODEL),
   regularization: readNumber(
@@ -500,7 +551,9 @@ const buildStabilityConfig = (): StabilityConfig => ({
     process.env.SIGNAL_TRIAL_STABILITY_TOLERANCE,
     stabilityDefaults.tolerance,
   ),
-  convention: resolveStabilityConvention(process.env.SIGNAL_TRIAL_STABILITY_CONVENTION),
+  convention: resolveStabilityConvention(
+    process.env.SIGNAL_TRIAL_STABILITY_CONVENTION,
+  ),
 });
 
 const applyStabilityConvention = (
@@ -530,11 +583,23 @@ const observerDefaults = {
 const buildObserverConfig = (tickMs: number) => ({
   historyWindow: Math.max(
     4,
-    readNumber(process.env.SIGNAL_TRIAL_OBSERVER_WINDOW, observerDefaults.historyWindow),
+    readNumber(
+      process.env.SIGNAL_TRIAL_OBSERVER_WINDOW,
+      observerDefaults.historyWindow,
+    ),
   ),
-  vEps: readNumber(process.env.SIGNAL_TRIAL_OBSERVER_V_EPS, observerDefaults.vEps),
-  mMin: readNumber(process.env.SIGNAL_TRIAL_OBSERVER_M_MIN, observerDefaults.mMin),
-  mStdMax: readNumber(process.env.SIGNAL_TRIAL_OBSERVER_M_STD_MAX, observerDefaults.mStdMax),
+  vEps: readNumber(
+    process.env.SIGNAL_TRIAL_OBSERVER_V_EPS,
+    observerDefaults.vEps,
+  ),
+  mMin: readNumber(
+    process.env.SIGNAL_TRIAL_OBSERVER_M_MIN,
+    observerDefaults.mMin,
+  ),
+  mStdMax: readNumber(
+    process.env.SIGNAL_TRIAL_OBSERVER_M_STD_MAX,
+    observerDefaults.mStdMax,
+  ),
   latencyStdMax: readNumber(
     process.env.SIGNAL_TRIAL_OBSERVER_LAT_STD_MAX,
     observerDefaults.latencyStdMax,
@@ -558,8 +623,14 @@ const buildObserverConfig = (tickMs: number) => ({
     ),
   ),
   dtSeconds: tickMs / 1000,
-  vScale: readNumber(process.env.SIGNAL_TRIAL_OBSERVER_V_SCALE, observerDefaults.vScale),
-  dmDtScale: readNumber(process.env.SIGNAL_TRIAL_OBSERVER_DMDT_SCALE, observerDefaults.dmDtScale),
+  vScale: readNumber(
+    process.env.SIGNAL_TRIAL_OBSERVER_V_SCALE,
+    observerDefaults.vScale,
+  ),
+  dmDtScale: readNumber(
+    process.env.SIGNAL_TRIAL_OBSERVER_DMDT_SCALE,
+    observerDefaults.dmDtScale,
+  ),
 });
 
 type NboConfig = {
@@ -584,18 +655,24 @@ const buildNboConfig = (): NboConfig => {
     enabledRaw === undefined ? nboDefaults.enabled : enabledRaw !== "0";
   const intervalMs = Math.max(
     200,
-    readNumber(process.env.SIGNAL_TRIAL_NBO_INTERVAL_MS, nboDefaults.intervalMs),
+    readNumber(
+      process.env.SIGNAL_TRIAL_NBO_INTERVAL_MS,
+      nboDefaults.intervalMs,
+    ),
   );
   const windowSize = Math.max(
     4,
-    Math.round(readNumber(process.env.SIGNAL_TRIAL_NBO_WINDOW, nboDefaults.windowSize)),
+    Math.round(
+      readNumber(process.env.SIGNAL_TRIAL_NBO_WINDOW, nboDefaults.windowSize),
+    ),
   );
   const topN = Math.max(
     1,
     Math.round(readNumber(process.env.SIGNAL_TRIAL_NBO_TOPN, nboDefaults.topN)),
   );
   const normalizeTopology =
-    process.env.SIGNAL_TRIAL_NBO_NORMALIZE === "1" || nboDefaults.normalizeTopology;
+    process.env.SIGNAL_TRIAL_NBO_NORMALIZE === "1" ||
+    nboDefaults.normalizeTopology;
   return { enabled, intervalMs, windowSize, topN, normalizeTopology };
 };
 
@@ -627,7 +704,8 @@ const buildGovernanceConfig = (): GovernanceConfig => ({
 });
 
 const makeId = () => Math.random().toString(36).slice(2, 10);
-const makeSessionId = () => `ST-${Math.random().toString(36).slice(2, 8).toUpperCase()}`;
+const makeSessionId = () =>
+  `ST-${Math.random().toString(36).slice(2, 8).toUpperCase()}`;
 
 const latencyVariance = (sample: FieldSample) =>
   resolveLatencyVar(sample as Record<string, number>);
@@ -667,42 +745,81 @@ const ACTIONS: ActionSpec[] = [
     label: "Pulse",
     delayRangeMs: [3200, 5200],
     durationMs: 900,
-    impact: { latencyP50: 12, latencyP95: 20, latencyP99: 30, errRate: 0.006, corrSpike: 0.18 },
+    impact: {
+      latencyP50: 12,
+      latencyP95: 20,
+      latencyP99: 30,
+      errRate: 0.006,
+      corrSpike: 0.18,
+    },
   },
   {
     type: "pressure",
     label: "Pressure",
     delayRangeMs: [3400, 5200],
     durationMs: 3200,
-    impact: { latencyP50: 10, latencyP95: 18, latencyP99: 24, queueDepth: 3, queueSlope: 0.05, errRate: 0.004 },
+    impact: {
+      latencyP50: 10,
+      latencyP95: 18,
+      latencyP99: 24,
+      queueDepth: 3,
+      queueSlope: 0.05,
+      errRate: 0.004,
+    },
   },
   {
     type: "delay",
     label: "Delay",
     delayRangeMs: [3600, 5200],
     durationMs: 2200,
-    impact: { latencyP50: 8, latencyP95: 14, latencyP99: 18, queueSlope: 0.03, corrSpike: 0.08 },
+    impact: {
+      latencyP50: 8,
+      latencyP95: 14,
+      latencyP99: 18,
+      queueSlope: 0.03,
+      corrSpike: 0.08,
+    },
   },
   {
     type: "lock",
     label: "Lock",
     delayRangeMs: [3600, 5200],
     durationMs: 2800,
-    impact: { latencyP95: -10, latencyP99: -12, queueDepth: -2, queueSlope: -0.05, errRate: -0.004 },
+    impact: {
+      latencyP95: -10,
+      latencyP99: -12,
+      queueDepth: -2,
+      queueSlope: -0.05,
+      errRate: -0.004,
+    },
   },
   {
     type: "noise",
     label: "Noise",
     delayRangeMs: [3000, 4800],
     durationMs: 1400,
-    impact: { latencyP95: 18, latencyP99: 26, queueDepth: 4, queueSlope: 0.06, errRate: 0.012, corrSpike: 0.25 },
+    impact: {
+      latencyP95: 18,
+      latencyP99: 26,
+      queueDepth: 4,
+      queueSlope: 0.06,
+      errRate: 0.012,
+      corrSpike: 0.25,
+    },
   },
   {
     type: "damp",
     label: "Damp",
     delayRangeMs: [3400, 5200],
     durationMs: 2600,
-    impact: { latencyP50: -6, latencyP95: -10, latencyP99: -14, queueDepth: -3, queueSlope: -0.06, errRate: -0.006 },
+    impact: {
+      latencyP50: -6,
+      latencyP95: -10,
+      latencyP99: -14,
+      queueDepth: -3,
+      queueSlope: -0.06,
+      errRate: -0.006,
+    },
   },
 ];
 
@@ -745,7 +862,11 @@ const invertImpact = (impact: SampleImpact): SampleImpact => {
   return inverted;
 };
 
-const applyImpact = (target: SampleImpact, impact: SampleImpact, intensity: number) => {
+const applyImpact = (
+  target: SampleImpact,
+  impact: SampleImpact,
+  intensity: number,
+) => {
   for (const key of Object.keys(impact) as (keyof SampleImpact)[]) {
     const value = impact[key];
     if (typeof value === "number") {
@@ -774,7 +895,11 @@ const invertLoadImpact = (impact: LoadImpact): LoadImpact => ({
     typeof impact.payloadScale === "number" ? -impact.payloadScale : undefined,
 });
 
-const applyLoadImpact = (target: LoadImpact, impact: LoadImpact, intensity: number) => {
+const applyLoadImpact = (
+  target: LoadImpact,
+  impact: LoadImpact,
+  intensity: number,
+) => {
   if (typeof impact.bps === "number") {
     target.bps = (target.bps ?? 0) + impact.bps * intensity;
   }
@@ -782,7 +907,8 @@ const applyLoadImpact = (target: LoadImpact, impact: LoadImpact, intensity: numb
     target.jitterMs = (target.jitterMs ?? 0) + impact.jitterMs * intensity;
   }
   if (typeof impact.payloadScale === "number") {
-    target.payloadScale = (target.payloadScale ?? 0) + impact.payloadScale * intensity;
+    target.payloadScale =
+      (target.payloadScale ?? 0) + impact.payloadScale * intensity;
   }
 };
 
@@ -857,11 +983,15 @@ const computeJitter = (samples: number[]) => {
   }
   const mean = samples.reduce((acc, value) => acc + value, 0) / samples.length;
   const variance =
-    samples.reduce((acc, value) => acc + (value - mean) ** 2, 0) / samples.length;
+    samples.reduce((acc, value) => acc + (value - mean) ** 2, 0) /
+    samples.length;
   return Math.sqrt(variance);
 };
 
-const createLoadHarness = (mode: LoadMode, cfg: LoadHarnessConfig): LoadHarness => {
+const createLoadHarness = (
+  mode: LoadMode,
+  cfg: LoadHarnessConfig,
+): LoadHarness => {
   const server = new WSTransportServer(cfg.port);
   const stats = {
     bytes: 0,
@@ -963,10 +1093,15 @@ const createLoadHarness = (mode: LoadMode, cfg: LoadHarnessConfig): LoadHarness 
   };
 };
 
-const impactFromTraffic = (snapshot: TrafficSnapshot, cfg: LoadHarnessConfig): SampleImpact => {
+const impactFromTraffic = (
+  snapshot: TrafficSnapshot,
+  cfg: LoadHarnessConfig,
+): SampleImpact => {
   const range = Math.max(1, cfg.maxBps - cfg.baseBps);
   const loadRatio = clamp01((snapshot.bps - cfg.baseBps) / range);
-  const jitterRatio = clamp01(snapshot.jitterMs / Math.max(1, cfg.baseJitterMs * 6));
+  const jitterRatio = clamp01(
+    snapshot.jitterMs / Math.max(1, cfg.baseJitterMs * 6),
+  );
   const pressure = clamp01(loadRatio + jitterRatio * 0.4);
 
   return {
@@ -989,7 +1124,10 @@ const buildSample = (
   const dt = Math.max(0.1, (now - lastSampleAt) / 1000);
   const latencyJitter = rand(-sampleJitter.latencyMs, sampleJitter.latencyMs);
 
-  const latencyP50 = Math.max(6, baseSample.latencyP50 + latencyJitter + (impact.latencyP50 ?? 0));
+  const latencyP50 = Math.max(
+    6,
+    baseSample.latencyP50 + latencyJitter + (impact.latencyP50 ?? 0),
+  );
   const latencyP95 = Math.max(
     latencyP50 + 4,
     baseSample.latencyP95 + latencyJitter * 1.2 + (impact.latencyP95 ?? 0),
@@ -1000,20 +1138,28 @@ const buildSample = (
   );
 
   const errRate = clamp01(
-    baseSample.errRate + (impact.errRate ?? 0) + rand(-sampleJitter.errRate, sampleJitter.errRate),
+    baseSample.errRate +
+      (impact.errRate ?? 0) +
+      rand(-sampleJitter.errRate, sampleJitter.errRate),
   );
 
   const queueSlope = clampRange(
-    baseSample.queueSlope + (impact.queueSlope ?? 0) + rand(-sampleJitter.queueSlope, sampleJitter.queueSlope),
+    baseSample.queueSlope +
+      (impact.queueSlope ?? 0) +
+      rand(-sampleJitter.queueSlope, sampleJitter.queueSlope),
     -0.2,
     0.25,
   );
 
-  queueDepthRef.current = Math.max(0, queueDepthRef.current + queueSlope * dt * 10 + (impact.queueDepth ?? 0));
+  queueDepthRef.current = Math.max(
+    0,
+    queueDepthRef.current + queueSlope * dt * 10 + (impact.queueDepth ?? 0),
+  );
 
   const corrSpike = Math.max(
     0,
-    (impact.corrSpike ?? 0) + Math.max(0, rand(-sampleJitter.corrSpike, sampleJitter.corrSpike)),
+    (impact.corrSpike ?? 0) +
+      Math.max(0, rand(-sampleJitter.corrSpike, sampleJitter.corrSpike)),
   );
 
   return {
@@ -1028,8 +1174,13 @@ const buildSample = (
   };
 };
 
-const mapDerived = (state: { M: number; V: number; R: number }, sample: FieldSample) => {
-  const driftSignal = clamp01(Math.abs(state.V) * 6 + Math.max(0, sample.queueSlope) * 0.6);
+const mapDerived = (
+  state: { M: number; V: number; R: number },
+  sample: FieldSample,
+) => {
+  const driftSignal = clamp01(
+    Math.abs(state.V) * 6 + Math.max(0, sample.queueSlope) * 0.6,
+  );
   const errSignal = clamp01(sample.errRate * 10);
   const slopeSignal = clamp01(Math.max(0, sample.queueSlope) * 3);
   const tension = clamp01((1 - state.M) * 0.7 + errSignal + slopeSignal);
@@ -1083,20 +1234,29 @@ const profilePresets: Record<SignalTrialProfile, ProfilePreset> = {
 };
 
 const resolveProfile = (value: unknown): SignalTrialProfile => {
-  if (value === "precision" || value === "endurance" || value === "chase" || value === "balanced") {
+  if (
+    value === "precision" ||
+    value === "endurance" ||
+    value === "chase" ||
+    value === "balanced"
+  ) {
     return value;
   }
   return "balanced";
 };
 
-const loadProfileOverrides = (): Partial<Record<SignalTrialProfile, Partial<ProfilePreset>>> => {
+const loadProfileOverrides = (): Partial<
+  Record<SignalTrialProfile, Partial<ProfilePreset>>
+> => {
   const raw = process.env.SIGNAL_TRIAL_PROFILE_OVERRIDES;
   if (!raw) {
     return {};
   }
   try {
     const parsed = JSON.parse(raw) as Record<string, Partial<ProfilePreset>>;
-    const overrides: Partial<Record<SignalTrialProfile, Partial<ProfilePreset>>> = {};
+    const overrides: Partial<
+      Record<SignalTrialProfile, Partial<ProfilePreset>>
+    > = {};
     for (const key of Object.keys(profilePresets) as SignalTrialProfile[]) {
       if (parsed[key]) {
         overrides[key] = parsed[key];
@@ -1158,20 +1318,30 @@ const targetBandAt = (
   profilePreset: ProfilePreset,
 ): TargetBand => {
   const elapsed = Math.max(0, (now - sessionStart) / 1000);
-  const driftScale = targetBandDriftScale[difficulty] * profilePreset.bandDriftScale;
-  const widthScale = targetBandWidthScale[difficulty] * profilePreset.bandWidthScale;
+  const driftScale =
+    targetBandDriftScale[difficulty] * profilePreset.bandDriftScale;
+  const widthScale =
+    targetBandWidthScale[difficulty] * profilePreset.bandWidthScale;
   const phase =
-    elapsed * targetBandSpeed[difficulty] * profilePreset.bandSpeedScale + phaseOffset;
+    elapsed * targetBandSpeed[difficulty] * profilePreset.bandSpeedScale +
+    phaseOffset;
 
   return {
     center: {
-      M: clamp01(targetBandBase.M + Math.sin(phase * 1.1) * targetBandDrift.M * driftScale),
+      M: clamp01(
+        targetBandBase.M +
+          Math.sin(phase * 1.1) * targetBandDrift.M * driftScale,
+      ),
       V: clampRange(
-        targetBandBase.V + Math.sin(phase * 0.9 + 1.1) * targetBandDrift.V * driftScale,
+        targetBandBase.V +
+          Math.sin(phase * 0.9 + 1.1) * targetBandDrift.V * driftScale,
         -0.06,
         0.06,
       ),
-      R: clamp01(targetBandBase.R + Math.cos(phase * 1.3 + 0.4) * targetBandDrift.R * driftScale),
+      R: clamp01(
+        targetBandBase.R +
+          Math.cos(phase * 1.3 + 0.4) * targetBandDrift.R * driftScale,
+      ),
     },
     width: {
       M: targetBandWidth.M * widthScale,
@@ -1253,7 +1423,9 @@ const buildBandHints = (band: TargetBandTelemetry) => {
     }))
     .sort((a, b) => b.score - a.score);
 
-  return ranked.slice(0, 2).map(entry => `${entry.label} ${entry.delta > 0 ? "high" : "low"}`);
+  return ranked
+    .slice(0, 2)
+    .map(entry => `${entry.label} ${entry.delta > 0 ? "high" : "low"}`);
 };
 
 const buildResolutionHints = (
@@ -1276,8 +1448,14 @@ const buildResolutionHints = (
 const isStableCandidate = (state: { M: number; V: number; R: number }) =>
   state.M > 0.78 && Math.abs(state.V) < 0.02 && state.R > 0.7;
 
-const isCollapseCandidate = (state: { M: number; R: number }, sample: FieldSample) =>
-  state.M < 0.18 || state.R < 0.2 || sample.errRate > 0.05 || sample.queueDepth > 40;
+const isCollapseCandidate = (
+  state: { M: number; R: number },
+  sample: FieldSample,
+) =>
+  state.M < 0.18 ||
+  state.R < 0.2 ||
+  sample.errRate > 0.05 ||
+  sample.queueDepth > 40;
 
 const resolveResolutionTier = (
   state: { M: number; V: number; R: number },
@@ -1319,11 +1497,14 @@ export interface SignalTrialBroadcastOptions {
   loadJitterMs?: number;
 }
 
-export function startSignalTrialBroadcast(options: SignalTrialBroadcastOptions = {}) {
+export function startSignalTrialBroadcast(
+  options: SignalTrialBroadcastOptions = {},
+) {
   void compareToAttractorsLoad;
   const missing: string[] = [];
   const port = options.port ?? Number(process.env.SIGNAL_TRIAL_WS_PORT ?? 4183);
-  const tickMs = options.tickMs ?? Number(process.env.SIGNAL_TRIAL_TICK_MS ?? 250);
+  const tickMs =
+    options.tickMs ?? Number(process.env.SIGNAL_TRIAL_TICK_MS ?? 250);
   const tier: SignalTrialTier = options.tier ?? "instrument";
   let difficulty: SignalTrialDifficulty = options.difficulty ?? "standard";
   const controlMode = resolveControlMode(
@@ -1336,8 +1517,12 @@ export function startSignalTrialBroadcast(options: SignalTrialBroadcastOptions =
   const buildAdaptiveHold = (targetDifficulty: SignalTrialDifficulty) => {
     const gateScale = difficultyGateScale[targetDifficulty];
     return {
-      holdMs: Math.round(observerConfig.historyWindow * tickMs * 1.1 * gateScale),
-      quietHoldMs: Math.round(observerConfig.minEventGapSteps * tickMs * gateScale),
+      holdMs: Math.round(
+        observerConfig.historyWindow * tickMs * 1.1 * gateScale,
+      ),
+      quietHoldMs: Math.round(
+        observerConfig.minEventGapSteps * tickMs * gateScale,
+      ),
     };
   };
   let adaptiveHold = buildAdaptiveHold(difficulty);
@@ -1345,22 +1530,46 @@ export function startSignalTrialBroadcast(options: SignalTrialBroadcastOptions =
   let profile: SignalTrialProfile = resolveProfile(
     options.profile ?? process.env.SIGNAL_TRIAL_PROFILE,
   );
-  let profilePreset = applyProfilePreset(profilePresets[profile], profileOverrides[profile]);
-  let gate = applyProfileGates(difficultyGates[difficulty], profilePreset, adaptiveHold);
+  let profilePreset = applyProfilePreset(
+    profilePresets[profile],
+    profileOverrides[profile],
+  );
+  let gate = applyProfileGates(
+    difficultyGates[difficulty],
+    profilePreset,
+    adaptiveHold,
+  );
   const rawLoadMode = options.loadMode ?? process.env.SIGNAL_TRIAL_LOAD_MODE;
   const loadMode: LoadMode =
-    rawLoadMode === "traffic" || rawLoadMode === "blend" || rawLoadMode === "synthetic"
+    rawLoadMode === "traffic" ||
+    rawLoadMode === "blend" ||
+    rawLoadMode === "synthetic"
       ? rawLoadMode
       : "blend";
-  const loadPort = readNumber(options.loadPort ?? process.env.SIGNAL_TRIAL_LOAD_PORT, 4184);
-  const loadClients = readNumber(options.loadClients ?? process.env.SIGNAL_TRIAL_LOAD_CLIENTS, 2);
-  const loadBaseBps = readNumber(options.loadBaseBps ?? process.env.SIGNAL_TRIAL_LOAD_BASE_BPS, 24_000);
-  const loadMaxBps = readNumber(options.loadMaxBps ?? process.env.SIGNAL_TRIAL_LOAD_MAX_BPS, 220_000);
+  const loadPort = readNumber(
+    options.loadPort ?? process.env.SIGNAL_TRIAL_LOAD_PORT,
+    4184,
+  );
+  const loadClients = readNumber(
+    options.loadClients ?? process.env.SIGNAL_TRIAL_LOAD_CLIENTS,
+    2,
+  );
+  const loadBaseBps = readNumber(
+    options.loadBaseBps ?? process.env.SIGNAL_TRIAL_LOAD_BASE_BPS,
+    24_000,
+  );
+  const loadMaxBps = readNumber(
+    options.loadMaxBps ?? process.env.SIGNAL_TRIAL_LOAD_MAX_BPS,
+    220_000,
+  );
   const loadPayloadBytes = readNumber(
     options.loadPayloadBytes ?? process.env.SIGNAL_TRIAL_LOAD_PAYLOAD_BYTES,
     512,
   );
-  const loadJitterMs = readNumber(options.loadJitterMs ?? process.env.SIGNAL_TRIAL_LOAD_JITTER_MS, 8);
+  const loadJitterMs = readNumber(
+    options.loadJitterMs ?? process.env.SIGNAL_TRIAL_LOAD_JITTER_MS,
+    8,
+  );
   const loadConfig: LoadHarnessConfig = {
     port: loadPort,
     clients: Math.max(1, loadClients),
@@ -1369,8 +1578,12 @@ export function startSignalTrialBroadcast(options: SignalTrialBroadcastOptions =
     payloadBytes: Math.max(64, loadPayloadBytes),
     baseJitterMs: Math.max(2, loadJitterMs),
   };
-  const loadHarness = loadMode === "synthetic" ? null : createLoadHarness(loadMode, loadConfig);
-  const nearMissConfidence = readNumber(process.env.SIGNAL_TRIAL_OBSERVER_NEAR_MISS, 0.74);
+  const loadHarness =
+    loadMode === "synthetic" ? null : createLoadHarness(loadMode, loadConfig);
+  const nearMissConfidence = readNumber(
+    process.env.SIGNAL_TRIAL_OBSERVER_NEAR_MISS,
+    0.74,
+  );
 
   // Telemetry/control channel for the UI (JSON messages), kept separate from muxed load traffic.
   const wss = new WebSocketServer({ port });
@@ -1386,16 +1599,14 @@ export function startSignalTrialBroadcast(options: SignalTrialBroadcastOptions =
   let geometrySummary: GeometrySummary | null = null;
   let attractorComparisonSummary: AttractorComparisonTelemetry | null = null;
   let attractorTick = 0;
-  let jResolutionSummary:
-    | {
-        resolved: boolean;
-        reasons: string[];
-        gradNorm: number;
-        lambdaMin: number;
-        deltaJViolationRate: number;
-        basinHoldMet: boolean;
-      }
-    | null = null;
+  let jResolutionSummary: {
+    resolved: boolean;
+    reasons: string[];
+    gradNorm: number;
+    lambdaMin: number;
+    deltaJViolationRate: number;
+    basinHoldMet: boolean;
+  } | null = null;
   let stabilityTick = 0;
   let nboSamples: FieldSample[] = [];
   let lastNboAt = 0;
@@ -1408,12 +1619,14 @@ export function startSignalTrialBroadcast(options: SignalTrialBroadcastOptions =
   let governanceObservations: StructuralPersistenceObservation[] = [];
   let governancePosterior: Record<string, number> | undefined;
   let governanceTrend: GovernanceTrendPoint[] = [];
-  const recentHistory = (
-    limit = 64,
-  ): Array<[number, number, number]> =>
+  const recentHistory = (limit = 64): Array<[number, number, number]> =>
     stabilityBuffer
       .slice(-Math.max(1, limit))
-      .map(({ state: sampleState }) => [sampleState.M, sampleState.V, sampleState.R]);
+      .map(({ state: sampleState }) => [
+        sampleState.M,
+        sampleState.V,
+        sampleState.R,
+      ]);
   let effects: Effect[] = [];
   let loadEffects: LoadEffect[] = [];
   let queueDepth = { current: baseSample.queueDepth };
@@ -1487,7 +1700,10 @@ export function startSignalTrialBroadcast(options: SignalTrialBroadcastOptions =
     if (window.length < minimumSamples) {
       return;
     }
-    const effectiveWindow = applyStabilityConvention(window, stabilityConfig.convention);
+    const effectiveWindow = applyStabilityConvention(
+      window,
+      stabilityConfig.convention,
+    );
     const fit = fitGeometry(effectiveWindow, {
       model: stabilityConfig.model,
       regularization: stabilityConfig.regularization,
@@ -1535,7 +1751,7 @@ export function startSignalTrialBroadcast(options: SignalTrialBroadcastOptions =
           validity: buildGeometryValidity(geometry),
         },
         last.s,
-        effectiveWindow.map((sample) => ({ s: sample.s })),
+        effectiveWindow.map(sample => ({ s: sample.s })),
       );
     } catch {
       jResolutionSummary = null;
@@ -1548,7 +1764,9 @@ export function startSignalTrialBroadcast(options: SignalTrialBroadcastOptions =
     if (!compareToAttractorsFn) return;
     if (stabilityBuffer.length < 24) return;
 
-    const window = stabilityBuffer.slice(-Math.min(256, stabilityBuffer.length));
+    const window = stabilityBuffer.slice(
+      -Math.min(256, stabilityBuffer.length),
+    );
     if (window.length < 24) return;
     const stride = Math.max(1, Math.floor(window.length / 180));
     const sampled: Array<{ t: number; state: CoherenceState }> = [];
@@ -1583,7 +1801,10 @@ export function startSignalTrialBroadcast(options: SignalTrialBroadcastOptions =
             }
           : undefined,
       );
-      const durationMs = Math.max(0, sampled[sampled.length - 1].t - sampled[0].t);
+      const durationMs = Math.max(
+        0,
+        sampled[sampled.length - 1].t - sampled[0].t,
+      );
       attractorComparisonSummary = {
         ...result,
         diagnostics: {
@@ -1654,14 +1875,14 @@ export function startSignalTrialBroadcast(options: SignalTrialBroadcastOptions =
     stabilityTick = 0;
     nboSamples = [];
     lastNboAt = 0;
-      lastNboSummary = undefined;
-      nboWarned = false;
-      lastGovernanceFeatures = null;
-      lastGovernanceAt = null;
-      governanceObservations = [];
-      governancePosterior = undefined;
-      governanceTrend = [];
-      effects = [];
+    lastNboSummary = undefined;
+    nboWarned = false;
+    lastGovernanceFeatures = null;
+    lastGovernanceAt = null;
+    governanceObservations = [];
+    governancePosterior = undefined;
+    governanceTrend = [];
+    effects = [];
     loadEffects = [];
     queueDepth = { current: baseSample.queueDepth };
     lastSampleAt = Date.now();
@@ -1698,8 +1919,14 @@ export function startSignalTrialBroadcast(options: SignalTrialBroadcastOptions =
 
     const now = Date.now();
     const timingScale = actionTimingScale[difficulty];
-    const minDelay = Math.max(600, Math.round(spec.delayRangeMs[0] * timingScale));
-    const maxDelay = Math.max(minDelay + 200, Math.round(spec.delayRangeMs[1] * timingScale));
+    const minDelay = Math.max(
+      600,
+      Math.round(spec.delayRangeMs[0] * timingScale),
+    );
+    const maxDelay = Math.max(
+      minDelay + 200,
+      Math.round(spec.delayRangeMs[1] * timingScale),
+    );
     const delayMs = rand(minDelay, maxDelay);
     const backfire = Math.random() < 0.22;
     const useSynthetic = loadMode !== "traffic";
@@ -1774,9 +2001,16 @@ export function startSignalTrialBroadcast(options: SignalTrialBroadcastOptions =
         }
         if (message.profile) {
           profile = resolveProfile(message.profile);
-          profilePreset = applyProfilePreset(profilePresets[profile], profileOverrides[profile]);
+          profilePreset = applyProfilePreset(
+            profilePresets[profile],
+            profileOverrides[profile],
+          );
         }
-        gate = applyProfileGates(difficultyGates[difficulty], profilePreset, adaptiveHold);
+        gate = applyProfileGates(
+          difficultyGates[difficulty],
+          profilePreset,
+          adaptiveHold,
+        );
         resetSession();
       }
     });
@@ -1809,7 +2043,10 @@ export function startSignalTrialBroadcast(options: SignalTrialBroadcastOptions =
       loadEffects = loadEffects.filter(effect => effect.endAt >= now);
       const loadPlan = collectLoadImpact(loadEffects, now);
       const targetBps = Math.max(0, loadConfig.baseBps + (loadPlan.bps ?? 0));
-      const targetJitterMs = Math.max(0, loadConfig.baseJitterMs + (loadPlan.jitterMs ?? 0));
+      const targetJitterMs = Math.max(
+        0,
+        loadConfig.baseJitterMs + (loadPlan.jitterMs ?? 0),
+      );
       const snapshot = loadHarness.tick({ dtMs, targetBps, targetJitterMs });
       const loadImpact = impactFromTraffic(snapshot, loadConfig);
       if (loadMode === "traffic") {
@@ -1831,13 +2068,7 @@ export function startSignalTrialBroadcast(options: SignalTrialBroadcastOptions =
     updateAttractorComparison();
 
     const observerSample = { ...sample, latency_var: latencyVariance(sample) };
-    detector.detectCommitment(
-      state.M,
-      state.V,
-      observerSample,
-      coupling,
-      now,
-    );
+    detector.detectCommitment(state.M, state.V, observerSample, coupling, now);
 
     const observation = resolutionObserver.tick(
       state.M,
@@ -1910,7 +2141,7 @@ export function startSignalTrialBroadcast(options: SignalTrialBroadcastOptions =
     if (lastBandIn !== null && lastBandIn !== targetBandOk) {
       bandCrossings.push(now);
     }
-    bandCrossings = bandCrossings.filter((stamp) => now - stamp < 6000);
+    bandCrossings = bandCrossings.filter(stamp => now - stamp < 6000);
     const distanceTrend =
       lastBandDistance !== null ? lastBandDistance - bandDistance : 0;
     const trendThreshold = 0.03;
@@ -1995,7 +2226,9 @@ export function startSignalTrialBroadcast(options: SignalTrialBroadcastOptions =
             ...evaluated.diagnostics,
             `server:ncf:${ncf.regime}`,
             ...(jResolutionSummary
-              ? [`server:jspace:${jResolutionSummary.resolved ? "resolved" : "unresolved"}`]
+              ? [
+                  `server:jspace:${jResolutionSummary.resolved ? "resolved" : "unresolved"}`,
+                ]
               : []),
           ];
           return {
@@ -2030,7 +2263,7 @@ export function startSignalTrialBroadcast(options: SignalTrialBroadcastOptions =
             "server:jspace:unresolved",
             ...jResolutionSummary.reasons
               .slice(0, 3)
-              .map((reason) => `server:jspace:${reason}`),
+              .map(reason => `server:jspace:${reason}`),
           ],
         };
       }
@@ -2105,13 +2338,13 @@ export function startSignalTrialBroadcast(options: SignalTrialBroadcastOptions =
       const trace = stateTrajectory;
       const dimensionEstimate =
         estimateCorrelationDimensionFn && trace.length >= 32
-          ? estimateCorrelationDimensionFn(trace, {
+          ? (estimateCorrelationDimensionFn(trace, {
               embeddingDimension: 3,
               minPoints: 32,
               maxPoints: 96,
               theilerWindow: 2,
               radiusCount: 10,
-            })?.dimension ?? null
+            })?.dimension ?? null)
           : null;
       const dimensionBand = classifyDimensionBandFn
         ? classifyDimensionBandFn(dimensionEstimate)
@@ -2125,8 +2358,8 @@ export function startSignalTrialBroadcast(options: SignalTrialBroadcastOptions =
           trace.length < 32
             ? "insufficient_samples"
             : Number.isFinite(dimensionEstimate)
-            ? "ok"
-            : "dimension_unavailable",
+              ? "ok"
+              : "dimension_unavailable",
         method: Number.isFinite(dimensionEstimate)
           ? ("correlation" as const)
           : undefined,
@@ -2139,16 +2372,20 @@ export function startSignalTrialBroadcast(options: SignalTrialBroadcastOptions =
         posteriorConfidenceFn
       ) {
         governancePosterior = updateRegimePosteriorFn(
-          governancePosterior ?? (uniformPosteriorFn ? uniformPosteriorFn() : undefined),
+          governancePosterior ??
+            (uniformPosteriorFn ? uniformPosteriorFn() : undefined),
           {
             health: geometryTelemetry?.health ?? 0,
             lambdaMin: geometryTelemetry?.curvature.lambdaMin ?? 0,
             violationRate: geometryTelemetry?.stability.violationRate ?? 0,
             flowMeanCos:
-              attractorComparisonSummary?.diagnostics.flowAlignment ?? undefined,
+              attractorComparisonSummary?.diagnostics.flowAlignment ??
+              undefined,
             flowAbsCos:
-              attractorComparisonSummary?.diagnostics.flowAlignmentAbs ?? undefined,
-            attractorSimilarity: attractorComparisonSummary?.similarity ?? undefined,
+              attractorComparisonSummary?.diagnostics.flowAlignmentAbs ??
+              undefined,
+            attractorSimilarity:
+              attractorComparisonSummary?.similarity ?? undefined,
             jspaceResolved: jResolutionSummary?.resolved ?? undefined,
             deterministicRegime: semanticRegime.regime,
           },
@@ -2174,7 +2411,8 @@ export function startSignalTrialBroadcast(options: SignalTrialBroadcastOptions =
 
       governanceObservations.push({
         ts: now,
-        flowAlignment: attractorComparisonSummary?.diagnostics.flowAlignment ?? null,
+        flowAlignment:
+          attractorComparisonSummary?.diagnostics.flowAlignment ?? null,
         gamma: barrier.gamma,
         driftRate: driftRateValue,
         posteriorEntropy: bayesEntropy,
@@ -2207,7 +2445,9 @@ export function startSignalTrialBroadcast(options: SignalTrialBroadcastOptions =
         deltaDimension: undefined,
         boundExceeded: barrier.boundExceeded,
         pointOfNoReturn: barrier.pointOfNoReturn,
-        dimensionEstimate: Number.isFinite(dimensionEstimate) ? dimensionEstimate : null,
+        dimensionEstimate: Number.isFinite(dimensionEstimate)
+          ? dimensionEstimate
+          : null,
         dimensionBand:
           dimensionBand === "fixed-point" ||
           dimensionBand === "limit-cycle" ||
@@ -2217,7 +2457,8 @@ export function startSignalTrialBroadcast(options: SignalTrialBroadcastOptions =
           dimensionBand === "undetermined"
             ? dimensionBand
             : undefined,
-        flowAlignment: attractorComparisonSummary?.diagnostics.flowAlignment ?? null,
+        flowAlignment:
+          attractorComparisonSummary?.diagnostics.flowAlignment ?? null,
         lambdaMin: geometryTelemetry?.curvature.lambdaMin,
         attractorSimilarity: attractorComparisonSummary?.similarity,
         bayesConfidence,
@@ -2250,7 +2491,9 @@ export function startSignalTrialBroadcast(options: SignalTrialBroadcastOptions =
                     (item.bayesRegime !== undefined &&
                       prev?.bayesRegime !== undefined &&
                       item.bayesRegime !== prev.bayesRegime) ||
-                    (prev !== undefined && Number(item.gamma) >= 1.35 && Number(prev.gamma) < 1.35));
+                    (prev !== undefined &&
+                      Number(item.gamma) >= 1.35 &&
+                      Number(prev.gamma) < 1.35));
                 return {
                   ts: item.ts,
                   regime: item.deterministicRegime ?? item.bayesRegime,
@@ -2284,7 +2527,9 @@ export function startSignalTrialBroadcast(options: SignalTrialBroadcastOptions =
         coherenceDensity,
         structuralPersistence: persistence?.score,
         metastability: persistence?.metastability,
-        dimensionEstimate: Number.isFinite(dimensionEstimate) ? dimensionEstimate : null,
+        dimensionEstimate: Number.isFinite(dimensionEstimate)
+          ? dimensionEstimate
+          : null,
         dimensionBand:
           dimensionBand === "fixed-point" ||
           dimensionBand === "limit-cycle" ||
@@ -2414,7 +2659,11 @@ export function startSignalTrialBroadcast(options: SignalTrialBroadcastOptions =
 
     broadcast(telemetry);
 
-    if (resolution === "pending" && !sessionTimedOut && now - sessionStart >= sessionTimeoutMs) {
+    if (
+      resolution === "pending" &&
+      !sessionTimedOut &&
+      now - sessionStart >= sessionTimeoutMs
+    ) {
       sessionTimedOut = true;
       broadcast({
         type: "session",
@@ -2434,7 +2683,9 @@ export function startSignalTrialBroadcast(options: SignalTrialBroadcastOptions =
       const actionsOk = actionsCount >= gate.minActions;
       const holdOk = holdMs >= gate.holdMs;
       const quietOk =
-        lastActionAt === 0 ? gate.minActions === 0 : quietMs >= gate.quietHoldMs;
+        lastActionAt === 0
+          ? gate.minActions === 0
+          : quietMs >= gate.quietHoldMs;
 
       if (stableCandidate) {
         const missing: string[] = [];
@@ -2446,7 +2697,11 @@ export function startSignalTrialBroadcast(options: SignalTrialBroadcastOptions =
         if (missing.length > 0) {
           const key = missing.join("|");
           if (key !== lastStableAttemptKey) {
-            const hints = buildResolutionHints("stable", missing, targetBandTelemetry);
+            const hints = buildResolutionHints(
+              "stable",
+              missing,
+              targetBandTelemetry,
+            );
             const observerConfident =
               observation && observation.confidence >= nearMissConfidence;
             if (observerConfident) {
@@ -2457,7 +2712,15 @@ export function startSignalTrialBroadcast(options: SignalTrialBroadcastOptions =
               );
             }
             const reason = observerConfident ? "observer_confident" : undefined;
-            broadcastResolutionAttempt("stable", missing, now, state, hints, phase, reason);
+            broadcastResolutionAttempt(
+              "stable",
+              missing,
+              now,
+              state,
+              hints,
+              phase,
+              reason,
+            );
             lastStableAttemptKey = key;
           }
         } else {
@@ -2467,100 +2730,105 @@ export function startSignalTrialBroadcast(options: SignalTrialBroadcastOptions =
         lastStableAttemptKey = null;
       }
 
-const requireGeometry = uptimeMs >= Math.round(gate.minUptimeMs * 0.5);
+      const requireGeometry = uptimeMs >= Math.round(gate.minUptimeMs * 0.5);
 
-const geometryOk =
-  !requireGeometry ||
-  (geometrySummary &&
-    geometrySummary.geometry.stability.stable &&
-    geometrySummary.geometry.stability.violationRate < 0.02 &&
-    geometrySummary.geometry.curvature.lambdaMin >= -1e-9);
+      const geometryOk =
+        !requireGeometry ||
+        (geometrySummary &&
+          geometrySummary.geometry.stability.stable &&
+          geometrySummary.geometry.stability.violationRate < 0.02 &&
+          geometrySummary.geometry.curvature.lambdaMin >= -1e-9);
 
-  if (!geometryOk) missing.push("geometry");
+      if (!geometryOk) missing.push("geometry");
 
-  if (
-    stableQualified &&
-    geometryOk &&
-    uptimeOk &&
-    actionsOk &&
-    holdOk &&
-    quietOk
-  ) {
-  resolution = "stable";
-  const resolutionTier = resolveResolutionTier(state, holdMs, gate.holdMs);
-  broadcast({
-    type: "resolution",
-    sessionId,
-    at: now,
-    result: "stable",
-    tier: resolutionTier,
-    reason: "gated stability achieved",
-    state,
-  });
-} else {
-  const collapseCandidate = isCollapseCandidate(state, sample);
-  if (collapseCandidate) {
-    if (!collapseSince) {
-      collapseSince = now;
-    }
-  } else {
-    collapseSince = null;
-  }
-
-  const collapseHoldOk =
-    gate.collapseHoldMs === 0 ||
-    (collapseSince !== null && now - collapseSince >= gate.collapseHoldMs);
-  const collapseUptimeOk = uptimeMs >= gate.minUptimeMs;
-  const collapseActionsOk =
-    gate.minActions === 0 || actionsCount >= gate.minActions;
-
-  if (collapseCandidate) {
-    const missing: string[] = [];
-    if (!collapseHoldOk) missing.push("collapseHold");
-    if (!collapseUptimeOk) missing.push("minUptime");
-    if (!collapseActionsOk) missing.push("minActions");
-    if (missing.length > 0) {
-      const key = missing.join("|");
-      if (key !== lastCollapseAttemptKey) {
-        const hints = buildResolutionHints(
-          "collapsed",
-          missing,
-          targetBandTelemetry,
-        );
-        broadcastResolutionAttempt(
-          "collapsed",
-          missing,
-          now,
+      if (
+        stableQualified &&
+        geometryOk &&
+        uptimeOk &&
+        actionsOk &&
+        holdOk &&
+        quietOk
+      ) {
+        resolution = "stable";
+        const resolutionTier = resolveResolutionTier(
           state,
-          hints,
-          phase,
+          holdMs,
+          gate.holdMs,
         );
-        lastCollapseAttemptKey = key;
-      }
-    } else {
-      lastCollapseAttemptKey = null;
-    }
-  } else {
-    lastCollapseAttemptKey = null;
-  }
+        broadcast({
+          type: "resolution",
+          sessionId,
+          at: now,
+          result: "stable",
+          tier: resolutionTier,
+          reason: "gated stability achieved",
+          state,
+        });
+      } else {
+        const collapseCandidate = isCollapseCandidate(state, sample);
+        if (collapseCandidate) {
+          if (!collapseSince) {
+            collapseSince = now;
+          }
+        } else {
+          collapseSince = null;
+        }
 
-  if (
-    collapseCandidate &&
-    collapseHoldOk &&
-    collapseUptimeOk &&
-    collapseActionsOk
-  ) {
-    resolution = "collapsed";
-    broadcast({
-      type: "resolution",
-      sessionId,
-      at: now,
-      result: "collapsed",
-      reason: "collapse threshold reached",
-      state,
-    });
-  }
-}
+        const collapseHoldOk =
+          gate.collapseHoldMs === 0 ||
+          (collapseSince !== null &&
+            now - collapseSince >= gate.collapseHoldMs);
+        const collapseUptimeOk = uptimeMs >= gate.minUptimeMs;
+        const collapseActionsOk =
+          gate.minActions === 0 || actionsCount >= gate.minActions;
+
+        if (collapseCandidate) {
+          const missing: string[] = [];
+          if (!collapseHoldOk) missing.push("collapseHold");
+          if (!collapseUptimeOk) missing.push("minUptime");
+          if (!collapseActionsOk) missing.push("minActions");
+          if (missing.length > 0) {
+            const key = missing.join("|");
+            if (key !== lastCollapseAttemptKey) {
+              const hints = buildResolutionHints(
+                "collapsed",
+                missing,
+                targetBandTelemetry,
+              );
+              broadcastResolutionAttempt(
+                "collapsed",
+                missing,
+                now,
+                state,
+                hints,
+                phase,
+              );
+              lastCollapseAttemptKey = key;
+            }
+          } else {
+            lastCollapseAttemptKey = null;
+          }
+        } else {
+          lastCollapseAttemptKey = null;
+        }
+
+        if (
+          collapseCandidate &&
+          collapseHoldOk &&
+          collapseUptimeOk &&
+          collapseActionsOk
+        ) {
+          resolution = "collapsed";
+          broadcast({
+            type: "resolution",
+            sessionId,
+            at: now,
+            result: "collapsed",
+            reason: "collapse threshold reached",
+            state,
+          });
+        }
+      }
     }
   }, tickMs);
 

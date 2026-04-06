@@ -7,7 +7,7 @@
   - Transport coherence history sampling is opt-in via `QWORMHOLE_TRANSPORT_COHERENCE=1` to avoid contaminating throughput measurements.
   - Added `bench:core:structure` as a separate structural validation lane writing to `data/core_diagnostics.structure.*`.
   - Added `bench:compare:report` as a separate competitor/baseline comparison lane.
-  - QWormhole publication from `main` is intentionally paused until `@sigilnet/coherence` is ready for external release.
+  - QWormhole publication from `main` is intentionally paused until `@gsknnft/coherence` is ready for external release.
   - Recovered raw-core throughput after isolating structural metrics off the hot path:
     - `ts-server+ts`: ~114k msg/s
     - `ts-server+native-lws`: ~115k msg/s

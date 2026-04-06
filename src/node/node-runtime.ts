@@ -7,7 +7,7 @@
 // - Exposes gossip hooks for SigilNet/NCF layers
 
 import { EventEmitter } from "events";
-import { Peer, PeerId } from "./peer-types";
+import { Peer, PeerId } from "../types";
 import { PeerTable } from "./peer-table";
 import { GossipModule } from "./gossip";
 import { DiscoveryModule } from "./discovery";
@@ -92,7 +92,6 @@ export class QWormholeNode extends EventEmitter {
   }
 
   private async initServer(): Promise<void> {
-    
     this.server = new QWormholeServer({
       host: this.cfg.host,
       port: this.cfg.port,
@@ -167,6 +166,11 @@ export class QWormholeNode extends EventEmitter {
       port,
       framing: "length-prefixed",
       entropyMetrics: { negIndex: this.cfg.negentropicIndex ?? 0.5 },
+      handshakeTags: {
+        service: "sigilnet-node",
+        origin: this.cfg.id,
+        ...(this.cfg.sigil ? { sigil: this.cfg.sigil } : {}),
+      },
     });
     try {
       await client.connect();
@@ -183,6 +187,7 @@ export class QWormholeNode extends EventEmitter {
     this.peers.upsert(peer);
     void this.registry.registerPeer({
       origin: peer.id,
+      address: `${peer.host}:${peer.port}`,
       sigil: peer.sigil ?? "",
       ed25519PublicKey: peer.ed25519PublicKey ?? "",
       x25519PublicKey: peer.x25519PublicKey ?? "",

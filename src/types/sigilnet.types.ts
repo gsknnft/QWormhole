@@ -151,14 +151,31 @@ interface FieldProof {
   source?: string; // optional node id or origin
   proofRef?: string; // optional on-chain tx id
 }
+export type PeerId = string;
+
+interface Peer extends PeerBase {
+  id: PeerId;
+  address: string; // "host:port"
+  host: string;
+  port: number;
+  negentropicIndex?: number; // from NCF later
+  lastSeen: number;
+  meta?: Record<string, any>;
+}
+
 
 /**
  * Peer metadata and keys
  */
+
 interface Peer extends PeerBase {
-  id: string;
+  id: PeerId;
+  address: string; // "host:port"
   host: string;
   port: number;
+  negentropicIndex?: number; // from NCF later
+  lastSeen: number;
+  meta?: Record<string, any>;
 }
 
 interface PeerBase {
@@ -187,12 +204,13 @@ interface PeerBase {
   latency: number;
 
   /** Metadata */
-  metadata?: Record<string, JsonValue>;
+  metadata?: Record<string, any>;
 
   seal?: PeerSeal;
 
   metrics?: SigilMetrics;
 }
+
 
 /**
  * Coherence metrics for validation

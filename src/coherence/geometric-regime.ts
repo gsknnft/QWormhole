@@ -1,22 +1,22 @@
+import type {
+  GeometricRegime,
+  GeometricRegimeInputs,
+  GeometricRegimeLabel,
+  GeometricSignature,
+  MorphologyGeometricRegime,
+  MorphologyRegimeLabel,
+} from "@gsknnft/coherence";
 import {
   buildGeometricRegimeInputs as buildCanonicalGeometricRegimeInputs,
   classifyGeometricRegime as classifyCanonicalGeometricRegime,
   classifyGeometricRegimeEngine as classifyCanonicalGeometricRegimeEngine,
   evaluateGeometricRegime as evaluateCanonicalGeometricRegime,
-} from "@sigilnet/coherence";
-import type {
-  GeometricSignature,
-  GeometricRegime,
-  GeometricRegimeInputs,
-  GeometricRegimeLabel,
-  MorphologyGeometricRegime,
-  MorphologyRegimeLabel,
-} from "@sigilnet/coherence";
+} from "@gsknnft/coherence";
 
 /**
  * Compatibility bridge.
  *
- * Canonical geometric regime logic now lives in @sigilnet/coherence.
+ * Canonical geometric regime logic now lives in @gsknnft/coherence.
  * QWormhole keeps this module so older imports resolve while transport
  * orchestration continues to live locally.
  */

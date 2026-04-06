@@ -2,7 +2,7 @@
 
 import dgram from "dgram";
 import { EventEmitter } from "events";
-import { Peer} from "./peer-types";
+import { Peer} from "../types";
 import type { QWormholeNode } from "./node-runtime";
 import mdns from 'multicast-dns';
 

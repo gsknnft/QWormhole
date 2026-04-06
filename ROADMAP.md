@@ -24,6 +24,12 @@ This document outlines near-term enhancements for @gsknnft/qwormhole. Items are 
   - writev() batching support via cork/uncork
   - Configurable batch sizes per entropy policy
   - Automatic flush timers for partial batches
+- **Coherence math correctness fixes (April 2026)**:
+  - `jSpaceResolution.ts`: cubic term in `evaluateFromState` was computed but dropped (scoped variable never added to return); gradient dropped quadratic+linear when T was present — both fixed
+  - `coherence/invariants.ts`: removed `console.log` from `signalAlignment` hot path
+  - `transport-governance-policy.ts`: wired `driftRate` into guarded (≥ 0.55) and recovery (≥ 0.9) mode thresholds — was declared in the interface but never read
+  - `fitj.ts`: added pivot zero-guard in `solveGaussian`; uncommented and added to coherence index
+- **Coherence math reference doc**: Added `docs/COHERENCE_MATH.md` — canonical reference for J-functional equations, fitting pipeline, certification criteria, health scalar, resolution checks, transport coherence scalars, and governance policy derivation
 
 _Note: the full 0.3.0 feature set is merged into the dev branch, but the published package version is now 0.2.0. Official release is ready for publish._
 

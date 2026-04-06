@@ -35,6 +35,7 @@ export function deriveTransportGovernancePolicy(
   signals: TransportGovernanceSignals,
 ): TransportGovernancePolicy {
   const gamma = finiteOr(signals.gamma, 1);
+  const driftRate = finiteOr(signals.driftRate, 0);
   const entropy = clamp01(finiteOr(signals.entropy, 0));
   const confidence = clamp01(finiteOr(signals.confidence, 1));
   const coherenceDensity = clamp01(finiteOr(signals.coherenceDensity, 0.5));
@@ -64,9 +65,23 @@ export function deriveTransportGovernancePolicy(
     };
   }
 
+  // Extreme drift triggers recovery regardless of other signals
+  if (driftRate >= 0.9) {
+    reasons.push("drift_rate_critical");
+    return {
+      mode: "recovery",
+      batchScale: 0.5,
+      flushScale: 0.6,
+      bufferScale: 0.5,
+      paceScale: 1.25,
+      reason: reasons,
+    };
+  }
+
   if (
     boundExceeded ||
     gamma >= 2.25 ||
+    driftRate >= 0.55 ||
     entropy >= 0.72 ||
     confidence <= 0.35 ||
     structuralPersistence <= 0.4 ||
@@ -78,14 +93,17 @@ export function deriveTransportGovernancePolicy(
   ) {
     if (boundExceeded) reasons.push("bound_exceeded");
     if (gamma >= 2.25) reasons.push("gamma_high");
+    if (driftRate >= 0.55) reasons.push("drift_rate_high");
     if (entropy >= 0.72) reasons.push("entropy_high");
     if (confidence <= 0.35) reasons.push("confidence_low");
     if (structuralPersistence <= 0.4) reasons.push("persistence_low");
     if (metastability >= 0.68) reasons.push("metastability_high");
     if (transportSPI <= 0.45) reasons.push("transport_persistence_low");
-    if (transportMetastability >= 0.68) reasons.push("transport_metastability_high");
+    if (transportMetastability >= 0.68)
+      reasons.push("transport_metastability_high");
     if (signals.regime === "unstable") reasons.push("regime_unstable");
-    if (signals.regime === "model-mismatch") reasons.push("regime_model_mismatch");
+    if (signals.regime === "model-mismatch")
+      reasons.push("regime_model_mismatch");
     return {
       mode: "guarded",
       batchScale: 0.75,

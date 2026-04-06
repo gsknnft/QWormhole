@@ -11,6 +11,7 @@ import {
   isNativeServerAvailable,
   NativeQWormholeServer,
 } from "./native-server";
+import { shouldForceTsSecureServer } from "../security/env";
 // import { QWormholeError } from "./errors";
 import type {
   QWormholeClientOptions,
@@ -118,6 +119,7 @@ export interface CreateServerResult<TMessage> {
 export function createQWormholeServer<TMessage = Buffer>(
   options: CreateServerOptions<TMessage>,
 ): CreateServerResult<TMessage> {
+  const forceTsForSecurity = shouldForceTsSecureServer(options);
   const detectNative = options.detectNative !== false;
   const backend = detectNative
     ? getNativeServerBackend(options.preferredNativeBackend)
@@ -126,7 +128,13 @@ export function createQWormholeServer<TMessage = Buffer>(
     ? isNativeServerAvailable(options.preferredNativeBackend)
     : false;
 
-  if (!options.forceTs && options.preferNative && nativeReady && backend) {
+  if (
+    !forceTsForSecurity &&
+    !options.forceTs &&
+    options.preferNative &&
+    nativeReady &&
+    backend
+  ) {
     const resolvedBackend = backend;
     return {
       server: new NativeQWormholeServer<TMessage>(options, resolvedBackend),

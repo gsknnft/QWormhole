@@ -156,7 +156,7 @@ export type QWormholeSocketFactory = (
   opts: NativeSocketOptions,
 ) => QWormholeSocketLike;
 
-export interface NativeTcpClient {
+export interface INativeTcpClient {
   connect(opts: NativeSocketOptions | { host: string; port: number }): void;
   send(data: string | Buffer): void; // queues and flushes via LWS writable callbacks
   sendMany?(data: Array<string | Buffer>): number | void;
@@ -429,3 +429,26 @@ export interface FlowTrustSnapshot {
 export interface SendOptions {
   priority?: number; // lower number = higher priority
 }
+// QWormhole/src/node/peer-types.ts
+
+/**
+ * Peer metadata and keys
+ */
+
+// export interface CoreSeal {
+//   sigil: string;
+//   origin: string;
+//   pubkey: string;
+//   issuedAt: number;
+//   manifestHash: string;
+//   signature: string;
+// }
+
+// export interface SovereignSeal extends CoreSeal {
+//   expiresAt: number;
+//   sealed: boolean;
+// }
+
+// export interface PeerSeal extends SovereignSeal {
+//   peerSeal: SovereignSeal;
+// }

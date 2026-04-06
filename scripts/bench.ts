@@ -21,6 +21,7 @@ import {
   quicAvailable,
 } from "../src/index";
 import path from "node:path";
+import { NativeSocketAdapter } from "../src/core/native-socket";
 import { shutdownFlowControllerMonitors } from "../src/core/flow-controller";
 import { isNativeServerAvailable } from "../src/core/native-server";
 import { BatchFramer } from "../src/core/batch-framer";
@@ -58,6 +59,35 @@ import {
 dotenv.config({
   quiet: process.env.QWORMHOLE_BENCH_CHILD === "1",
 });
+
+const BENCH_SECURE_TRANSPORT =
+  process.env.QWORMHOLE_BENCH_SECURE_TRANSPORT === "1";
+const BENCH_ALLOW_NATIVE_SECURE =
+  process.env.QWORMHOLE_BENCH_ALLOW_NATIVE_SECURE !== "0";
+
+if (!BENCH_SECURE_TRANSPORT) {
+  delete process.env.QWORMHOLE_TLS_ENABLED;
+  delete process.env.QWORMHOLE_TLS_CERT;
+  delete process.env.QWORMHOLE_TLS_CERT_PATH;
+  delete process.env.QWORMHOLE_TLS_KEY;
+  delete process.env.QWORMHOLE_TLS_KEY_PATH;
+  delete process.env.QWORMHOLE_TLS_CA;
+  delete process.env.QWORMHOLE_TLS_CA_PATH;
+  delete process.env.QWORMHOLE_TLS_CA_PATHS;
+  delete process.env.QWORMHOLE_TLS_REJECT_UNAUTHORIZED;
+  delete process.env.QWORMHOLE_TLS_REQUEST_CERT;
+  delete process.env.QWORMHOLE_TLS_SERVERNAME;
+  delete process.env.QWORMHOLE_TLS_ALPN;
+  delete process.env.QWORMHOLE_TLS_CLIENT_CERT;
+  delete process.env.QWORMHOLE_TLS_CLIENT_CERT_PATH;
+  delete process.env.QWORMHOLE_TLS_CLIENT_KEY;
+  delete process.env.QWORMHOLE_TLS_CLIENT_KEY_PATH;
+  delete process.env.QWORMHOLE_TLS_CLIENT_PASSPHRASE;
+  delete process.env.QWORMHOLE_REQUIRE_HANDSHAKE;
+  delete process.env.QWORMHOLE_HANDSHAKE_REQUIRED_TAGS;
+  delete process.env.QWORMHOLE_HANDSHAKE_ALLOWED_VERSIONS;
+  delete process.env.QWORMHOLE_PROTOCOL_VERSION;
+}
 interface TrustSnapshot {
   flowDiagnostics?: FlowControllerDiagnostics;
   batchStats?: BatchFramerStats;
@@ -113,6 +143,13 @@ const BENCH_TRANSPORT_COHERENCE =
 const BENCH_TRACE = process.env.QWORMHOLE_BENCH_TRACE === "1";
 const BENCH_FORK = process.env.QWORMHOLE_BENCH_FORK === "1";
 const BENCH_CHILD = process.env.QWORMHOLE_BENCH_CHILD === "1";
+const DEFAULT_BENCH_HANDSHAKE_TAGS = {
+  service: process.env.QWORMHOLE_BENCH_SERVICE_TAG ?? "bench",
+};
+const SECURE_TRANSPORT_ACTIVE =
+  process.env.QWORMHOLE_TLS_ENABLED === "1" ||
+  process.env.QWORMHOLE_REQUIRE_HANDSHAKE === "1" ||
+  Boolean(process.env.QWORMHOLE_PROTOCOL_VERSION);
 const BENCH_REPEAT = Math.max(
   1,
   Number(process.env.QWORMHOLE_BENCH_REPEAT ?? "1") || 1,
@@ -1048,6 +1085,49 @@ const pickMedianResult = (results: ScenarioResult[]): ScenarioResult => {
   return sorted[Math.floor(sorted.length / 2)] ?? results[0];
 };
 
+const summarizeNumberSet = (
+  values: number[],
+): { median?: number; avg?: number; best?: number; worst?: number } | undefined => {
+  if (values.length === 0) return undefined;
+  const sorted = [...values].sort((a, b) => a - b);
+  const sum = values.reduce((acc, value) => acc + value, 0);
+  return {
+    median: sorted[Math.floor(sorted.length / 2)],
+    avg: sum / values.length,
+    best: Math.max(...values),
+    worst: Math.min(...values),
+  };
+};
+
+const attachRepeatStats = (
+  representative: ScenarioResult,
+  runs: ScenarioResult[],
+): ScenarioResult => {
+  const successful = runs.filter(run => !run.skipped);
+  const msgsPerSec = summarizeNumberSet(
+    successful
+      .map(run => run.msgsPerSec)
+      .filter((value): value is number => Number.isFinite(value)),
+  );
+  const durationMs = summarizeNumberSet(
+    successful
+      .map(run => run.durationMs)
+      .filter((value): value is number => Number.isFinite(value) && value > 0),
+  );
+
+  return {
+    ...representative,
+    repeatStats: {
+      runs: runs.length,
+      successfulRuns: successful.length,
+      skippedRuns: runs.length - successful.length,
+      representative: successful.length > 0 ? "median" : "first",
+      msgsPerSec,
+      durationMs,
+    },
+  };
+};
+
 const sendNetPayloadAt = async (
   index: number,
   socket: net.Socket,
@@ -1469,6 +1549,54 @@ const attachBenchClientErrorHandler = (client: QWormholeClient<Buffer>) => {
   });
 };
 
+const resolveBenchHandshakeTags = (): Record<string, string | number> => ({
+  ...DEFAULT_BENCH_HANDSHAKE_TAGS,
+  ...(parseHandshakeTags(process.env.QWORMHOLE_HANDSHAKE_TAGS) ?? {}),
+});
+
+const nativeServerSkipReason = () =>
+  SECURE_TRANSPORT_ACTIVE
+    ? "Native server path disabled under secure transport policy"
+    : "Native backend unavailable";
+
+const nativeClientSkipReason = (backend: NativeBackend) =>
+  SECURE_TRANSPORT_ACTIVE
+    ? `Native client backend ${backend} disabled under secure transport policy`
+    : `Native client backend ${backend} unavailable`;
+
+const createManagedNativeBenchClient = (
+  backend: NativeBackend,
+  port: number,
+  framing: FramingMode,
+  onTrustSnapshot?: (snapshot: TrustSnapshot) => void,
+): QWormholeClient<Buffer> =>
+  new QWormholeClient<Buffer>({
+    host: "127.0.0.1",
+    port,
+    framing,
+    handshakeTags: resolveBenchHandshakeTags(),
+    serializer: benchSerializer,
+    deserializer: (data: Buffer): Buffer => data,
+    entropyMetrics: {
+      negIndex: BENCH_NEG_INDEX,
+      coherence: deriveBenchCoherence(),
+      entropyVelocity: "low",
+    },
+    onTrustSnapshot,
+    peerIsNative: true,
+    socketHighWaterMark: BENCH_SOCKET_HWM,
+    disableFlowController: BENCH_DISABLE_FLOW,
+    flowFastPath: BENCH_FLOW_FAST,
+    coherence: BENCH_COHERENCE
+      ? { enabled: true, mode: BENCH_COHERENCE_MODE }
+      : undefined,
+    socketFactory: socketOpts =>
+      new NativeSocketAdapter({
+        ...socketOpts,
+        preferredBackend: backend,
+      }),
+  });
+
 const snapshotClientDiagnostics = async (
   client: QWormholeClient<Buffer>,
 ): Promise<{
@@ -1657,7 +1785,7 @@ async function childMain(): Promise<void> {
         await serverResult.server.close();
         process.send?.({
           type: "skip",
-          reason: "Native backend unavailable",
+          reason: nativeServerSkipReason(),
           serverMode: serverResult.mode as Mode,
         } satisfies BenchChildSkip);
         return;
@@ -1955,6 +2083,7 @@ async function runScenarioForked({
           host: "127.0.0.1",
           port: (ready as BenchChildReady).port,
           framing: scenarioFraming,
+          handshakeTags: resolveBenchHandshakeTags(),
           serializer: benchSerializer,
           deserializer: (data: Buffer): Buffer => data,
           entropyMetrics: {
@@ -1990,14 +2119,7 @@ async function runScenarioForked({
     }
   } else {
     const backend = clientMode === "native-lws" ? "lws" : "libsocket";
-    nativeClients = Array.from(
-      { length: BENCH_CLIENTS },
-      () => new NativeTcpClient(backend),
-    );
-    if (nativeClients.some(client => client.backend !== backend)) {
-      for (const client of nativeClients) {
-        client.close();
-      }
+    if (SECURE_TRANSPORT_ACTIVE && !BENCH_ALLOW_NATIVE_SECURE) {
       child.send?.({ type: "stop" });
       child.kill();
       return {
@@ -2011,11 +2133,57 @@ async function runScenarioForked({
         bytesReceived: 0,
         framing: scenarioFraming,
         skipped: true,
-        reason: `Native client backend ${backend} unavailable`,
+        reason: nativeClientSkipReason(backend),
       };
     }
-    for (const client of nativeClients) {
-      client.connect("127.0.0.1", ready.port);
+    if (SECURE_TRANSPORT_ACTIVE) {
+      tsClients = await Promise.all(
+        Array.from({ length: BENCH_CLIENTS }, async (_unused, index) => {
+          const client = createManagedNativeBenchClient(
+            backend,
+            ready.port,
+            scenarioFraming,
+            snapshot => {
+              if (index !== 0) return;
+              clientFlowDiagnostics = snapshot.flowDiagnostics;
+              clientBatchStats = snapshot.batchStats;
+              clientQueueStats = snapshot.queueStats;
+              clientSnapshotResolve?.();
+            },
+          );
+          attachBenchClientErrorHandler(client);
+          await client.connect();
+          return client;
+        }),
+      );
+    } else {
+      nativeClients = Array.from(
+        { length: BENCH_CLIENTS },
+        () => new NativeTcpClient(backend),
+      );
+      if (nativeClients.some(client => client.backend !== backend)) {
+        for (const client of nativeClients) {
+          client.close();
+        }
+        child.send?.({ type: "stop" });
+        child.kill();
+        return {
+          id,
+          serverMode,
+          clientMode,
+          concurrency,
+          preferredServerBackend: serverBackend,
+          durationMs: 0,
+          messagesReceived: 0,
+          bytesReceived: 0,
+          framing: scenarioFraming,
+          skipped: true,
+          reason: nativeClientSkipReason(backend),
+        };
+      }
+      for (const client of nativeClients) {
+        client.connect("127.0.0.1", ready.port);
+      }
     }
   }
 
@@ -2183,7 +2351,7 @@ async function runScenarioRepeated(scenario: Scenario): Promise<ScenarioResult> 
       break;
     }
   }
-  return pickMedianResult(runs);
+  return attachRepeatStats(pickMedianResult(runs), runs);
 }
 
 async function runScenario({
@@ -2295,7 +2463,7 @@ async function runScenario({
       bytesReceived: 0,
       framing: scenarioFraming,
       skipped: true,
-      reason: "Native backend unavailable",
+      reason: nativeServerSkipReason(),
     };
   }
   const serverMode = serverResult.mode;
@@ -2320,6 +2488,7 @@ async function runScenario({
           host: "127.0.0.1",
           port,
           framing: scenarioFraming,
+          handshakeTags: resolveBenchHandshakeTags(),
           serializer: benchSerializer,
           deserializer: (data: Buffer) => data,
           entropyMetrics: {
@@ -2359,14 +2528,7 @@ async function runScenario({
     }
   } else {
     const backend = clientMode === "native-lws" ? "lws" : "libsocket";
-    nativeClients = Array.from(
-      { length: BENCH_CLIENTS },
-      () => new NativeTcpClient(backend),
-    );
-    if (nativeClients.some(client => client.backend !== backend)) {
-      for (const client of nativeClients) {
-        client.close();
-      }
+    if (SECURE_TRANSPORT_ACTIVE && !BENCH_ALLOW_NATIVE_SECURE) {
       await serverInstance.close();
       return {
         id,
@@ -2379,11 +2541,58 @@ async function runScenario({
         bytesReceived: 0,
         framing: BENCH_FRAMING,
         skipped: true,
-        reason: `Native client backend ${backend} unavailable`,
+        reason: nativeClientSkipReason(backend),
       };
     }
-    for (const client of nativeClients) {
-      client.connect("127.0.0.1", port);
+    if (SECURE_TRANSPORT_ACTIVE) {
+      tsClients = await Promise.all(
+        Array.from({ length: BENCH_CLIENTS }, async (_unused, index) => {
+          const client = createManagedNativeBenchClient(
+            backend,
+            port,
+            scenarioFraming,
+            snapshot => {
+              if (index !== 0) return;
+              clientFlowDiagnostics = snapshot.flowDiagnostics;
+              clientBatchStats = snapshot.batchStats;
+              clientSnapshotResolve?.();
+            },
+          );
+          attachBenchClientErrorHandler(client);
+          await client.connect();
+          return client;
+        }),
+      );
+      const internal = tsClients[0] as any;
+      flowController = internal.flowController ?? flowController;
+      batchFramer = internal.outboundFramer ?? batchFramer;
+    } else {
+      nativeClients = Array.from(
+        { length: BENCH_CLIENTS },
+        () => new NativeTcpClient(backend),
+      );
+      if (nativeClients.some(client => client.backend !== backend)) {
+        for (const client of nativeClients) {
+          client.close();
+        }
+        await serverInstance.close();
+        return {
+          id,
+          serverMode: serverMode as Mode,
+          clientMode,
+          concurrency,
+          preferredServerBackend: serverBackend,
+          durationMs: 0,
+          messagesReceived: 0,
+          bytesReceived: 0,
+          framing: BENCH_FRAMING,
+          skipped: true,
+          reason: nativeClientSkipReason(backend),
+        };
+      }
+      for (const client of nativeClients) {
+        client.connect("127.0.0.1", port);
+      }
     }
   }
 
@@ -3143,6 +3352,7 @@ const buildJsonlEntry = (
     durationMs: res.durationMs,
     msgsPerSec: res.msgsPerSec,
     mbPerSec: res.mbPerSec,
+    repeatStats: res.repeatStats,
     skipped: res.skipped ?? false,
     reason: res.reason,
     flags: {
@@ -3222,10 +3432,16 @@ const writeBenchReport = async (results: ScenarioResult[]): Promise<void> => {
     res.serverMode,
     res.clientMode,
     res.concurrency?.clients ?? BENCH_CLIENTS,
+    res.repeatStats?.runs ?? 1,
+    res.repeatStats?.representative ?? "-",
     res.durationMs ? formatNumber(res.durationMs) : "-",
+    formatNumber(res.repeatStats?.durationMs?.avg),
     res.messagesReceived,
     res.bytesReceived,
     formatNumber(res.msgsPerSec, 0),
+    formatNumber(res.repeatStats?.msgsPerSec?.avg, 0),
+    formatNumber(res.repeatStats?.msgsPerSec?.best, 0),
+    formatNumber(res.repeatStats?.msgsPerSec?.worst, 0),
     formatNumber(res.mbPerSec),
     res.framing,
     res.skipped ? "skipped" : "ok",
@@ -3336,10 +3552,16 @@ const writeBenchReport = async (results: ScenarioResult[]): Promise<void> => {
         "Server",
         "Client",
         "Clients",
+        "Runs",
+        "Rep",
         "Duration (ms)",
+        "Dur Avg",
         "Messages",
         "Bytes",
         "Msg/s",
+        "Msg/s Avg",
+        "Best",
+        "Worst",
         "MB/s",
         "Framing",
         "Status",
@@ -3493,9 +3715,27 @@ async function mainBench() {
     "Clients",
     10,
   )}${pad(
+    "Runs",
+    6,
+  )}${pad(
+    "Rep",
+    8,
+  )}${pad(
     "Duration (ms)",
     16,
+  )}${pad(
+    "Dur Avg",
+    12,
   )}${pad("Messages", 12)}${pad("Bytes", 12)}${pad("Msg/s", 12)}${pad(
+    "Msg/s Avg",
+    12,
+  )}${pad(
+    "Best",
+    12,
+  )}${pad(
+    "Worst",
+    12,
+  )}${pad(
     "MB/s",
     12,
   )}${pad("Framing", 12)}${pad("Status", 10)}`;
@@ -3507,8 +3747,17 @@ async function mainBench() {
         `${res.concurrency?.clients ?? BENCH_CLIENTS}`,
         10,
       )}${pad(
+        `${res.repeatStats?.runs ?? 1}`,
+        6,
+      )}${pad(
+        res.repeatStats?.representative ?? "-",
+        8,
+      )}${pad(
         res.durationMs ? res.durationMs.toFixed(2) : "-",
         16,
+      )}${pad(
+        formatNumber(res.repeatStats?.durationMs?.avg),
+        12,
       )}${pad(`${res.messagesReceived ?? "-"}`, 12)}${pad(
         `${res.bytesReceived ?? "-"}`,
         12,
@@ -3516,6 +3765,15 @@ async function mainBench() {
         res.msgsPerSec && Number.isFinite(res.msgsPerSec)
           ? res.msgsPerSec.toFixed(0)
           : "-",
+        12,
+      )}${pad(
+        formatNumber(res.repeatStats?.msgsPerSec?.avg, 0),
+        12,
+      )}${pad(
+        formatNumber(res.repeatStats?.msgsPerSec?.best, 0),
+        12,
+      )}${pad(
+        formatNumber(res.repeatStats?.msgsPerSec?.worst, 0),
         12,
       )}${pad(
         res.mbPerSec && Number.isFinite(res.mbPerSec)

@@ -5,11 +5,12 @@ import { QWormholeClient } from "../client";
 import { QWormholeServer } from "../server";
 import {
   QWormholeClientOptions,
-  NativeTcpClient,
+  INativeTcpClient,
   Payload,
   QWormholeServerOptions,
 } from "../types";
 import { NativeQWormholeServer } from "./native-server";
+import { resolveBindHost } from "../security/env";
 
 export interface QWormholeRuntimeOptions<TMessage = unknown>
   extends RuntimeOptions {
@@ -26,7 +27,7 @@ export class QWormholeRuntime<TMessage = Buffer> extends BaseRuntime<
   TMessage,
   QWormholeRuntimeOptions<TMessage>
 > {
-  private client?: QWormholeClient<TMessage> | NativeTcpClient;
+  private client?: QWormholeClient<TMessage> | INativeTcpClient;
   private server?: QWormholeServer<TMessage> | NativeQWormholeServer<TMessage>;
 
   constructor(options: QWormholeRuntimeOptions<TMessage> = {}) {
@@ -38,7 +39,7 @@ export class QWormholeRuntime<TMessage = Buffer> extends BaseRuntime<
       QWormholeClientOptions<TMessage>,
       "serializer" | "deserializer"
     >,
-  ): QWormholeClient<TMessage> | NativeTcpClient {
+  ): QWormholeClient<TMessage> | INativeTcpClient {
     const merged: QWormholeClientOptions<TMessage> = {
       serializer: (this.opts.serializer ??
         defaultSerializer) as QWormholeClientOptions<TMessage>["serializer"],
@@ -88,7 +89,7 @@ export class QWormholeRuntime<TMessage = Buffer> extends BaseRuntime<
     return server;
   }
 
-  async listen(port = 0, host = "0.0.0.0"): Promise<void> {
+  async listen(port = 0, host = resolveBindHost("0.0.0.0")): Promise<void> {
     await this.init();
     await this.closeServer();
     const server = this.createServer({ host, port });

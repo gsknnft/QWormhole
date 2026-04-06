@@ -7,10 +7,10 @@ import type {
   WorkerShardSerializableServerOptions,
 } from "./worker-sharded-server";
 
-const require = createRequire(
+const require_ = createRequire(
   path.join(process.cwd(), "src", "sharding", "process-shard-entry.ts"),
 );
-const { QWormholeServer } = require("../server") as typeof import("../server");
+const { QWormholeServer } = require_("../server") as typeof import("../server");
 
 type WorkerShardBootstrap = {
   options: WorkerShardSerializableServerOptions;

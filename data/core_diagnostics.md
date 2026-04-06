@@ -1,6 +1,6 @@
 # QWormhole Bench Report
 
-Generated: 2026-02-28T14:18:13.500Z
+Generated: 2026-03-01T14:47:30.289Z
 
 ## Environment
 
@@ -13,23 +13,23 @@ Generated: 2026-02-28T14:18:13.500Z
 
 ## Summary
 
-| Scenario | Server | Client | Clients | Duration (ms) | Messages | Bytes | Msg/s | MB/s | Framing | Status |
-| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| ts-server+ts | ts | ts | 1 | 687.20 | 100000 | 102400000 | 145518 | 142.11 | length-prefixed | ok |
-| ts-server+native-lws | ts | native-lws | 1 | 848.27 | 100010 | 102410240 | 117898 | 115.13 | length-prefixed | ok |
-| ts-server+native-libsocket | ts | native-libsocket | 1 | - | 0 | 0 | - | - | length-prefixed | skipped |
-| native-server(lws)+ts | native-lws | ts | 1 | 820.12 | 100000 | 102400000 | 121933 | 119.08 | length-prefixed | ok |
-| native-server(lws)+native-lws | native-lws | native-lws | 1 | 786.01 | 100000 | 102400000 | 127225 | 124.24 | length-prefixed | ok |
-| native-server(lws)+native-libsocket | native-lws | native-libsocket | 1 | - | 0 | 0 | - | - | length-prefixed | skipped |
+| Scenario | Server | Client | Clients | Runs | Rep | Duration (ms) | Dur Avg | Messages | Bytes | Msg/s | Msg/s Avg | Best | Worst | MB/s | Framing | Status |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| ts-server+ts | ts | ts | 1 | 7 | median | 945.44 | 962.52 | 100000 | 102400000 | 105771 | 104107 | 110060 | 96285 | 103.29 | length-prefixed | ok |
+| ts-server+native-lws | ts | native-lws | 1 | 7 | median | 973.34 | 986.26 | 100006 | 102406144 | 102746 | 101493 | 105123 | 96219 | 100.34 | length-prefixed | ok |
+| ts-server+native-libsocket | ts | native-libsocket | 1 | 1 | first | - | - | 0 | 0 | - | - | - | - | - | length-prefixed | skipped |
+| native-server(lws)+ts | native-lws | ts | 1 | 7 | median | 1217.42 | 1202.77 | 100000 | 102400000 | 82141 | 83321 | 89464 | 77762 | 80.22 | length-prefixed | ok |
+| native-server(lws)+native-lws | native-lws | native-lws | 1 | 7 | median | 928.38 | 931.53 | 100000 | 102400000 | 107714 | 107495 | 113283 | 101775 | 105.19 | length-prefixed | ok |
+| native-server(lws)+native-libsocket | native-lws | native-libsocket | 1 | 1 | first | - | - | 0 | 0 | - | - | - | - | - | length-prefixed | skipped |
 
 ## Diagnostics
 
 | Scenario | GC | GC ms | ELU% | BP | Drain | MaxQueued | Flushes | AvgBuf | AvgKB | MaxBuf | MaxKB | WV | SM | Gov | tSNI | tSPI | tMeta |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| ts-server+ts | 27 | 43.67 | 84.74 | 0 | 0 | 0 | 19679 | 5.73 | 5.75 | 30 | 30.12 | 19677 | 0 | - | off | off | off |
-| ts-server+native-lws | 14 | 14.03 | 74.91 | 0 | 0 | 0 | 0 | 0.00 | 0.00 | 0 | 0.00 | 0 | 1642 | - | off | off | off |
-| native-server(lws)+ts | 9 | 12.96 | 85.72 | 0 | 0 | 0 | 12583 | 12.41 | 12.45 | 48 | 48.19 | 12581 | 0 | - | off | off | off |
-| native-server(lws)+native-lws | 6 | 6.62 | 80.98 | 0 | 0 | 0 | 0 | 0.00 | 0.00 | 0 | 0.00 | 0 | 1642 | - | off | off | off |
+| ts-server+ts | 6 | 19.34 | 89.21 | 0 | 0 | 0 | 19682 | 5.73 | 5.75 | 30 | 30.12 | 19680 | 0 | - | off | off | off |
+| ts-server+native-lws | 8 | 13.08 | 76.14 | 0 | 0 | 0 | 0 | 0.00 | 0.00 | 0 | 0.00 | 0 | 1642 | - | off | off | off |
+| native-server(lws)+ts | 5 | 16.23 | 90.05 | 0 | 0 | 0 | 13071 | 12.38 | 12.43 | 48 | 48.19 | 13069 | 0 | - | off | off | off |
+| native-server(lws)+native-lws | 4 | 5.11 | 80.10 | 0 | 0 | 0 | 0 | 0.00 | 0.00 | 0 | 0.00 | 0 | 1642 | - | off | off | off |
 
 ## Transport Coherence
 
@@ -53,12 +53,12 @@ _Transport coherence metrics are intentionally off in the raw lane._
       "messagesPerClient": 100000,
       "totalMessages": 100000
     },
-    "durationMs": 687.1985999999999,
+    "durationMs": 945.4371000000001,
     "messagesReceived": 100000,
     "bytesReceived": 102400000,
     "framing": "length-prefixed",
-    "msgsPerSec": 145518.3406951062,
-    "mbPerSec": 142.10775458506464,
+    "msgsPerSec": 105771.1824509531,
+    "mbPerSec": 103.29217036225889,
     "benchConfig": {
       "macroBatchTargetBytes": 131072,
       "flowFastPath": false,
@@ -81,26 +81,26 @@ _Transport coherence metrics are intentionally off in the raw lane._
     },
     "diagnostics": {
       "gc": {
-        "count": 27,
-        "durationMs": 43.67210000008345,
+        "count": 6,
+        "durationMs": 19.343800008296967,
         "byKind": {
-          "incremental": 8,
-          "major": 8,
-          "minor": 11
+          "incremental": 0,
+          "major": 0,
+          "minor": 6
         }
       },
       "eventLoop": {
-        "utilization": 0.8473934029315668,
-        "activeMs": 0.7587618999961019,
-        "idleMs": 0.136645
+        "utilization": 0.8920702294094538,
+        "activeMs": 1.0079729000054836,
+        "idleMs": 0.12195260000000002
       },
       "eventLoopDelay": {
-        "minMs": 19.2512,
-        "maxMs": 179.699711,
-        "meanMs": 26.146878060606063,
-        "stdMs": 27.35374272544712,
-        "p50Ms": 20.054015,
-        "p99Ms": 179.699711
+        "minMs": 19.382272,
+        "maxMs": 202.506239,
+        "meanMs": 25.080366545454545,
+        "stdMs": 27.12271879081426,
+        "p50Ms": 20.152319,
+        "p99Ms": 202.506239
       },
       "backpressure": {
         "events": 0,
@@ -108,16 +108,16 @@ _Transport coherence metrics are intentionally off in the raw lane._
         "maxQueuedBytes": 0
       },
       "batching": {
-        "flushes": 19679,
-        "avgBuffersPerFlush": 5.732354286295036,
-        "avgBytesPerFlush": 5892.860206311297,
+        "flushes": 19682,
+        "avgBuffersPerFlush": 5.726755411035464,
+        "avgBytesPerFlush": 5887.104562544457,
         "maxBuffers": 30,
         "maxBytes": 30840
       },
       "transportCalls": {
-        "batchWritevCalls": 19677,
-        "batchWritevBuffers": 112805,
-        "batchWritevBytes": 115963540,
+        "batchWritevCalls": 19680,
+        "batchWritevBuffers": 112712,
+        "batchWritevBytes": 115867936,
         "writeBufferCalls": 2,
         "writeBufferBytes": 2056,
         "nativeSendManyCalls": 0,
@@ -128,10 +128,10 @@ _Transport coherence metrics are intentionally off in the raw lane._
       "clientFlow": {
         "currentSliceSize": 6,
         "effectiveRateBytesPerSec": 16777216,
-        "totalFlushes": 6555,
-        "totalBytes": 30374316,
-        "backpressureEvents": 9842,
-        "availableTokens": 184549.376,
+        "totalFlushes": 6553,
+        "totalBytes": 30359924,
+        "backpressureEvents": 9843,
+        "availableTokens": 67108.864,
         "policy": {
           "coherence": 0.9,
           "entropyVelocity": 0.1,
@@ -140,43 +140,43 @@ _Transport coherence metrics are intentionally off in the raw lane._
         },
         "sliceHistory": [
           {
-            "timestamp": 1772288290359,
+            "timestamp": 1772376419747,
             "size": 4
           },
           {
-            "timestamp": 1772288290359,
+            "timestamp": 1772376419748,
             "size": 6
           },
           {
-            "timestamp": 1772288290359,
+            "timestamp": 1772376419748,
             "size": 5
           },
           {
-            "timestamp": 1772288290359,
+            "timestamp": 1772376419748,
             "size": 7
           },
           {
-            "timestamp": 1772288290359,
+            "timestamp": 1772376419748,
             "size": 5
           },
           {
-            "timestamp": 1772288290359,
+            "timestamp": 1772376419748,
             "size": 4
           },
           {
-            "timestamp": 1772288290359,
+            "timestamp": 1772376419748,
             "size": 6
           },
           {
-            "timestamp": 1772288290359,
+            "timestamp": 1772376419748,
             "size": 5
           },
           {
-            "timestamp": 1772288290359,
+            "timestamp": 1772376419748,
             "size": 7
           },
           {
-            "timestamp": 1772288290359,
+            "timestamp": 1772376419748,
             "size": 6
           }
         ],
@@ -185,10 +185,10 @@ _Transport coherence metrics are intentionally off in the raw lane._
         "adaptive": {
           "mode": "guarded",
           "sliceSize": 6,
-          "flushIntervalAvgMs": 0.014927039941398854,
-          "bytesPerFlushAvg": 5611.884368121796,
-          "eluIdleRatioAvg": 0.8567866334174336,
-          "gcPauseMaxMs": 0.003642407984241428
+          "flushIntervalAvgMs": 0.032405052164406235,
+          "bytesPerFlushAvg": 5353.027494497436,
+          "eluIdleRatioAvg": 0.8810524889688602,
+          "gcPauseMaxMs": 1.0243748963010251e-15
         },
         "negentropic": {
           "histogram": {
@@ -205,8 +205,8 @@ _Transport coherence metrics are intentionally off in the raw lane._
       },
       "clientBatch": {
         "totalFrames": 105000,
-        "totalFlushes": 19679,
-        "totalBytes": 115965596,
+        "totalFlushes": 19682,
+        "totalBytes": 115869992,
         "pendingFrames": 0,
         "pendingBytes": 0,
         "maxPendingFrames": 31,
@@ -221,10 +221,10 @@ _Transport coherence metrics are intentionally off in the raw lane._
         "overflowAllocatedBytes": 0,
         "copyAllocations": 0,
         "copyAllocatedBytes": 0,
-        "lastFlushTimestamp": 1772288290359,
-        "backpressureEvents": 9842,
+        "lastFlushTimestamp": 1772376419748,
+        "backpressureEvents": 9843,
         "lastBackpressureBytes": 16448,
-        "lastBackpressureTimestamp": 1772288290359
+        "lastBackpressureTimestamp": 1772376419748
       },
       "clientQueue": {
         "length": 0,
@@ -239,29 +239,47 @@ _Transport coherence metrics are intentionally off in the raw lane._
       "sendBlocks": {
         "blockSize": 1000,
         "samples": 100,
-        "avgMs": 1.4519529999999998,
-        "minMs": 1.0010999999999513,
-        "maxMs": 4.820300000000088
+        "avgMs": 1.8273090000000003,
+        "minMs": 1.195299999999861,
+        "maxMs": 6.935199999999895
       },
       "heap": {
         "start": {
-          "rss": 188465152,
-          "heapTotal": 122982400,
-          "heapUsed": 67515880,
-          "external": 16907305,
-          "arrayBuffers": 8112271
+          "rss": 306761728,
+          "heapTotal": 237645824,
+          "heapUsed": 107667000,
+          "external": 13495073,
+          "arrayBuffers": 4699999
         },
         "end": {
-          "rss": 217133056,
-          "heapTotal": 194678784,
-          "heapUsed": 62423128,
-          "external": 17886742,
-          "arrayBuffers": 9097003
+          "rss": 355995648,
+          "heapTotal": 257265664,
+          "heapUsed": 156315720,
+          "external": 43254845,
+          "arrayBuffers": 34459771
         },
-        "peakHeapUsed": 92121512,
-        "peakRss": 206958592
+        "peakHeapUsed": 169638992,
+        "peakRss": 310128640
       },
       "coherenceTrace": []
+    },
+    "repeatStats": {
+      "runs": 7,
+      "successfulRuns": 7,
+      "skippedRuns": 0,
+      "representative": "median",
+      "msgsPerSec": {
+        "median": 105771.1824509531,
+        "avg": 104107.23802609727,
+        "best": 110060.47382794952,
+        "worst": 96284.83982679897
+      },
+      "durationMs": {
+        "median": 945.4371000000001,
+        "avg": 962.5159571428572,
+        "best": 1038.5851000000002,
+        "worst": 908.5913999999998
+      }
     }
   },
   {
@@ -273,34 +291,34 @@ _Transport coherence metrics are intentionally off in the raw lane._
       "messagesPerClient": 100000,
       "totalMessages": 100000
     },
-    "durationMs": 848.2746999999999,
-    "messagesReceived": 100010,
-    "bytesReceived": 102410240,
+    "durationMs": 973.3364999999994,
+    "messagesReceived": 100006,
+    "bytesReceived": 102406144,
     "framing": "length-prefixed",
-    "msgsPerSec": 117898.12899052631,
-    "mbPerSec": 115.13489159231085,
+    "msgsPerSec": 102745.55613603318,
+    "mbPerSec": 100.3374571640949,
     "diagnostics": {
       "gc": {
-        "count": 14,
-        "durationMs": 14.034999996423721,
+        "count": 8,
+        "durationMs": 13.078500092029572,
         "byKind": {
-          "incremental": 7,
-          "major": 7,
+          "incremental": 4,
+          "major": 4,
           "minor": 0
         }
       },
       "eventLoop": {
-        "utilization": 0.7490776630651002,
-        "activeMs": 0.7716863999979972,
-        "idleMs": 0.25849570000000005
+        "utilization": 0.7614110976454225,
+        "activeMs": 0.8596561999913683,
+        "idleMs": 0.2693741
       },
       "eventLoopDelay": {
-        "minMs": 19.00544,
-        "maxMs": 54.722559,
-        "meanMs": 22.054167272727273,
-        "stdMs": 6.343572250916915,
+        "minMs": 19.480576,
+        "maxMs": 72.286207,
+        "meanMs": 21.70044416,
+        "stdMs": 7.801718711989721,
         "p50Ms": 20.004863,
-        "p99Ms": 54.722559
+        "p99Ms": 72.286207
       },
       "backpressure": {
         "events": 0,
@@ -328,29 +346,47 @@ _Transport coherence metrics are intentionally off in the raw lane._
       "sendBlocks": {
         "blockSize": 1000,
         "samples": 100,
-        "avgMs": 0.534393,
-        "minMs": 0.38209999999980937,
-        "maxMs": 1.6217000000001462
+        "avgMs": 0.5918810000000121,
+        "minMs": 0.44760000000133005,
+        "maxMs": 1.3703999999997905
       },
       "heap": {
         "start": {
-          "rss": 242307072,
-          "heapTotal": 194842624,
-          "heapUsed": 68283448,
-          "external": 28961270,
-          "arrayBuffers": 20171531
+          "rss": 373723136,
+          "heapTotal": 192626688,
+          "heapUsed": 60049984,
+          "external": 27605457,
+          "arrayBuffers": 18817123
         },
         "end": {
-          "rss": 237367296,
-          "heapTotal": 191565824,
-          "heapUsed": 57016200,
-          "external": 18294353,
-          "arrayBuffers": 9506019
+          "rss": 380612608,
+          "heapTotal": 192364544,
+          "heapUsed": 57371424,
+          "external": 18869329,
+          "arrayBuffers": 10080995
         },
-        "peakHeapUsed": 70419760,
-        "peakRss": 360460288
+        "peakHeapUsed": 62017168,
+        "peakRss": 489443328
       },
       "coherenceTrace": []
+    },
+    "repeatStats": {
+      "runs": 7,
+      "successfulRuns": 7,
+      "skippedRuns": 0,
+      "representative": "median",
+      "msgsPerSec": {
+        "median": 102745.55613603318,
+        "avg": 101492.71579020737,
+        "best": 105123.01651958644,
+        "worst": 96219.48622837372
+      },
+      "durationMs": {
+        "median": 973.3364999999994,
+        "avg": 986.2587571428573,
+        "best": 1039.3217000000004,
+        "worst": 951.2950000000001
+      }
     }
   },
   {
@@ -367,7 +403,13 @@ _Transport coherence metrics are intentionally off in the raw lane._
     "bytesReceived": 0,
     "framing": "length-prefixed",
     "skipped": true,
-    "reason": "Native client backend unavailable"
+    "reason": "Native client backend unavailable",
+    "repeatStats": {
+      "runs": 1,
+      "successfulRuns": 0,
+      "skippedRuns": 1,
+      "representative": "first"
+    }
   },
   {
     "id": "native-server(lws)+ts",
@@ -379,12 +421,12 @@ _Transport coherence metrics are intentionally off in the raw lane._
       "totalMessages": 100000
     },
     "preferredServerBackend": "lws",
-    "durationMs": 820.1217999999999,
+    "durationMs": 1217.4157000000014,
     "messagesReceived": 100000,
     "bytesReceived": 102400000,
     "framing": "length-prefixed",
-    "msgsPerSec": 121933.10798469205,
-    "mbPerSec": 119.07530076630083,
+    "msgsPerSec": 82141.21109165906,
+    "mbPerSec": 80.2160264566983,
     "benchConfig": {
       "macroBatchTargetBytes": 131072,
       "flowFastPath": false,
@@ -407,26 +449,26 @@ _Transport coherence metrics are intentionally off in the raw lane._
     },
     "diagnostics": {
       "gc": {
-        "count": 9,
-        "durationMs": 12.95830000191927,
+        "count": 5,
+        "durationMs": 16.227200031280518,
         "byKind": {
-          "incremental": 2,
-          "major": 2,
+          "incremental": 0,
+          "major": 0,
           "minor": 5
         }
       },
       "eventLoop": {
-        "utilization": 0.8572273257026862,
-        "activeMs": 0.8721892000002504,
-        "idleMs": 0.14526460000000002
+        "utilization": 0.9004852499860067,
+        "activeMs": 1.2827995000074406,
+        "idleMs": 0.1417651999999998
       },
       "eventLoopDelay": {
-        "minMs": 19.41504,
-        "maxMs": 202.113023,
-        "meanMs": 26.703872,
-        "stdMs": 29.90128480629803,
-        "p50Ms": 20.119551,
-        "p99Ms": 202.113023
+        "minMs": 19.218432,
+        "maxMs": 183.238655,
+        "meanMs": 23.526868610169494,
+        "stdMs": 21.08398345708043,
+        "p50Ms": 20.168703,
+        "p99Ms": 32.178175
       },
       "backpressure": {
         "events": 0,
@@ -434,16 +476,16 @@ _Transport coherence metrics are intentionally off in the raw lane._
         "maxQueuedBytes": 0
       },
       "batching": {
-        "flushes": 12583,
-        "avgBuffersPerFlush": 12.40610347293968,
-        "avgBytesPerFlush": 12753.474370181992,
+        "flushes": 13071,
+        "avgBuffersPerFlush": 12.380613572029684,
+        "avgBytesPerFlush": 12727.270752046516,
         "maxBuffers": 48,
         "maxBytes": 49344
       },
       "transportCalls": {
-        "batchWritevCalls": 12581,
-        "batchWritevBuffers": 156104,
-        "batchWritevBytes": 160474912,
+        "batchWritevCalls": 13069,
+        "batchWritevBuffers": 161825,
+        "batchWritevBytes": 166356100,
         "writeBufferCalls": 2,
         "writeBufferBytes": 2056,
         "nativeSendManyCalls": 0,
@@ -452,12 +494,12 @@ _Transport coherence metrics are intentionally off in the raw lane._
         "nativeSendCalls": 0
       },
       "clientFlow": {
-        "currentSliceSize": 15,
+        "currentSliceSize": 10,
         "effectiveRateBytesPerSec": 16777216,
-        "totalFlushes": 5812,
-        "totalBytes": 67201388,
-        "backpressureEvents": 11622,
-        "availableTokens": 184549.376,
+        "totalFlushes": 6490,
+        "totalBytes": 73534896,
+        "backpressureEvents": 12978,
+        "availableTokens": 117440.512,
         "policy": {
           "coherence": 0.9,
           "entropyVelocity": 0.1,
@@ -466,55 +508,55 @@ _Transport coherence metrics are intentionally off in the raw lane._
         },
         "sliceHistory": [
           {
-            "timestamp": 1772288292395,
-            "size": 15
-          },
-          {
-            "timestamp": 1772288292395,
+            "timestamp": 1772376438198,
             "size": 12
           },
           {
-            "timestamp": 1772288292395,
+            "timestamp": 1772376438198,
             "size": 11
           },
           {
-            "timestamp": 1772288292395,
+            "timestamp": 1772376438198,
             "size": 15
           },
           {
-            "timestamp": 1772288292395,
-            "size": 12
-          },
-          {
-            "timestamp": 1772288292395,
-            "size": 11
-          },
-          {
-            "timestamp": 1772288292395,
-            "size": 15
-          },
-          {
-            "timestamp": 1772288292395,
+            "timestamp": 1772376438198,
             "size": 10
           },
           {
-            "timestamp": 1772288292395,
+            "timestamp": 1772376438198,
             "size": 11
           },
           {
-            "timestamp": 1772288292395,
+            "timestamp": 1772376438198,
             "size": 15
+          },
+          {
+            "timestamp": 1772376438198,
+            "size": 12
+          },
+          {
+            "timestamp": 1772376438198,
+            "size": 11
+          },
+          {
+            "timestamp": 1772376438198,
+            "size": 15
+          },
+          {
+            "timestamp": 1772376438198,
+            "size": 10
           }
         ],
         "flushHistory": [],
         "backpressureHistory": [],
         "adaptive": {
           "mode": "aggressive",
-          "sliceSize": 15,
-          "flushIntervalAvgMs": 0.0564802758755953,
-          "bytesPerFlushAvg": 9481.777359497384,
-          "eluIdleRatioAvg": 0.8757923836232819,
-          "gcPauseMaxMs": 0.000002719791580719577
+          "sliceSize": 10,
+          "flushIntervalAvgMs": 0.02986747480088075,
+          "bytesPerFlushAvg": 8791.953662664057,
+          "eluIdleRatioAvg": 0.9722287290248226,
+          "gcPauseMaxMs": 7.293509848875284e-51
         },
         "negentropic": {
           "histogram": {
@@ -531,8 +573,8 @@ _Transport coherence metrics are intentionally off in the raw lane._
       },
       "clientBatch": {
         "totalFrames": 105000,
-        "totalFlushes": 12583,
-        "totalBytes": 160476968,
+        "totalFlushes": 13071,
+        "totalBytes": 166358156,
         "pendingFrames": 0,
         "pendingBytes": 0,
         "maxPendingFrames": 48,
@@ -547,10 +589,10 @@ _Transport coherence metrics are intentionally off in the raw lane._
         "overflowAllocatedBytes": 0,
         "copyAllocations": 0,
         "copyAllocatedBytes": 0,
-        "lastFlushTimestamp": 1772288292395,
-        "backpressureEvents": 11622,
-        "lastBackpressureBytes": 5140,
-        "lastBackpressureTimestamp": 1772288292395
+        "lastFlushTimestamp": 1772376438198,
+        "backpressureEvents": 12978,
+        "lastBackpressureBytes": 10280,
+        "lastBackpressureTimestamp": 1772376438198
       },
       "clientQueue": {
         "length": 0,
@@ -565,29 +607,47 @@ _Transport coherence metrics are intentionally off in the raw lane._
       "sendBlocks": {
         "blockSize": 1000,
         "samples": 100,
-        "avgMs": 1.3210429999999997,
-        "minMs": 1.0284999999998945,
-        "maxMs": 4.304900000000089
+        "avgMs": 1.4333320000000094,
+        "minMs": 1.1934999999975844,
+        "maxMs": 4.270000000000437
       },
       "heap": {
         "start": {
-          "rss": 227528704,
-          "heapTotal": 192352256,
-          "heapUsed": 55631128,
-          "external": 13088105,
-          "arrayBuffers": 4299771
+          "rss": 482017280,
+          "heapTotal": 207568896,
+          "heapUsed": 85345384,
+          "external": 49725801,
+          "arrayBuffers": 40937467
         },
         "end": {
-          "rss": 293748736,
-          "heapTotal": 197201920,
-          "heapUsed": 64418472,
-          "external": 13597033,
-          "arrayBuffers": 4808699
+          "rss": 454549504,
+          "heapTotal": 208896000,
+          "heapUsed": 122511864,
+          "external": 33804649,
+          "arrayBuffers": 25016315
         },
-        "peakHeapUsed": 122515920,
-        "peakRss": 262885376
+        "peakHeapUsed": 122964120,
+        "peakRss": 483000320
       },
       "coherenceTrace": []
+    },
+    "repeatStats": {
+      "runs": 7,
+      "successfulRuns": 7,
+      "skippedRuns": 0,
+      "representative": "median",
+      "msgsPerSec": {
+        "median": 82141.21109165906,
+        "avg": 83321.47646733493,
+        "best": 89463.65910123193,
+        "worst": 77762.06379273116
+      },
+      "durationMs": {
+        "median": 1217.4157000000014,
+        "avg": 1202.765928571429,
+        "best": 1285.9740999999995,
+        "worst": 1117.7723000000005
+      }
     }
   },
   {
@@ -600,34 +660,34 @@ _Transport coherence metrics are intentionally off in the raw lane._
       "totalMessages": 100000
     },
     "preferredServerBackend": "lws",
-    "durationMs": 786.0107000000003,
+    "durationMs": 928.3840000000018,
     "messagesReceived": 100000,
     "bytesReceived": 102400000,
     "framing": "length-prefixed",
-    "msgsPerSec": 127224.73116460115,
-    "mbPerSec": 124.24290152793081,
+    "msgsPerSec": 107714.04935888576,
+    "mbPerSec": 105.18950132703688,
     "diagnostics": {
       "gc": {
-        "count": 6,
-        "durationMs": 6.623000010848045,
+        "count": 4,
+        "durationMs": 5.109400004148483,
         "byKind": {
-          "incremental": 3,
-          "major": 3,
+          "incremental": 2,
+          "major": 2,
           "minor": 0
         }
       },
       "eventLoop": {
-        "utilization": 0.8098379378106233,
-        "activeMs": 0.769940299993992,
-        "idleMs": 0.1807935
+        "utilization": 0.8009655241998614,
+        "activeMs": 0.8670950000098238,
+        "idleMs": 0.21546720000000005
       },
       "eventLoopDelay": {
-        "minMs": 19.103744,
-        "maxMs": 66.191359,
-        "meanMs": 22.01430165853659,
-        "stdMs": 7.578534973829252,
-        "p50Ms": 20.021247,
-        "p99Ms": 66.191359
+        "minMs": 19.08736,
+        "maxMs": 55.574527,
+        "meanMs": 22.209906382978723,
+        "stdMs": 6.624604778284839,
+        "p50Ms": 20.152319,
+        "p99Ms": 55.574527
       },
       "backpressure": {
         "events": 0,
@@ -655,29 +715,47 @@ _Transport coherence metrics are intentionally off in the raw lane._
       "sendBlocks": {
         "blockSize": 1000,
         "samples": 100,
-        "avgMs": 0.49266399999999977,
-        "minMs": 0.40830000000005384,
-        "maxMs": 0.7012999999997191
+        "avgMs": 0.41268000000000027,
+        "minMs": 0.2793000000019674,
+        "maxMs": 0.9326000000000931
       },
       "heap": {
         "start": {
-          "rss": 309612544,
-          "heapTotal": 197726208,
-          "heapUsed": 67568256,
-          "external": 18717033,
-          "arrayBuffers": 9928699
+          "rss": 483127296,
+          "heapTotal": 193150976,
+          "heapUsed": 56963472,
+          "external": 13970793,
+          "arrayBuffers": 5182459
         },
         "end": {
-          "rss": 371789824,
-          "heapTotal": 191827968,
-          "heapUsed": 66930800,
-          "external": 38580585,
-          "arrayBuffers": 29792251
+          "rss": 515010560,
+          "heapTotal": 193413120,
+          "heapUsed": 72262104,
+          "external": 49261929,
+          "arrayBuffers": 40473595
         },
-        "peakHeapUsed": 69581808,
-        "peakRss": 424755200
+        "peakHeapUsed": 58929800,
+        "peakRss": 513101824
       },
       "coherenceTrace": []
+    },
+    "repeatStats": {
+      "runs": 7,
+      "successfulRuns": 7,
+      "skippedRuns": 0,
+      "representative": "median",
+      "msgsPerSec": {
+        "median": 107714.04935888576,
+        "avg": 107494.74881073483,
+        "best": 113282.89073342594,
+        "worst": 101775.0380842189
+      },
+      "durationMs": {
+        "median": 928.3840000000018,
+        "avg": 931.531385714287,
+        "best": 982.5592000000033,
+        "worst": 882.7988000000041
+      }
     }
   },
   {
@@ -694,7 +772,13 @@ _Transport coherence metrics are intentionally off in the raw lane._
     "bytesReceived": 0,
     "framing": "length-prefixed",
     "skipped": true,
-    "reason": "Native client backend unavailable"
+    "reason": "Native client backend unavailable",
+    "repeatStats": {
+      "runs": 1,
+      "successfulRuns": 0,
+      "skippedRuns": 1,
+      "representative": "first"
+    }
   }
 ]
 ```

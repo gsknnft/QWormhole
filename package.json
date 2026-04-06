@@ -85,6 +85,7 @@
     "test:kcp": "tsx scripts/dev/kcp-mux-test.ts",
     "test:sharded-smoke": "tsx scripts/dev/worker-sharded-smoke.ts",
     "test:routed-sharded-smoke": "tsx scripts/dev/routed-sharded-smoke.ts",
+    "test:secure-native-lws-smoke": "tsx scripts/dev/secure-native-lws-smoke.ts",
     "test:ws": "tsx scripts/dev/ws-mux-test.ts",
     "bench:sweep": "node scripts/run-bench-sweep.js",
     "bench:sweep:ts": "node scripts/run-bench-sweep-ts.js",
@@ -92,6 +93,7 @@
     "bench:core": "pnpm run bench -- --mode=core --diagnostics",
     "bench:core:report": "node scripts/run-bench-core-report.js",
     "bench:core:structure": "node scripts/run-bench-core-report.js --structure",
+    "bench:core:delta": "node scripts/generate-bench-delta-report.js --raw data/core_diagnostics.jsonl --structure data/core_diagnostics.structure.jsonl --out data/core_diagnostics.delta.md --title \"QWormhole Core Bench Delta Report\"",
     "bench:core:sharded:report": "node scripts/run-bench-core-sharded-report.js",
     "bench:core:routed-sharded:report": "node scripts/run-bench-core-routed-sharded-report.js",
     "bench:core:multi:report": "node scripts/run-bench-core-report.js --multi",
@@ -100,6 +102,7 @@
     "bench:core:highconcurrency:structure": "node scripts/run-bench-core-report.js --high-concurrency --structure",
     "bench:compare:report": "node scripts/run-bench-compare-report.js",
     "bench:compare:structure": "node scripts/run-bench-compare-report.js --structure",
+    "bench:compare:delta": "node scripts/generate-bench-delta-report.js --raw data/compare_diagnostics.jsonl --structure data/compare_diagnostics.structure.jsonl --out data/compare_diagnostics.delta.md --title \"QWormhole Compare Bench Delta Report\"",
     "bench:compare:multi:report": "node scripts/run-bench-compare-report.js --multi",
     "bench:compare:multi:structure": "node scripts/run-bench-compare-report.js --multi --structure",
     "bench:compare:highconcurrency:report": "node scripts/run-bench-compare-report.js --high-concurrency",
@@ -173,7 +176,7 @@
     "@rollup/rollup-linux-x64-gnu": "4.53.3"
   },
   "dependencies": {
-    "@sigilnet/coherence": "link:../coherence",
+    "@gsknnft/coherence": "0.1.1",
     "@tensorflow/tfjs": "4.22.0",
     "bindings": "^1.5.0",
     "cbor": "^10.0.11",

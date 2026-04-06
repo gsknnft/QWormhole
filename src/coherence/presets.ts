@@ -1,4 +1,4 @@
-// @sigilnet/coherence/src/presets.ts
+// @gsknnft/coherence/src/presets.ts
 
 // import { SuperformulaParams } from "./superformula";
 
@@ -28,7 +28,6 @@ export const SUPERFORMULA_PRESETS = {
 //   // Return regime classification based on match
 //   return "unknown"; // Placeholder, implement actual matching logic
 // }
-
 
 /*
 // Coherent regime = simple superformula (low m, symmetric n values)

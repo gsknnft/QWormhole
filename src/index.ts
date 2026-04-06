@@ -7,10 +7,11 @@ export * from './node';
 export * from './tunnel';
 export * from './session';
 export * from './server';
+export * from './types';
 export * from './schema';
 export * from './sharding';
 export * from './http';
 export * from './client';
 export * from './transports';
 export * from './utils';
-
+export * from './security';

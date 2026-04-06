@@ -37,6 +37,7 @@ import {
   verifyNegentropicHandshake,
 } from "../handshake/negentropic-handshake";
 import { handshakePayloadSchema } from "../schema/scp";
+import { applyQWormholeServerSecurityDefaults } from "../security/env";
 import { QWormholeError } from "../utils/errors";
 import { inferMessageType } from "../utils/negentropic-diagnostics";
 import { TypedEventEmitter } from "../utils/typedEmitter";
@@ -697,47 +698,48 @@ export class QWormholeServer<TMessage = Buffer> extends TypedEventEmitter<
   private buildOptions(
     options: QWormholeServerOptions<TMessage>,
   ): InternalServerOptions<TMessage> {
-    const deserializer = (options.deserializer ??
+    const secured = applyQWormholeServerSecurityDefaults(options);
+    const deserializer = (secured.deserializer ??
       bufferDeserializer) as Deserializer<TMessage>;
 
     return {
-      host: options.host,
-      port: options.port,
-      localAddress: options.localAddress ?? undefined,
-      localPort: options.localPort ?? undefined,
-      interfaceName: options.interfaceName ?? undefined,
-      connectTimeoutMs: options.connectTimeoutMs ?? undefined,
-      protocolVersion: options.protocolVersion ?? undefined,
-      handshakeTags: options.handshakeTags ?? undefined,
-      allowHalfOpen: options.allowHalfOpen ?? false,
-      framing: options.framing ?? "length-prefixed",
-      maxFrameLength: options.maxFrameLength ?? undefined,
-      keepAlive: options.keepAlive ?? true,
-      keepAliveDelayMs: options.keepAliveDelayMs ?? 30_000,
-      idleTimeoutMs: options.idleTimeoutMs ?? 0,
-      maxBackpressureBytes: options.maxBackpressureBytes ?? 5 * 1024 * 1024,
-      rateLimitBytesPerSec: options.rateLimitBytesPerSec ?? undefined,
+      host: secured.host,
+      port: secured.port,
+      localAddress: secured.localAddress ?? undefined,
+      localPort: secured.localPort ?? undefined,
+      interfaceName: secured.interfaceName ?? undefined,
+      connectTimeoutMs: secured.connectTimeoutMs ?? undefined,
+      protocolVersion: secured.protocolVersion ?? undefined,
+      handshakeTags: secured.handshakeTags ?? undefined,
+      allowHalfOpen: secured.allowHalfOpen ?? false,
+      framing: secured.framing ?? "length-prefixed",
+      maxFrameLength: secured.maxFrameLength ?? undefined,
+      keepAlive: secured.keepAlive ?? true,
+      keepAliveDelayMs: secured.keepAliveDelayMs ?? 30_000,
+      idleTimeoutMs: secured.idleTimeoutMs ?? 0,
+      maxBackpressureBytes: secured.maxBackpressureBytes ?? 5 * 1024 * 1024,
+      rateLimitBytesPerSec: secured.rateLimitBytesPerSec ?? undefined,
       rateLimitBurstBytes:
-        options.rateLimitBurstBytes ?? options.rateLimitBytesPerSec,
-      maxClients: options.maxClients ?? undefined,
-      onTelemetry: options.onTelemetry,
-      allowConnection: options.allowConnection,
-      serializer: options.serializer ?? defaultSerializer,
+        secured.rateLimitBurstBytes ?? secured.rateLimitBytesPerSec,
+      maxClients: secured.maxClients ?? undefined,
+      onTelemetry: secured.onTelemetry,
+      allowConnection: secured.allowConnection,
+      serializer: secured.serializer ?? defaultSerializer,
       deserializer,
-      emitHandshakeMessages: options.emitHandshakeMessages ?? false,
-      reconnect: options.reconnect ?? {
+      emitHandshakeMessages: secured.emitHandshakeMessages ?? false,
+      reconnect: secured.reconnect ?? {
         enabled: false,
         initialDelayMs: 0,
         maxDelayMs: 0,
         multiplier: 0,
         maxAttempts: 0,
       },
-      onAuthorizeConnection: options.onAuthorizeConnection,
-      verifyHandshake: options.verifyHandshake,
-      tls: options.tls,
-      coherence: options.coherence ?? undefined,
-      disableFlowController: options.disableFlowController ?? false,
-      flowFastPath: options.flowFastPath ?? false,
+      onAuthorizeConnection: secured.onAuthorizeConnection,
+      verifyHandshake: secured.verifyHandshake,
+      tls: secured.tls,
+      coherence: secured.coherence ?? undefined,
+      disableFlowController: secured.disableFlowController ?? false,
+      flowFastPath: secured.flowFastPath ?? false,
     };
   }
 

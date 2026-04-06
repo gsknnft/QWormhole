@@ -5,6 +5,7 @@ import type {
   NativeBackend,
   NativeSocketOptions,
   QWTlsOptions,
+  INativeTcpClient,
 } from "src/types/types";
 
 const DEBUG_NATIVE = process.env.QWORMHOLE_DEBUG_NATIVE === "1";
@@ -42,7 +43,7 @@ const serializeAlpn = (protocols?: string[]): string | undefined => {
   return protocols.join(",");
 };
 
-type NativeBindingClient = {
+type NativeBindingClient = INativeTcpClient & {
   connect(host: string, port: number): void;
   connect(opts: NativeSocketOptions): void;
   send(data: string | Buffer): void;

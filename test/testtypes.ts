@@ -78,6 +78,24 @@ type ScenarioResult = {
   kcpRttMs?: number;
   kcpLossRate?: number;
   kcpPending?: number;
+  repeatStats?: {
+    runs: number;
+    successfulRuns: number;
+    skippedRuns: number;
+    representative: "median" | "first";
+    msgsPerSec?: {
+      median?: number;
+      avg?: number;
+      best?: number;
+      worst?: number;
+    };
+    durationMs?: {
+      median?: number;
+      avg?: number;
+      best?: number;
+      worst?: number;
+    };
+  };
 };
 
 type BatchFlushStats = {

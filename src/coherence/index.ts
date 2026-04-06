@@ -4,6 +4,8 @@ export * from "./coherence";
 export * from "./coherenceStep";
 export * from "./commitment-detector";
 export * from "./field-stability";
+export * from "./fitj";
+export * from "./geometric-regime";
 export * from "./governance-signals";
 export * from "./invariants";
 export * from "./loop";
@@ -13,46 +15,45 @@ export * from "./run-coherence";
 export * from "./sim";
 export * from "./telemetry";
 export * from "./types";
-export * from "./geometric-regime";
 
 // Canonical coherence APIs are re-exported here for transport consumers so
 // QWormhole can stop growing stale parallel semantics.
 export {
+  analyzeLinchpin,
+  classifyDimensionBand,
   compareToAttractors,
-  featuresFromFrame,
-  driftRate,
   computeSpectralNegentropyIndex,
-  spectralNegentropyDelta,
   DEFAULT_MAX_GAMMA,
   DEFAULT_POINT_OF_NO_RETURN_RATIO,
-  lorentzGamma,
-  evaluateLorentzBarrier,
-  analyzeLinchpin,
-  evaluateStructuralPersistence,
-  updateRegimePosterior,
-  uniformPosterior,
-  posteriorArgmax,
-  posteriorEntropy,
-  posteriorConfidence,
-  REGIME_STATES,
+  driftRate,
   estimateCorrelationDimension,
-  classifyDimensionBand,
-} from "@sigilnet/coherence";
+  evaluateLorentzBarrier,
+  evaluateStructuralPersistence,
+  featuresFromFrame,
+  lorentzGamma,
+  posteriorArgmax,
+  posteriorConfidence,
+  posteriorEntropy,
+  REGIME_STATES,
+  spectralNegentropyDelta,
+  uniformPosterior,
+  updateRegimePosterior,
+} from "@gsknnft/coherence";
 
 export type {
+  AttractorComparisonResult,
+  CorrelationDimensionResult,
+  DimensionBand,
   DriftFeatureFrameInput,
   DriftFeatures,
   LinchpinAnalysis,
+  LinchpinMetric,
   LinchpinObservation,
   LinchpinScore,
-  LinchpinMetric,
   LorentzBarrierResult,
-  RegimePosterior,
   RegimeObservation,
-  CorrelationDimensionResult,
-  DimensionBand,
-  AttractorComparisonResult,
+  RegimePosterior,
   SpectralNegentropyResult,
   StructuralPersistenceObservation,
   StructuralPersistenceResult,
-} from "@sigilnet/coherence";
+} from "@gsknnft/coherence";

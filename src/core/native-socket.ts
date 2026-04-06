@@ -18,10 +18,18 @@ export class NativeSocketAdapter extends EventEmitter {
   private pollTimer?: NodeJS.Timeout;
   private idleTimer?: NodeJS.Timeout;
   private connectTimer?: NodeJS.Timeout;
+  private connectInterval?: NodeJS.Timeout;
   private connected = false;
   private lastActivity = Date.now();
   private idleTimeoutMs?: number;
   private usingEvents = false;
+  private pendingConnect?:
+    | {
+        resolve: () => void;
+        reject: (err: Error) => void;
+        settled: boolean;
+      }
+    | undefined;
   private tlsInfo?: {
     alpnProtocol?: string;
     protocol?: string;
@@ -45,6 +53,7 @@ export class NativeSocketAdapter extends EventEmitter {
       return Promise.reject(new Error("Native socket destroyed"));
     }
     return new Promise((resolve, reject) => {
+      this.pendingConnect = { resolve, reject, settled: false };
       try {
         this.client.connect({
           host: this.opts.host,
@@ -65,9 +74,10 @@ export class NativeSocketAdapter extends EventEmitter {
       if (timeoutMs && timeoutMs > 0) {
         this.connectTimer = setTimeout(() => {
           if (this.connected) return;
-          this.emit("error", new Error("Native connect timeout"));
+          const err = new Error("Native connect timeout");
+          this.failPendingConnect(err);
+          this.emit("error", err);
           this.destroy();
-          reject(new Error("Native connect timeout"));
         }, timeoutMs);
       }
 
@@ -77,8 +87,7 @@ export class NativeSocketAdapter extends EventEmitter {
 
       const settle = () => {
         if (this.connected) {
-          if (this.connectTimer) clearTimeout(this.connectTimer);
-          resolve();
+          this.resolvePendingConnect();
         }
       };
 
@@ -92,15 +101,18 @@ export class NativeSocketAdapter extends EventEmitter {
             settle();
           }
         };
-        const interval = setInterval(check, this.opts.pollIntervalMs ?? 5);
+        this.connectInterval = setInterval(check, this.opts.pollIntervalMs ?? 5);
         setTimeout(() => {
-          clearInterval(interval);
+          if (this.connectInterval) {
+            clearInterval(this.connectInterval);
+            this.connectInterval = undefined;
+          }
           check();
           if (!this.connected && !this.destroyed) {
             const err = new Error("Native connect timeout");
+            this.failPendingConnect(err);
             this.emit("error", err);
             this.destroy();
-            reject(err);
           }
         }, timeoutMs);
       }
@@ -211,6 +223,10 @@ export class NativeSocketAdapter extends EventEmitter {
       clearInterval(this.pollTimer);
       this.pollTimer = undefined;
     }
+    if (this.connectInterval) {
+      clearInterval(this.connectInterval);
+      this.connectInterval = undefined;
+    }
     if (this.connectTimer) {
       clearTimeout(this.connectTimer);
       this.connectTimer = undefined;
@@ -230,6 +246,7 @@ export class NativeSocketAdapter extends EventEmitter {
           this.connected = true;
           this.touch();
           this.refreshTlsInfo();
+          this.resolvePendingConnect();
           this.emit("connect");
           break;
         case "data":
@@ -240,10 +257,22 @@ export class NativeSocketAdapter extends EventEmitter {
           break;
         case "close":
           this.connected = false;
+          if (!this.destroyed) {
+            this.failPendingConnect(
+              new Error(
+                evt.hadError
+                  ? "Native client closed during connect with error"
+                  : "Native client closed during connect",
+              ),
+            );
+          }
           this.stopPolling();
           this.emit("close", Boolean(evt.hadError));
           break;
         case "error":
+          this.failPendingConnect(
+            new Error(evt.error ?? "Native client error"),
+          );
           this.emit("error", new Error(evt.error ?? "Native client error"));
           break;
         default:
@@ -313,5 +342,35 @@ export class NativeSocketAdapter extends EventEmitter {
       }
       this.armIdleTimeout();
     }, this.idleTimeoutMs);
+  }
+
+  private resolvePendingConnect(): void {
+    if (!this.pendingConnect || this.pendingConnect.settled) return;
+    this.pendingConnect.settled = true;
+    if (this.connectTimer) {
+      clearTimeout(this.connectTimer);
+      this.connectTimer = undefined;
+    }
+    if (this.connectInterval) {
+      clearInterval(this.connectInterval);
+      this.connectInterval = undefined;
+    }
+    this.pendingConnect.resolve();
+    this.pendingConnect = undefined;
+  }
+
+  private failPendingConnect(err: Error): void {
+    if (!this.pendingConnect || this.pendingConnect.settled) return;
+    this.pendingConnect.settled = true;
+    if (this.connectTimer) {
+      clearTimeout(this.connectTimer);
+      this.connectTimer = undefined;
+    }
+    if (this.connectInterval) {
+      clearInterval(this.connectInterval);
+      this.connectInterval = undefined;
+    }
+    this.pendingConnect.reject(err);
+    this.pendingConnect = undefined;
   }
 }
