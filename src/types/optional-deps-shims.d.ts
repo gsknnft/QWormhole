@@ -15,6 +15,16 @@ declare module "@sigilnet/qfield" {
   }
 }
 
+declare module "@sigilnet/qtransform" {
+  export class FFT {
+    constructor(size: number | number[]);
+    createComplexArray(): number[];
+    realTransform(output: number[], input: number[]): void;
+    transform(output: number[], input: number[]): void;
+    inverseTransform(output: number[], input: number[]): void;
+  }
+}
+
 declare module "../../../../src/types/types" {
   export type SignalVector = any;
   export type QuantumFieldState = any;
