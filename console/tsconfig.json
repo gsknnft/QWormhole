@@ -5,10 +5,9 @@
     "moduleResolution": "nodenext",
     "jsx": "react-jsx",
     "strict": true,
-    "baseUrl": ".",
-    "rootDir": "src",
-    "outDir": "dist",
-    "declarationDir": "dist/types",
+    "rootDir": "./src",
+    "outDir": "./dist",
+    "declarationDir": "./dist/types",
     "declaration": true,
     "allowJs": false,
     "composite": true,
@@ -17,11 +16,11 @@
     "allowSyntheticDefaultImports": true,
     "lib": ["ESNext", "DOM"],
     "paths": {
-      "@fonts/*": ["src/fonts/*"],
-      "@components/*": ["src/components/*"],
-      "@routes/*": ["src/routes/*"],
-      "@stores/*": ["src/stores/*"]
+      "@fonts/*": ["./src/fonts/*"],
+      "@components/*": ["./src/components/*"],
+      "@routes/*": ["./src/routes/*"],
+      "@stores/*": ["./src/stores/*"]
     },
   },
-  "include": ["src"]
+  "include": ["./src"]
 }
