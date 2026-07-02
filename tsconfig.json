@@ -10,6 +10,10 @@
       "DOM"
     ],
     "rootDir": "./src",
+    "baseUrl": ".",
+    "paths": {
+      "src/*": ["src/*"]
+    },
     "composite": true,
     "isolatedModules": true,
     "esModuleInterop": true,
@@ -20,12 +24,8 @@
     "noUnusedParameters": true,
     "noFallthroughCasesInSwitch": true,
     "skipLibCheck": true,
-    "typeRoots": [
-      "src/types/types",
-      "../../src/types"
-    ],
-    "types": [
-    ]
+    "ignoreDeprecations": "6.0",
+    "types": []
   },
   "include": [
     "./src"

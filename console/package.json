@@ -10,7 +10,7 @@
     "lint": "eslint src --ext ts,tsx --max-warnings=0"
   },
   "dependencies": {
-    "next": "16.0.10",
+    "next": "16.2.6",
     "react": "19.2.1",
     "react-dom": "19.2.1",
     "react-router-dom": "^7.10.1",

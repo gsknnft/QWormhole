@@ -11,7 +11,7 @@
     "plotly.js": "3.3.0",
     "react": "^19.2.1",
     "react-dom": "^19.2.1",
-    "next": "16.0.10",
+    "next": "16.2.6",
     "react-plotly.js": "^2.6.0"
   },
   "devDependencies": {
