@@ -4,10 +4,16 @@
     "useDefineForClassFields": true,
     "module": "NodeNext",
     "moduleResolution": "nodenext",
-    "outDir": "dist",
-    "lib":  ["ESNext", "DOM"],
+    "outDir": "./dist",
+    "lib": [
+      "ESNext",
+      "DOM"
+    ],
+    "rootDir": "./src",
     "baseUrl": ".",
-    "rootDir": "src",
+    "paths": {
+      "src/*": ["src/*"]
+    },
     "composite": true,
     "isolatedModules": true,
     "esModuleInterop": true,
@@ -18,11 +24,16 @@
     "noUnusedParameters": true,
     "noFallthroughCasesInSwitch": true,
     "skipLibCheck": true,
-    "typeRoots": [
-      "src/types/types",
-      "../../src/types"
-    ]
+    "ignoreDeprecations": "6.0",
+    "types": []
   },
-  "include": ["src"],
-  "exclude": ["node_modules", "dist", "**/dist", "**/test"]
+  "include": [
+    "./src"
+  ],
+  "exclude": [
+    "./node_modules",
+    "./dist",
+    "**/dist",
+    "**/test"
+  ]
 }

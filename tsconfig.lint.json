@@ -2,9 +2,18 @@
   "extends": "./tsconfig.json",
   "compilerOptions": {
     "noEmit": true,
-    "composite": false
+    "composite": false,
+    "types": [
+      "bindings",
+      "multicast-dns",
+      "node",
+      "ws"
+    ]
   },
-  "include": ["src/**/*.ts", "src/**/*.d.ts"],
+  "include": [
+    "src/**/*.ts",
+    "src/**/*.d.ts"
+  ],
   "exclude": [
     "node_modules",
     "dist",

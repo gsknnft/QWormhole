@@ -58,7 +58,9 @@ export class BrowserWSTransport
       this.emit("error", new Error("Browser WebSocket transport is not connected."));
       return;
     }
-    this.socket.send(data);
+    const payload = new ArrayBuffer(data.byteLength);
+    new Uint8Array(payload).set(data);
+    this.socket.send(payload);
   }
 
   close(): void {
